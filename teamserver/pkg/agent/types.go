@@ -28,6 +28,10 @@ type Header struct {
 	MagicValue int
 	AgentID    int
 	Data       *parser.Parser
+	// [HVC-007 2026-03-28] Set when the Demon compressed the payload with LZNT1
+	// before AES encryption. Bit 31 of the wire SIZE field carries this flag.
+	// ParseHeader extracts it and strips bit 31 from Size. See TrafficImprovements.md §7.
+	Compressed bool
 }
 
 type ServiceAgentInterface interface {
@@ -66,6 +70,10 @@ type TeamServer interface {
 	ServiceAgentExist(MagicValue int) bool
 
 	GetDotNetPipeTemplate() string
+
+	// [HVC-005 2026-03-28] Decrypt a 256-byte RSA-OAEP-SHA256 ciphertext using
+	// the teamserver's private key, returning the 48-byte AES key material.
+	AgentRSADecrypt(ciphertext []byte) ([]byte, error)
 
 	SendLogs() bool
 }

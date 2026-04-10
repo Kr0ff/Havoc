@@ -503,16 +503,16 @@ auto Payload::DefaultConfig() -> void
         Jitter = 0;
     }
 
-    auto SleepObfTechnique       = new QComboBox;
-    auto SleepObfJmpBypass       = new QComboBox;
+    SleepObfTechnique            = new QComboBox;
+    SleepObfJmpBypass            = new QComboBox;
     auto SleepObfSpoofAddress    = new QLineEdit;
     auto ConfigSleepLineEdit     = new QLineEdit( QString::number( DemonConfig[ "Sleep" ].toInt() ) );
     auto ConfigJitterLineEdit    = new QLineEdit( QString::number( Jitter ) );
     auto ConfigIndSyscallCheck   = new QCheckBox;
     auto ConfigInjectAlloc       = new QComboBox;
     auto ConfigInjectExecute     = new QComboBox;
-    auto ConfigStackSpoof        = new QCheckBox;
-    auto ProxyLoading            = new QComboBox;
+    ConfigStackSpoof             = new QCheckBox;
+    ProxyLoading                 = new QComboBox;
     auto AmsiEtwPatch            = new QComboBox;
     auto ConfigSpawn64LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
     auto ConfigSpawn32LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn32" ].toString() );
@@ -604,6 +604,22 @@ auto Payload::DefaultConfig() -> void
     TreeConfig->setItemWidget( ConfigSleepStackSpoof,  1, ConfigStackSpoof );
     TreeConfig->setItemWidget( ConfigProxyLoading,     1, ProxyLoading );
     TreeConfig->setItemWidget( ConfigAmsiEtwPatch,     1, AmsiEtwPatch );
+
+    // disable invalid sleep obf option combinations
+    connect( SleepObfTechnique, &QComboBox::currentTextChanged, this, [=]( const QString& text ) {
+        bool isTimer = ( text == "Ekko" || text == "Zilean" );
+
+        // JmpGadget: only meaningful for Timer-based (Ekko/Zilean)
+        SleepObfJmpBypass->setEnabled( isTimer );
+        if ( !isTimer ) SleepObfJmpBypass->setCurrentIndex( 0 );
+
+        // Stack Duplication: only meaningful for Timer-based (Ekko/Zilean)
+        ConfigStackSpoof->setEnabled( isTimer );
+        if ( !isTimer ) ConfigStackSpoof->setChecked( false );
+    });
+
+    // emit initial state to set correct disabled state
+    emit SleepObfTechnique->currentTextChanged( SleepObfTechnique->currentText() );
 
     TreeConfig->setItemWidget( ConfigInjectionAlloc,   1, ConfigInjectAlloc );
     TreeConfig->setItemWidget( ConfigInjectionExecute, 1, ConfigInjectExecute );

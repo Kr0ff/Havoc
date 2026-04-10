@@ -2,6 +2,13 @@ package agent
 
 const (
 	DEMON_MAGIC_VALUE = 0xDEADBEEF
+
+	// [HVC-003 2026-03-26] Compile-time seed for the per-packet XOR mask that
+	// obfuscates the outer header fields (bytes 4-19: magic, agent ID, command ID,
+	// request ID) before wire transmission. The mask is SIZE ^ HeaderMaskSeed so it
+	// varies per packet. Must match HEADER_MASK_SEED in
+	// payloads/Demon/include/common/Defines.h.
+	HeaderMaskSeed = 0xA3F1C2B4
 )
 
 const (
@@ -151,7 +158,7 @@ const (
 	DEMON_COMMAND_FS_REMOVE   = 5
 	DEMON_COMMAND_FS_MKDIR    = 6
 	DEMON_COMMAND_FS_COPY     = 7
-        DEMON_COMMAND_FS_MOVE     = 8
+	DEMON_COMMAND_FS_MOVE     = 8
 	DEMON_COMMAND_FS_GET_PWD  = 9
 	DEMON_COMMAND_FS_CAT      = 10
 )
@@ -186,11 +193,11 @@ const (
 	SOCKET_COMMAND_SOCKSPROXY_REMOVE = 0x7
 	SOCKET_COMMAND_SOCKSPROXY_CLEAR  = 0x8
 
-	SOCKET_COMMAND_OPEN       = 0x10
-	SOCKET_COMMAND_READ       = 0x11
-	SOCKET_COMMAND_WRITE      = 0x12
-	SOCKET_COMMAND_CLOSE      = 0x13
-	SOCKET_COMMAND_CONNECT    = 0x14
+	SOCKET_COMMAND_OPEN    = 0x10
+	SOCKET_COMMAND_READ    = 0x11
+	SOCKET_COMMAND_WRITE   = 0x12
+	SOCKET_COMMAND_CLOSE   = 0x13
+	SOCKET_COMMAND_CONNECT = 0x14
 
 	SOCKET_TYPE_REVERSE_PORTFWD = 0x1
 	SOCKET_TYPE_REVERSE_PROXY   = 0x2

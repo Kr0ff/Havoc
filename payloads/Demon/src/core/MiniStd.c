@@ -309,6 +309,82 @@ UINT64 GetSystemFileTime( )
     return li.QuadPart;
 }
 
+/* [HVC-002 2026-03-26] RFC 4648 standard base64 encode/decode. No CRT dependency.
+ * All allocations use Instance->Win32.LocalAlloc. Callers are responsible for
+ * freeing *OutBuf via LocalFree. See TrafficImprovements.md §2. */
+
+static const CHAR B64Alphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+VOID Base64Encode(
+    _In_  PUCHAR  Input,
+    _In_  SIZE_T  InputLen,
+    _Out_ PVOID  *OutBuf,
+    _Out_ PSIZE_T OutLen
+) {
+    SIZE_T EncodedLen = 4 * ( ( InputLen + 2 ) / 3 );
+    PCHAR  Out        = (PCHAR) Instance->Win32.LocalAlloc( LPTR, EncodedLen + 1 );
+    SIZE_T i          = 0;
+    SIZE_T j          = 0;
+    UCHAR  a, b, c;
+    SIZE_T Rem;
+
+    while ( i < InputLen ) {
+        Rem = InputLen - i;
+        a   = Input[ i++ ];
+        b   = ( Rem > 1 ) ? Input[ i++ ] : 0;
+        c   = ( Rem > 2 ) ? Input[ i++ ] : 0;
+
+        Out[ j++ ] = B64Alphabet[ ( a >> 2 ) & 0x3F ];
+        Out[ j++ ] = B64Alphabet[ ( ( a & 0x03 ) << 4 ) | ( ( b >> 4 ) & 0x0F ) ];
+        Out[ j++ ] = ( Rem > 1 ) ? B64Alphabet[ ( ( b & 0x0F ) << 2 ) | ( ( c >> 6 ) & 0x03 ) ] : '=';
+        Out[ j++ ] = ( Rem > 2 ) ? B64Alphabet[ c & 0x3F ] : '=';
+    }
+
+    Out[ j ] = '\0';
+    *OutBuf  = Out;
+    *OutLen  = j;
+}
+
+VOID Base64Decode(
+    _In_  PUCHAR  Input,
+    _In_  SIZE_T  InputLen,
+    _Out_ PVOID  *OutBuf,
+    _Out_ PSIZE_T OutLen
+) {
+    UCHAR  RevTable[ 256 ];
+    SIZE_T i, j, DecodedLen;
+    PUCHAR Out;
+    UCHAR  a, b, c, d;
+
+    MemSet( RevTable, 0, sizeof( RevTable ) );
+    for ( i = 0; i < 64; i++ ) {
+        RevTable[ (UCHAR) B64Alphabet[ i ] ] = (UCHAR) i;
+    }
+
+    /* Calculate exact output length accounting for padding characters */
+    DecodedLen = ( InputLen / 4 ) * 3;
+    if ( InputLen >= 2 && Input[ InputLen - 1 ] == '=' ) DecodedLen--;
+    if ( InputLen >= 2 && Input[ InputLen - 2 ] == '=' ) DecodedLen--;
+
+    Out = (PUCHAR) Instance->Win32.LocalAlloc( LPTR, DecodedLen + 1 );
+    j   = 0;
+
+    for ( i = 0; i + 3 < InputLen; i += 4 ) {
+        a = RevTable[ Input[ i     ] ];
+        b = RevTable[ Input[ i + 1 ] ];
+        c = RevTable[ Input[ i + 2 ] ];
+        d = RevTable[ Input[ i + 3 ] ];
+
+        Out[ j++ ] = ( a << 2 ) | ( b >> 4 );
+        if ( Input[ i + 2 ] != '=' ) Out[ j++ ] = ( ( b & 0x0F ) << 4 ) | ( c >> 2 );
+        if ( Input[ i + 3 ] != '=' ) Out[ j++ ] = ( ( c & 0x03 ) << 6 ) | d;
+    }
+
+    *OutBuf = Out;
+    *OutLen = j;
+}
+
 /* This is a simple trick to hide strings from memory :^) */
 BYTE NO_INLINE HideChar( BYTE C )
 {

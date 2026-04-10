@@ -4,6 +4,7 @@ import "C"
 import (
 	"Havoc/pkg/agent"
 	"Havoc/pkg/common/certs"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/db"
 	"Havoc/pkg/service"
 	"Havoc/pkg/webhook"
@@ -945,6 +946,18 @@ func (t *Teamserver) FindSystemPackages() bool {
 		colors.Blue(t.Settings.Compiler32),
 		colors.Blue(t.Settings.Nasm),
 	))
+
+	// [HVC-005 2026-03-28] Generate or load the RSA-2048 key pair used to wrap
+	// the Demon session key on registration.  The private key is stored at
+	// data/havoc.rsa; the public key blob is embedded into each payload build.
+	rsaKeyPath := utils.GetTeamserverPath() + "/data/havoc.rsa"
+	var rsaErr error
+	t.RSAPrivateKey, t.RSAPublicKeyBlob, rsaErr = crypt.GenerateOrLoadRSAKeyPair(rsaKeyPath)
+	if rsaErr != nil {
+		logger.Error("HVC-005: failed to initialise RSA key pair: " + rsaErr.Error())
+		return false
+	}
+	logger.Info("HVC-005: RSA-2048 key pair ready (" + rsaKeyPath + ")")
 
 	return true
 }

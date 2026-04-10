@@ -1,13 +1,14 @@
 package handlers
 
 import (
+    "encoding/base64"
+    "encoding/hex"
     "io"
     "net/http"
     "strings"
 
     "Havoc/pkg/colors"
     "Havoc/pkg/logger"
-    "encoding/hex"
 
     "github.com/gin-gonic/gin"
 )
@@ -45,10 +46,21 @@ func (e *External) Request(ctx *gin.Context) {
     logger.Debug(" - Exc2 Host : " + ctx.Request.Host)
     logger.Debug(" - Exc2 Body : \n" + hex.Dump(Body))
 
+    // [HVC-002 2026-03-26] Decode base64-encoded body sent by the Demon.
+    // See TrafficImprovements.md §2.
+    Body, err = base64.StdEncoding.DecodeString(string(Body))
+    if err != nil {
+        logger.Warn("failed to base64-decode external agent request body: " + err.Error())
+        ctx.AbortWithStatus(http.StatusNotFound)
+        return
+    }
+
     ExternalIP := strings.Split(ctx.Request.RemoteAddr, ":")[0]
 
     if Response, Success := parseAgentRequest(e.Teamserver, Body, ExternalIP); Success {
-        _, err := ctx.Writer.Write(Response.Bytes())
+        // [HVC-002 2026-03-26] Base64-encode the response before writing it to the wire.
+        encoded := base64.StdEncoding.EncodeToString(Response.Bytes())
+        _, err := ctx.Writer.Write([]byte(encoded))
         if err != nil {
             logger.Debug("Failed to write to request: " + err.Error())
             ctx.Status(http.StatusNotFound)

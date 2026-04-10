@@ -48,6 +48,8 @@ set( INJECT_SOURCE
 
 set( CRYPT_SOURCE
         src/crypt/AesCrypt.c
+        src/crypt/HmacSha256.c
+        src/crypt/RsaCrypt.c
 )
 
 set( MAIN_SOURCE
@@ -83,3 +85,21 @@ link_libraries( netapi32 ws2_32 wsock32 wtsapi32 iphlpapi mscoree mscorlib )
 
 # add compiled demons
 add_executable( ${PROJECT_NAME} ${COMMON_SOURCE} ${INJECT_SOURCE} ${EXT_SOURCE} ${CRYPT_SOURCE} ${LOADER_SOURCE} ${MAIN_SOURCE} )
+
+# SleepObf unit tests — cross-compiled Windows x64 binary, run on a Windows host
+# Usage: ctest --output-on-failure   (after cmake --build)
+add_executable( DemonTest test/test_sleepobf.c )
+target_include_directories( DemonTest PRIVATE include )
+
+# mingw-w64 v15 compatibility tests — verifies macro/type fixes
+add_executable( DemonMingwTest test/test_mingw_compat.c )
+target_include_directories( DemonMingwTest PRIVATE include )
+
+# sleep obfuscation combination tests — verifies OBF_JMP, ROP bounds, cleanup patterns
+add_executable( DemonSleepComboTest test/test_sleepobf_combos.c )
+target_compile_definitions( DemonSleepComboTest PRIVATE SLEEPOBF_USE_TIMER SLEEPOBF_USE_FOLIAGE )
+
+enable_testing()
+add_test( NAME SleepObfTests COMMAND DemonTest )
+add_test( NAME MingwCompatTests COMMAND DemonMingwTest )
+add_test( NAME SleepObfComboTests COMMAND DemonSleepComboTest )

