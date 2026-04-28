@@ -2,6 +2,7 @@
 #include <global.hpp>
 
 #include <UserInterface/Widgets/SessionTable.hpp>
+#include <Util/ThemeManager.hpp>
 #include <UserInterface/Widgets/TeamserverTabSession.h>
 #include <UserInterface/SmallWidgets/EventViewer.hpp>
 #include <UserInterface/Widgets/DemonInteracted.h>
@@ -27,12 +28,15 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::setupUi(QWidget *Form
     if ( SessionTableWidget->columnCount() < 10 )
         SessionTableWidget->setColumnCount( 10 );
 
-    SessionTableWidget->setStyleSheet(
-        "QTableWidget { "
-        "   background-color: #282a36;"
-        "   color: #f8f8f2; "
-        "}"
-    );
+    {
+        const auto& tc = ThemeManager::Instance().ActiveColors();
+        SessionTableWidget->setStyleSheet(
+            "QTableWidget { "
+            "   background-color: " + tc.panel + ";"
+            "   color: " + tc.text + "; "
+            "}"
+        );
+    }
 
     TitleAgentID   = new QTableWidgetItem( "ID"       );
     TitleExternal  = new QTableWidgetItem( "External" );

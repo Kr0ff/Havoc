@@ -70,14 +70,13 @@ type ListenerHTTP struct {
 	/* Port used by the agent */
 	PortConn int `yaotl:"PortConn,optional"`
 
-	Methode string `yaotl:"Method,optional"`
+	Methode  string `yaotl:"Method,optional"`
 
 	/* optional fields */
-	UserAgent  string   `yaotl:"UserAgent,optional"`
-	Headers    []string `yaotl:"Headers,optional"`
-	Uris       []string `yaotl:"Uris,optional"`
-	Secure     bool     `yaotl:"Secure,optional"`
-	HostHeader string   `yaotl:"HostHeader,optional"`
+	UserAgent string   `yaotl:"UserAgent,optional"`
+	Headers   []string `yaotl:"Headers,optional"`
+	Uris      []string `yaotl:"Uris,optional"`
+	Secure    bool     `yaotl:"Secure,optional"`
 
 	/* optional sub blocks */
 	Cert     *ListenerHttpCerts    `yaotl:"Cert,block"`
@@ -105,7 +104,6 @@ type ListenerHttpResponse struct {
 }
 
 type ListenerHttpProxy struct {
-	Type string `yaotl:"Type"`
 	Host string `yaotl:"Host"`
 	Port int    `yaotl:"Port"`
 	User string `yaotl:"Username,optional"`
@@ -136,21 +134,24 @@ type Binary struct {
 type ProcessInjectionBlock struct {
 	Spawn64 string `yaotl:"Spawn64,optional"`
 	Spawn32 string `yaotl:"Spawn32,optional"`
+	Alloc   string `yaotl:"Alloc,optional"`
+	Execute string `yaotl:"Execute,optional"`
 }
 
 type Demon struct {
-	Sleep            int                    `yaotl:"Sleep,optional"`
-	Jitter           int                    `yaotl:"Jitter,optional"`
-	IndirectSyscall  bool                   `yaotl:"IndirectSyscall,optional"`
-	StackDuplication bool                   `yaotl:"StackDuplication,optional"`
-	SleepTechnique   string                 `yaotl:"SleepTechnique,optional"`
-	ProxyLoading     string                 `yaotl:"ProxyLoading,optional"`
-	AmsiEtwPatching  string                 `yaotl:"AmsiEtwPatching,optional"`
-	ProcessInjection *ProcessInjectionBlock `yaotl:"Injection,block"`
+	Sleep              int                    `yaotl:"Sleep,optional"`
+	Jitter             int                    `yaotl:"Jitter,optional"`
+	IndirectSyscall    bool                   `yaotl:"IndirectSyscall,optional"`
+	StackDuplication   bool                   `yaotl:"StackDuplication,optional"`
+	SleepTechnique     string                 `yaotl:"SleepTechnique,optional"`
+	SleepJmpGadget     string                 `yaotl:"SleepJmpGadget,optional"`
+	ProxyLoading       string                 `yaotl:"ProxyLoading,optional"`
+	AmsiEtwPatching    string                 `yaotl:"AmsiEtwPatching,optional"`
+	ProcessInjection   *ProcessInjectionBlock `yaotl:"Injection,block"`
 
-	DotNetNamePipe string `yaotl:"DotNetNamePipe,optional"`
+	DotNetNamePipe     string                 `yaotl:"DotNetNamePipe,optional"`
 
-	Binary *Binary `yaotl:"Binary,block"`
+	Binary             *Binary                `yaotl:"Binary,block"`
 
-	TrustXForwardedFor bool `yaotl:"TrustXForwardedFor,optional"`
+	TrustXForwardedFor bool                   `yaotl:"TrustXForwardedFor,optional"`
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-# credit: https://github.com/realoriginal/titanldr-ng/blob/master/python3/hashstring.py
+# credit: https://github.com/tigr0w/realoriginal_titanldr-ng/blob/5b8835143f36adfb8d077823e18f21d3043960fb/python3/hashstring.py
 
 import sys
 

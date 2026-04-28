@@ -42,7 +42,7 @@ auto operator * ( string a, unsigned int b ) -> string
     return output;
 }
 
-static auto JoinAtIndex(QStringList list, int index) -> QString
+static auto JoinAtIndex( QStringList list, int index ) -> QString
 {
     QString string;
 
@@ -53,26 +53,6 @@ static auto JoinAtIndex(QStringList list, int index) -> QString
             string.append( list[ index + i ] );
         else
             string.append( " " + list[ index + i ] );
-    }
-
-    return string;
-}
-
-static auto JoinAtIndexPreserveQuotes(QStringList list, int index) -> QString
-{
-    QString string;
-
-    int size = list.size();
-    for (int i = 0; i < (size - index); ++i)
-    {
-        if (i == 0) string.append(list[index + i]);
-        else
-        {
-            if (list[index + i].contains(" "))
-                string.append(" \"" + list[index + i] + "\"");
-            else
-                string.append(" " + list[index + i]);
-        }
     }
 
     return string;
@@ -651,6 +631,19 @@ auto DemonCommands::DispatchCommand( bool Send, QString TaskID, const QString& c
                 CommandInputList[ TaskID ] = commandline;
 
                 SEND( Execute.Task( TaskID, "task::clear" ) );
+            }
+            else if ( InputCommands[ 1 ].compare( "cancel" ) == 0 )
+            {
+                if ( InputCommands.size() < 3 )
+                {
+                    CONSOLE_ERROR( "Usage: task cancel <id|all>" )
+                    return false;
+                }
+
+                TaskID = DemonConsole->TaskInfo( Send, nullptr, "Tasked teamserver to cancel task: " + InputCommands[ 2 ] );
+                CommandInputList[ TaskID ] = commandline;
+
+                SEND( Execute.Task( TaskID, "task::cancel::" + InputCommands[ 2 ] ) );
             }
             else
             {
@@ -2713,12 +2706,10 @@ auto DemonCommands::DispatchCommand( bool Send, QString TaskID, const QString& c
         else
         {
             auto CommandInput = QMap<string, string>();
-            auto ParamArray   = ParseQuotes(commandline);
-
-            auto ParamSize    = ParamArray.size();
+            auto ParamArray   = commandline.split( " " );
             auto CommandFound = false;
 
-            ParamArray.erase(ParamArray.begin());
+            ParamArray.erase( ParamArray.begin() );
 
             if ( ! Send )
             {
@@ -2730,47 +2721,36 @@ auto DemonCommands::DispatchCommand( bool Send, QString TaskID, const QString& c
                 }
             }
 
-            for (auto & command : AgentData.Commands)
+            for ( auto & command : AgentData.Commands )
             {
-                if (InputCommands[0].compare(command.Name) == 0)
+                if ( InputCommands[ 0 ].compare( command.Name ) == 0 )
                 {
                     TaskID       = Util::gen_random( 8 ).c_str();
                     CommandFound = true;
 
-                    CommandInput.insert("TaskID",      TaskID.toStdString());
-                    CommandInput.insert("CommandLine", commandline.toStdString());
-                    CommandInput.insert("DemonID",     DemonConsole->SessionInfo.Name.toStdString());
-                    CommandInput.insert("Command",     command.Name.toStdString());
+                    CommandInput.insert( "TaskID",      TaskID.toStdString() );
+                    CommandInput.insert( "CommandLine", commandline.toStdString() );
+                    CommandInput.insert( "DemonID",     DemonConsole->SessionInfo.Name.toStdString() );
+                    CommandInput.insert( "Command",     command.Name.toStdString() );
 
                     ParamArray.push_back("");
-                    for (u32 i = 0; i < command.Params.size(); ++i)
+                    for ( u32 i = 0; i < command.Params.size(); i++ )
                     {
                         auto Value = QString();
 
-                        if (command.Params[i].IsFilePath)
+                        if ( command.Params[ i ].IsFilePath )
                         {
-                            auto f = FileRead(ParamArray[i]);
-                            if (f != nullptr) Value = f.toBase64();
-                            else
-                            {
-                                CONSOLE_ERROR("File not found: " + ParamArray[i]);
-                                return false;
-                            }
+                            Value = FileRead( ParamArray[ i ] ).toBase64();
                         }
-                        else if (ParamSize > 1 && command.Params.size() < ParamSize && (command.Params.size() - i) == 1) 
-                            Value = JoinAtIndexPreserveQuotes(ParamArray, i);
-                        else if (!command.Params[i].IsOptional)
+                        else
                         {
-                            if (i < ParamSize - 1) Value = ParamArray[i];
+                            if ( ParamArray.size() > 1 && command.Params.size() == 1 )
+                                Value = ParamArray.join( " " );
                             else
-                            {
-                                CONSOLE_ERROR("Required parameter not given: " + command.Params[i].Name);
-                                return false;
-                            }
+                                Value = ParamArray[ i ];
                         }
-                        else if (i < ParamSize - 1) Value = ParamArray[i];
 
-                        CommandInput.insert(command.Params[i].Name.toStdString(), Value.toStdString());
+                        CommandInput.insert( command.Params[ i ].Name.toStdString(), Value.toStdString() );
                     }
                 }
             }

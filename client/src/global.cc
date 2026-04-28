@@ -2,6 +2,7 @@
 #include <random>
 
 #include <Havoc/Connector.hpp>
+#include <Util/ThemeManager.hpp>
 
 #include <QFileDialog>
 
@@ -43,7 +44,7 @@ void Util::SessionItem::Export()
 {
     auto FileDialog = QFileDialog();
     auto Filename   = QUrl();
-    auto Style      = FileRead( ":/stylesheets/Dialogs/FileDialog" ).toStdString();
+    auto Style      = ThemeManager::Instance().Stylesheet( "Dialogs/FileDialog" ).toStdString();
 
     Style.erase( std::remove( Style.begin(), Style.end(), '\n' ), Style.end() );
 
@@ -95,7 +96,7 @@ void Util::SessionItem::Export()
             messageBox.setWindowTitle( "Session Exported" );
             messageBox.setText( "Path: " + Filename.toString() );
             messageBox.setIcon( QMessageBox::Information );
-            messageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+            messageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
             // messageBox.setMaximumSize( QSize( 500, 500 ) );
             messageBox.exec();
         }

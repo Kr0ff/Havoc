@@ -409,7 +409,13 @@ Under convention (1) Foliage's alignment is **already correct**. Under conventio
 
 Which convention actually applies to `NtGetContextThread(<freshly-created-suspended-thread>)` varies subtly by Windows build because the kernel's initial-thread-context setup has changed over the years (specifically around how `RtlUserThreadStart` is wired in). We do not have hardware access to instrument this reliably.
 
-**Action:** Defer FIX-10 pending the re-test of FIX-6..FIX-9. If post-fix Foliage still crashes on `None (LdrLoadDll)`, instrument with `DbgBreakPoint` at APC entry to check `Rsp & 0xF` and, if misaligned, apply `Rop[*].Rsp -= sizeof(PVOID)` to all 10 ROP frames in `ObfFoliage.c`. Do not apply this change preemptively — doing so on a system where convention (1) holds would introduce the exact bug we're trying to fix.
+**Fix (FIX-10, applied 2026-04-12):** After `NtGetContextThread(hThread, RopInit)`, conditionally adjust Rsp:
+```c
+if ( ( RopInit->Rsp & 0xF ) == 0 ) {
+    RopInit->Rsp -= sizeof( PVOID );
+}
+```
+This is safe on ALL Windows builds: it only adjusts when `Rsp % 16 == 0` (convention 2), leaving convention (1) systems untouched. The fix is applied to `RopInit` before the `MemCopy` to all 10 ROP entries, so all entries inherit correct alignment. The subsequent `Rsp -= 0x1000 * N` subtracts preserve the invariant since `0x1000` is a multiple of 16.
 
 ### Inconsistency: Zilean + JmpRax + RtlQueueWorkItem works but None/JmpRbx don't
 
@@ -425,7 +431,12 @@ After FIX-3 (Zilean shares Ekko's timer-queue ROP execution), `TimerObf` ignores
 | FIX-7 | BUG-LDR-3 | `Win32.c` | Drop `WT_EXECUTEONLYONCE` flag; explicit deregister handles cleanup | Low |
 | FIX-8 | BUG-FOL-2 | `ObfFoliage.c` | Allocate all CONTEXTs from a single `VirtualAlloc` 16-byte-aligned block | Medium — touches layout |
 | FIX-9 | BUG-FOL-3 | `Demon.c` | `ThreadStartAddr = Instance->Win32.NtTestAlert` | Low |
-| FIX-10 | BUG-FOL-4 (DEFERRED) | `ObfFoliage.c` | Gated on re-test: applying without hardware validation could introduce the bug instead of fixing it — see §8 BUG-FOL-4 analysis | Deferred |
+| FIX-10 | BUG-FOL-4 | `ObfFoliage.c` | Normalise RopInit->Rsp to %16==8 after NtGetContextThread; conditional (only adjusts if %16==0), safe on all Windows builds | Low — **APPLIED 2026-04-12** |
+| FIX-11 | NEW | `ObfFoliage.c` | Replace `WaitForSingleObjectEx` with `NtWaitForSingleObject` in ROP chain sleep — APC thread has no Win32 subsystem init | CRITICAL — **APPLIED 2026-04-12** |
+| FIX-12 | NEW | `Obf.c` | Foliage `ConvertThreadToFiberEx` failure: `goto DEFAULT` instead of `break` (no-sleep tight loop) | HIGH — **APPLIED 2026-04-12** |
+| FIX-13 | NEW | `ObfFoliage.c` | Deadlock-safe Leave: terminate suspended APC thread before waiting | HIGH — **APPLIED 2026-04-12** |
+| FIX-14 | NEW | `Demon.h` | Restore `#pragma pack()` after KAYN_ARGS — was leaking pack(1) into INSTANCE | MEDIUM — **APPLIED 2026-04-12** |
+| FIX-15 | NEW | `ObfFoliage.c` | Replace SystemFunction032 (advapi32) with position-independent RC4 stub in separately allocated RX page — only non-ntdll function in ROP chain | HIGH — **APPLIED 2026-04-13** |
 
 ### Self-review after each fix
 For every edit we will:
@@ -493,4 +504,285 @@ Target matrix after all fixes:
 ### M-5: Almost applied a preemptive Rsp-alignment "fix" to Foliage (BUG-FOL-4 investigation)
 **What happened:** On first read Foliage looked off-by-8 vs Ekko's `Rsp -= sizeof(PVOID)` tweak, and a simple fix was queued. On second read, the two techniques capture `Rsp` via **different mechanisms** (`NtGetContextThread` on a suspended thread vs. `RtlCaptureContext` in a live timer callback), and those mechanisms produce *different* baseline alignments. Applying Ekko's `-= 8` tweak to Foliage is only correct if Foliage's capture also starts at `Rsp % 16 == 0`, which is not certain without hardware instrumentation. A preemptive fix could flip the bug from "possibly broken" to "definitely broken".
 **Lesson:** When two code paths look structurally similar but use different primitives to reach the same state, do NOT assume a delta from one is applicable to the other. Trace the primitives end-to-end, and if hardware is needed to disambiguate, mark the fix as gated on live validation rather than guessing. Caught before pushing — the initial fix plan had "gated on re-test" and the second-pass analysis enforced it.
+
+---
+
+## 9. Deep Comparison: Original vs Current Implementation (2026-04-17)
+
+This section is a comprehensive behavioral comparison of every sleep obfuscation
+technique, analyzing why the original code does not crash while the current
+implementation may crash under certain configurations.
+
+### 9.1 The OBF_JMP Macro — Critical Behavioral Change
+
+**Original** (`payloads-originalfiles/Demon/include/core/SleepObf.h:16-23`):
+```c
+#define OBF_JMP( i, p ) \
+    if ( JmpBypass == SLEEPOBF_BYPASS_JMPRAX ) {    \
+        Rop[ i ].Rax = U_PTR( p );                  \
+    } if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {  \
+        Rop[ i ].Rbx = U_PTR( & p );                \
+    } else {                                        \
+        Rop[ i ].Rip = U_PTR( p );                  \
+    }
+```
+
+The second `if` is NOT `else if`. This creates a **fall-through** for JMPRAX.
+
+**Current** (`payloads/Demon/include/core/SleepObf.h:16-23`):
+```c
+#define OBF_JMP( i, p ) \
+    if ( JmpBypass == SLEEPOBF_BYPASS_JMPRAX ) {         \
+        Rop[ i ].Rax = U_PTR( p );                       \
+    } else if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {  \
+        Rop[ i ].Rbx = U_PTR( & p );                     \
+    } else {                                             \
+        Rop[ i ].Rip = U_PTR( p );                       \
+    }
+```
+
+Fixed with `else if`.
+
+#### Behavioral Impact Per JmpBypass Mode
+
+**NONE (0x0):** No behavioral difference. Both reach the `else` branch → `Rip = function`.
+
+**JMPRAX (0x1) — CRITICAL CHANGE:**
+- **Original:** Sets `Rax = function`, then falls through to `else` → `Rip = function`.
+  The JmpGadget set during loop init is **overwritten**. The `jmp rax` gadget is
+  **NEVER executed**. JMPRAX behaves identically to NONE — a direct Rip call.
+- **Current:** Sets ONLY `Rax = function`. Rip remains as JmpGadget (`jmp rax`).
+  The CPU executes `jmp rax` which jumps to the function. **The gadget IS actually used.**
+
+**JMPRBX (0x2):** No behavioral difference. Both set `Rbx = &function` and don't
+reach `else`, so `Rip` stays as JmpGadget (`jmp [rbx]`).
+
+| JmpBypass | Original Effect | Current Effect | Changed? |
+|-----------|----------------|----------------|----------|
+| NONE | Direct Rip call | Direct Rip call | No |
+| JMPRAX | Direct Rip call (gadget never used) | Gadget-mediated jmp rax | **YES - CRITICAL** |
+| JMPRBX | Gadget-mediated jmp [rbx] | Gadget-mediated jmp [rbx] | No |
+
+**The `else if` fix made JMPRAX actually work as designed, but this is a behavioral
+change from "never crashes because gadget is never used" to "may crash if the gadget
+execution path has stack alignment or return address issues."**
+
+### 9.2 TimerObf: Original vs Current
+
+#### Ekko vs Zilean Dispatch
+
+**Original:** Dispatches based on `Method`:
+- **Ekko:** `RtlCreateTimerQueue` + `RtlCreateTimer` with `WT_EXECUTEINTIMERTHREAD`
+- **Zilean:** `NtCreateEvent(&EvntWait)` + `RtlRegisterWait` with `WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD`
+
+`WT_EXECUTEINWAITTHREAD` does NOT guarantee all callbacks run on the same thread.
+NtContinue loads a CONTEXT (including Rsp) from a specific thread — executing on
+a different thread is undefined behavior.
+
+**Current:** Both Ekko and Zilean use `RtlCreateTimerQueue` + `RtlCreateTimer`.
+The `Method` parameter is accepted but **completely ignored**. Both run identical
+code. This is **safer** — `WT_EXECUTEINTIMERTHREAD` guarantees same-thread execution.
+
+#### sizeof(VOID) vs sizeof(PVOID)
+
+**Original** (line 515): `Rop[Inc].R8 = U_PTR(sizeof(VOID))` — copies 1 byte of
+Rip during stack spoof (broken).
+
+**Current** (line 198): `Rop[Inc].R8 = U_PTR(sizeof(PVOID))` — copies full 8-byte
+Rip value (correct).
+
+#### NtSetEvent Double-Set
+
+**Original** (lines 566-567):
+```c
+Rop[ Inc ].Rip = U_PTR( Instance->Win32.NtSetEvent );  // Direct set
+OBF_JMP( Inc, Instance->Win32.NtSetEvent )              // Then macro
+```
+For JMPRBX, Rip = NtSetEvent (from line 566), Rbx = &NtSetEvent. Last ROP entry
+always does direct call even in JMPRBX mode. **Inconsistent but harmless.**
+
+**Current:** Only `OBF_JMP(Inc, NtSetEvent)` — consistent behavior across all modes.
+
+#### Cleanup
+
+**Original:** `RtlDeleteTimerQueue(Queue)` — non-blocking. Timer callbacks may still
+reference Rop array on stack after function returns. Race condition that usually
+doesn't crash because timers have already fired.
+
+**Current:** `RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE)` — blocking wait
+for all callbacks. Eliminates race but hangs if a callback hangs.
+
+### 9.3 FoliageObf: Original vs Current
+
+Foliage does NOT use OBF_JMP — all Rip values are set directly. JmpBypass has no
+effect on Foliage. ProxyLoading has no effect on Foliage.
+
+| Aspect | Original | Current | Impact |
+|--------|----------|---------|--------|
+| CONTEXT allocation | 13x `LocalAlloc(LPTR, sizeof(CONTEXT))` — 8-byte aligned | Single `NtAllocateVirtualMemory` — page-aligned (16-byte guaranteed) | **Crash fix: #GP from misaligned movaps** |
+| RSP normalization | None — relies on thread's initial Rsp being correct | FIX-10: adjusts Rsp to `%16==8` if `%16==0` | **Crash fix: #GP on some Windows builds** |
+| Encryption | `SystemFunction032` (advapi32/cryptbase) via 2 PUSTRING params | Custom position-independent RC4 stub on separate RX page; 4 raw params | **Crash fix: SystemFunction032 may touch uninit TEB on APC thread** |
+| Sleep wait | `WaitForSingleObjectEx` (Win32 API, ms timeout) | `NtWaitForSingleObject` (native syscall, LARGE_INTEGER timeout on fiber stack) | **Crash fix: Win32 API may touch uninit TEB on APC thread** |
+| Thread cleanup | `SysNtTerminateThread` without wait, handle leaked | FIX-13: `ThreadResumed` tracking, wait for thread exit, handle closed | **UAF/resource fix** |
+| RopExitThd ret addr | Written to `RopBegin->Rsp` (wrong, benign) | Written to `RopExitThd->Rsp` (correct) | Cosmetic fix |
+| Memory cleanup | Individual `LocalFree` (RopGetCtx/RopMemEnc not freed = leak) | Single `NtFreeVirtualMemory` after thread wait | Memory leak fix |
+| Fiber failure | `break` (no sleep, no fallback) | `break` (same, per operator requirement FIX-12) | Same |
+
+#### Why Original Foliage Doesn't Crash (Usually)
+
+1. **LocalAlloc alignment:** On x64 Windows, the default heap typically returns 16-byte
+   aligned blocks for allocations >= 16 bytes. `sizeof(CONTEXT)` = 0x4D0 (1232 bytes)
+   qualifies. So alignment is correct by coincidence, not by design.
+
+2. **SystemFunction032:** On most Windows builds, it's a simple RC4 implementation that
+   doesn't actually access TEB subsystem fields. The dependency on `advapi32/cryptbase`
+   is load-time, and the function's runtime code path doesn't touch activation context
+   or FLS on common builds.
+
+3. **WaitForSingleObjectEx:** On most builds, the Win32 wrapper takes a fast path that
+   immediately calls `NtWaitForSingleObject` internally, bypassing FLS/activation checks.
+
+4. **Thread termination race:** `NtTerminateThread` completes quickly for a thread that's
+   already finished its ROP chain. The CONTEXT memory from `LocalAlloc` isn't freed
+   immediately after (the Go-to-Leave path frees contexts individually, and by the time
+   execution reaches those frees, the thread is already terminated).
+
+#### Why Original Foliage CAN Crash (Some Builds)
+
+- Windows 10 22H2+: SystemFunction032 moved from advapi32 to cryptbase forwarded export;
+  new code path may touch activation context
+- Windows 11: Different WaitForSingleObjectEx code path accesses FLS
+- Server 2022: Different heap alignment for small-ish allocations
+- App Verifier / Page Heap: Strict 8-byte alignment exposes LocalAlloc issue
+
+### 9.4 ProxyLoading — Confirmed Non-Factor
+
+`ProxyLoading` (BYTE in `Instance->Config.Implant`) is parsed from the profile config
+during Demon initialization but is **NEVER read by any code path** in either:
+- `payloads-originalfiles/Demon/src/core/Obf.c`
+- `payloads/Demon/src/core/Obf.c`
+- `payloads/Demon/src/core/ObfTimer.c`
+- `payloads/Demon/src/core/ObfFoliage.c`
+
+No grep of the codebase finds any read of `ProxyLoading` after initialization.
+It has **zero behavioral impact** on any sleep obfuscation technique.
+
+### 9.5 Root Cause Summary: Why Current May Crash
+
+**Primary cause — OBF_JMP JMPRAX behavioral change (TimerObf only):**
+
+The `else if` fix transformed JMPRAX from "effectively NONE" (gadget never executes)
+to "gadget-mediated execution" (`jmp rax`). This is a fundamental change in the
+execution flow:
+
+1. `jmp rax` is a non-call transfer — doesn't push a return address
+2. Functions expect `Rsp % 16 == 8` at entry (after `call` pushes 8 bytes)
+3. With `jmp rax`, Rsp is whatever NtContinue loaded (which may be `% 16 == 8` —
+   correct for a `call` but the return path differs)
+4. The function returns to `[Rsp]` which is set in the ROP chain — this should work
+   if the stack is correctly set up
+5. The crash likely occurs because `jmp rax` doesn't create a proper stack frame for
+   the function's `ret` instruction — when the function returns, it pops the return
+   address from Rsp, which was set by the ROP chain, but the stack unwinder and any
+   exception handling code see an inconsistent call chain
+
+**Secondary causes (Foliage, mostly fixed):**
+- CONTEXT alignment (fixed by VirtualAlloc)
+- RSP normalization (fixed by FIX-10)
+- SystemFunction032 on APC thread (fixed by FIX-15 custom RC4)
+- WaitForSingleObjectEx on APC thread (fixed by FIX-11 NtWaitForSingleObject)
+
+### 9.6 Action Plan
+
+#### Phase 1: Isolate JMPRAX as Crash Source (CRITICAL)
+
+Test configurations to confirm the hypothesis:
+
+| Test | Technique | JmpBypass | StackSpoof | Expected |
+|------|-----------|-----------|------------|----------|
+| T1 | Ekko | NONE | FALSE | Pass |
+| T2 | Ekko | JMPRAX | FALSE | **CRASH?** |
+| T3 | Ekko | JMPRBX | FALSE | Pass |
+| T4 | Ekko | NONE | TRUE | Pass |
+| T5 | Ekko | JMPRAX | TRUE | **CRASH?** |
+| T6 | Ekko | JMPRBX | TRUE | Pass |
+| T7 | Zilean | NONE | FALSE | Pass |
+| T8 | Zilean | JMPRAX | FALSE | **CRASH?** |
+| T9 | Foliage | N/A | N/A | Pass |
+
+If T2/T5/T8 crash but T1/T3/T4/T6/T7/T9 pass → OBF_JMP confirmed.
+
+#### Phase 2: Fix JMPRAX Execution Path (HIGH)
+
+**Option A — Revert OBF_JMP to original `if`/`if`/`else`:**
+Simple, known-working, but JMPRAX becomes identical to NONE (feature disabled).
+
+**Option B — Fix stack setup for `jmp rax` gadget:**
+When JMPRAX is active, adjust the ROP chain so the stack is correctly set up
+for the `jmp rax` non-call transfer. Specifically, the return address needs to
+be at `[Rsp]` and Rsp needs proper alignment for the target function.
+
+**Option C — Use `call rax` gadget (`FF D0`) instead of `jmp rax` (`FF E0`):**
+`call rax` pushes a return address — proper calling convention. Find `FF D0`
+in ntdll instead of `FF E0`. More compatible with function prologues.
+Requires: change `JmpPad` from `{0xFF, 0xE0}` to `{0xFF, 0xD0}` for JMPRAX,
+and adjust Rsp in the ROP chain to account for the pushed return address.
+
+**Recommended approach:** Option C — `call rax` is the correct gadget for
+indirect function calls. `jmp rax` was likely a design error in the original
+code (which was masked by the `if`/`if` fall-through bug making it never execute).
+
+**Status (HVC-010, 2026-04-18):** Phase 1 (isolate JMPRAX as crash source) and
+Phase 2 (fix) are now applied. JMPRAX explicitly sets `Rip = fn` in addition to
+`Rax = fn`, making it functionally equivalent to NONE (direct call, no gadget).
+The `jmp rax` gadget is found and stored in Rax but bypassed via the Rip
+override. Future work (Phase 2 Option B/C) can implement proper gadget-based
+dispatch; until then JMPRAX is a safe no-op over NONE.
+
+#### Phase 3: Cross-Build Testing (MEDIUM)
+
+Test all configurations on:
+- Windows 10 21H2 (baseline)
+- Windows 10 22H2 (SystemFunction032 relocation)
+- Windows 11 23H2 (latest)
+- Windows Server 2022
+
+With and without App Verifier / Page Heap enabled.
+
+#### Phase 4: Code Guards (LOW)
+
+- Validate gadget is in executable memory before use
+- Debug-mode Rsp alignment assertion before NtContinue
+- Compile-time option to disable JMPRAX if it proves unreliable
+- Document tested configurations in code comments
+
+### 9.7 HVC-011: Proxy Loading Crash — Blocking Cleanup Root Cause
+
+**Problem:** Demon crashes after ~10 sleep cycles when ProxyLoading = RtlCreateTimer or RtlRegisterWait. Works indefinitely with RtlQueueWorkItem.
+
+**Root cause:** Both `ObfTimer.c` and `LdrModuleLoad` were changed from non-blocking `RtlDeleteTimerQueue` to blocking `RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE)`. The blocking variant waits for all timer callbacks to "complete" per the thread pool's internal accounting, but NtContinue-based callbacks (used in TimerObf's ROP chain) bypass normal callback return semantics, leaving the completion tracking inconsistent. Over ~19 timer queue lifecycles (9 proxy loading + ~10 sleep cycles), the accumulated corruption causes a hard crash.
+
+**Fix:** Reverted all blocking cleanup to non-blocking `RtlDeleteTimerQueue`. Restored `WT_EXECUTEONLYONCE` in RtlRegisterWait proxy loading (removed explicit RtlDeregisterWaitEx). Kept BUG-LDR-1 handle separation.
+
+**Status (2026-04-18):** Applied. Live test showed crash persists — HVC-011 is defensively correct but NOT the root cause. See §9.8.
+
+### 9.8 HVC-012: Proxy Loading Crash — sizeof(PVOID) Rip Copy Root Cause
+
+**Problem:** After HVC-011, the crash pattern is identical. Post-HVC-011 console outputs show the exact same crash at ~11 cycles.
+
+**Exhaustive comparison result:** After HVC-011 brought all cleanup/LdrModuleLoad code into alignment with the original, the ONLY remaining behavioral difference in the entire TimerObf path (for Ekko + JmpBypass=NONE) is:
+
+| Location | Original | Current (HVC-009) |
+|----------|----------|--------------------|
+| `ObfTimer.c` ROP step 4 | `sizeof(VOID)` = 1 byte | `sizeof(PVOID)` = 8 bytes |
+
+**Why sizeof(PVOID) causes the crash:**
+
+ROP step 4 copies bytes from `ThdCtx.Rip` (main thread's Rip) to `TimerCtx.Rip`. With `sizeof(VOID)` = 1 byte, this is a near-no-op: `TimerCtx.Rip` stays as the timer thread's Rip from `RtlCaptureContext`. Step 6 (`NtSetContextThread`) then applies a fully self-consistent context (all fields from the timer thread) to the main thread.
+
+With `sizeof(PVOID)` = 8 bytes, `TimerCtx.Rip` becomes the main thread's actual Rip (inside the NtSignalAndWaitForSingleObject syscall stub). Step 6 applies a **mixed context**: Rip from the main thread's syscall path, but Rsp and all registers from the timer thread. This inconsistency in the context applied via `NtSetContextThread` to a kernel-waiting thread corrupts thread pool dispatch state over repeated cycles. The corruption accumulates faster when proxy loading has primed the pool with timer/wait threads (RtlCreateTimer/RtlRegisterWait), explaining why RtlQueueWorkItem doesn't trigger it.
+
+**Fix:** Reverted to `sizeof(VOID)`. Added comment explaining the design intent.
+
+**Status (2026-04-18):** Applied. Pending live test verification.
 

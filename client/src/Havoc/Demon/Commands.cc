@@ -83,6 +83,13 @@ std::vector<DemonCommands::Command_t> DemonCommands::DemonCommandList = {
                     .Description    = "clear all commands in task queue",
                     .Behavior       = BEHAVIOR_TEAMSERVER,
                 },
+                {
+                    .CommandString  = "cancel",
+                    .Description    = "cancel a specific task or all tasks",
+                    .Behavior       = BEHAVIOR_TEAMSERVER,
+                    .Usage          = "[id|all]",
+                    .Example        = "all",
+                },
             }
         },
         {

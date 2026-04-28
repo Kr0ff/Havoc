@@ -68,11 +68,12 @@ const (
 )
 
 type BuilderConfig struct {
-	Compiler64 string
-	Compiler86 string
-	Nasm       string
-	DebugDev   bool
-	SendLogs   bool
+	Compiler64       string
+	Compiler86       string
+	Nasm             string
+	DebugDev         bool
+	DebugStringsOnly bool
+	SendLogs         bool
 }
 
 type Builder struct {
@@ -191,10 +192,13 @@ func NewBuilder(config BuilderConfig) *Builder {
 	 * --gc-sections                   Decides which input sections are used by examining symbols and relocations.
 	 */
 
-	logger.Debug(fmt.Sprintf("Payload Builder: Enable Debug Mode %v", config.DebugDev))
+	logger.Debug(fmt.Sprintf("Payload Builder: DebugDev=%v DebugStringsOnly=%v", config.DebugDev, config.DebugStringsOnly))
 
 	if config.DebugDev {
-		// debug mode includes symbols
+		// developer debug mode: full CRT linkage (libc printf, malloc, etc.) — UNSTABLE
+		// Use this only for short investigative runs. Sleep-obf and proxy-load callbacks
+		// can deadlock or read encrypted .rodata via libc state. See
+		// Debug-Build-Instability-Analysis.md.
 		builder.compilerOptions.CFlags = []string{
 			"",
 			"-Os -fno-asynchronous-unwind-tables -masm=intel",
@@ -204,6 +208,10 @@ func NewBuilder(config BuilderConfig) *Builder {
 			"-Wl,--no-seh,--enable-stdcall-fixup,--gc-sections",
 		}
 	} else {
+		// production / debug-strings-only: identical CFlags. -nostdlib will be added
+		// below in either case (no libc, no libgcc). DebugStringsOnly differs only by
+		// adding -DDEBUG and -DDEBUG_NOSTDLIB so PRINTF/PUTS route through the existing
+		// LogToConsole helper (which uses Instance->Win32.vsnprintf + WriteConsoleA).
 		builder.compilerOptions.CFlags = []string{
 			"",
 			"-Os -fno-asynchronous-unwind-tables -masm=intel",
@@ -300,9 +308,17 @@ func (b *Builder) Build() bool {
 	}
 
 	// enable debug mode
+	// Three modes are supported:
+	//   1. DebugDev=true                 → -DDEBUG, libc linked (no -nostdlib).  UNSTABLE.
+	//   2. DebugStringsOnly=true         → -DDEBUG, -DDEBUG_NOSTDLIB, no libc.  Stable + logs.
+	//   3. neither                       → no debug defines, no libc.  Production.
 	if b.compilerOptions.Config.DebugDev {
 		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "DEBUG")
 	} else {
+		if b.compilerOptions.Config.DebugStringsOnly {
+			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "DEBUG")
+			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "DEBUG_NOSTDLIB")
+		}
 		if b.FileType == FILETYPE_WINDOWS_SERVICE_EXE {
 			b.compilerOptions.CFlags[0] = "-mwindows -ladvapi32"
 		} else {
@@ -496,7 +512,67 @@ func (b *Builder) Build() bool {
 	//logger.Debug(CompileCommand)
 	Successful := b.CompileCmd(CompileCommand)
 
+	/* DEBUG strings audit — production safety contract.
+	 * When --debug-dev is NOT set, the produced binary must contain ZERO
+	 * "[DEBUG::" markers.  The Demon's PRINTF/PUTS/PRINT_HEX macros in
+	 * payloads/Demon/include/common/Macros.h strip to do/while(0) no-ops
+	 * when DEBUG is undefined, so a leak here means either:
+	 *   1. Someone added a direct printf/DbgPrint/DemonPrintf/LogToConsole
+	 *      call that bypassed the macros, or
+	 *   2. A macro was added without proper #ifdef DEBUG guarding.
+	 * Either way, fail the build immediately so the leak cannot ship. */
+	if Successful && !b.compilerOptions.Config.DebugDev && !b.compilerOptions.Config.DebugStringsOnly {
+		if err := b.verifyNoDebugStringsInBinary(b.outputPath); err != nil {
+			logger.Error("DEBUG strings audit failed: " + err.Error())
+			if !b.silent {
+				b.SendConsoleMessage("Error", "DEBUG strings audit failed: "+err.Error())
+				b.SendConsoleMessage("Error", "rebuild with --debug-dev or --debug-strings-only OR review recent changes to payloads/Demon/")
+			}
+			return false
+		}
+	}
+
 	return Successful
+}
+
+/* verifyNoDebugStringsInBinary scans the produced Demon binary for the
+ * "[DEBUG::" marker that all PRINTF/PUTS macro expansions embed. The
+ * marker MUST be absent in production builds. Returns nil if clean,
+ * an error describing the leak otherwise. */
+func (b *Builder) verifyNoDebugStringsInBinary(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// If the file isn't there, the compile failed earlier — let the
+		// caller handle that. This audit is purely a leak check.
+		return nil
+	}
+
+	const marker = "[DEBUG::"
+	if idx := bytes.Index(data, []byte(marker)); idx >= 0 {
+		// Capture a small context window for the error message
+		end := idx + 64
+		if end > len(data) {
+			end = len(data)
+		}
+		ctx := string(data[idx:end])
+		// Replace non-printable bytes for the message
+		var safe []byte
+		for i := 0; i < len(ctx); i++ {
+			c := ctx[i]
+			if c >= 0x20 && c < 0x7f {
+				safe = append(safe, c)
+			} else {
+				safe = append(safe, '.')
+			}
+		}
+		return fmt.Errorf(
+			"binary at %s contains debug-output marker %q at offset %d (context: %q)",
+			path, marker, idx, string(safe),
+		)
+	}
+
+	logger.Debug(fmt.Sprintf("DEBUG strings audit OK: no %q markers in %s (%d bytes)", marker, path, len(data)))
+	return nil
 }
 
 func (b *Builder) SetListener(Type int, Config any) {
@@ -791,7 +867,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		if ConfigObfTechnique != SLEEPOBF_NO_OBF {
 			switch val {
 			case "jmp rax":
-				ConfigObfTechnique = SLEEPOBF_BYPASS_JMPRAX
+				ConfigObfBypass = SLEEPOBF_BYPASS_JMPRAX
 				if !b.silent {
 					b.SendConsoleMessage("Info", "sleep jump gadget \"jmp rax\" has been specified")
 				}
@@ -839,7 +915,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			}
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Stack Duplication is undefined")
 	}
 
 	if val, ok := b.config.Config["Proxy Loading"].(string); ok && len(val) > 0 {
@@ -880,13 +956,13 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			break
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Proxy Loading is undefined")
 	}
 
 	if val, ok := b.config.Config["Amsi/Etw Patch"].(string); ok && len(val) > 0 {
 		switch val {
 
-		case "Hardware breakpoints":
+		case "Hardware breakpoints", "HWBP":
 			ConfigAmsiPatch = AMSIETW_PATCH_HWBP
 			if !b.silent {
 				b.SendConsoleMessage("Info", "amsi/etw patching technique: hardware breakpoints")
@@ -901,7 +977,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			break
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Amsi/Etw Patch is undefined")
 	}
 
 	// behaviour configuration (alloc/exec/spawn)

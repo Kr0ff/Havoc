@@ -124,6 +124,9 @@ set( HAVOC_INCLUDE
         include/UserInterface/Widgets/Store.hpp
 
         include/UserInterface/HavocUI.hpp
+
+        # Util
+        include/Util/ThemeManager.hpp
 )
 
 # src for UI
@@ -164,6 +167,7 @@ set(
         src/Util/ColorText.cpp
         src/Util/Base64.cpp
         src/Util/Base.cpp
+        src/Util/ThemeManager.cpp
 )
 
 # src for Havoc

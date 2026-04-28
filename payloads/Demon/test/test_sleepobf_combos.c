@@ -63,6 +63,7 @@ typedef struct _TEST_CONTEXT {
 #define OBF_JMP( i, p ) \
     if ( JmpBypass == SLEEPOBF_BYPASS_JMPRAX ) {         \
         Rop[ i ].Rax = U_PTR( p );                       \
+        Rop[ i ].Rip = U_PTR( p );                       \
     } else if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {  \
         Rop[ i ].Rbx = U_PTR( & p );                     \
     } else {                                             \
@@ -141,7 +142,7 @@ void test_obf_jmp_rax(void) {
     PVOID func = (PVOID)FakeVirtualProtect;
     OBF_JMP(Inc, func);
 
-    ASSERT_EQ(Rop[0].Rip, U_PTR(JmpGadget), "Rip should remain as JmpGadget");
+    ASSERT_EQ(Rop[0].Rip, U_PTR(func), "Rip should be function address (gadget bypassed)");
     ASSERT_EQ(Rop[0].Rax, U_PTR(func), "Rax should be function address");
     ASSERT_EQ(Rop[0].Rbx, 0ULL, "Rbx should be untouched");
 }
@@ -244,8 +245,10 @@ void test_rop_inc_bounds(void) {
 
 /* ============================================================
  * TEST 6: Timer queue cleanup covers all timers (Ekko model)
- * RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE) must be
- * called on the Queue, which destroys ALL timers in it.
+ * RtlDeleteTimerQueue(Queue) (non-blocking) destroys ALL timers.
+ * Non-blocking is required because blocking RtlDeleteTimerQueueEx
+ * corrupts the thread pool with NtContinue-based callbacks.
+ * See HVC-011.
  * ============================================================ */
 void test_timer_queue_cleanup(void) {
     printf("[TEST] Timer queue cleanup model\n");
@@ -262,7 +265,7 @@ void test_timer_queue_cleanup(void) {
     /* Verify Queue is non-NULL (will be destroyed) */
     ASSERT_NEQ(Queue, NULL, "Queue should be non-NULL before cleanup");
 
-    /* After RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE): */
+    /* After RtlDeleteTimerQueue(Queue) — non-blocking: */
     Queue = NULL;
     ASSERT_EQ(Queue, NULL, "Queue should be NULL after cleanup");
 
@@ -271,41 +274,35 @@ void test_timer_queue_cleanup(void) {
 }
 
 /* ============================================================
- * TEST 7: Proxy loading — RtlDeregisterWaitEx before Event close
- * Timer (wait handle) must be deregistered BEFORE Event is closed
+ * TEST 7: Proxy loading — WT_EXECUTEONLYONCE auto-deregistration
+ * RtlRegisterWait uses WT_EXECUTEONLYONCE which auto-deregisters
+ * the wait after the callback completes.  No explicit
+ * RtlDeregisterWaitEx is needed.  Cleanup: Event close, then
+ * Queue delete (Queue is NULL for RtlRegisterWait path).
+ * See HVC-011.
  * ============================================================ */
 void test_proxy_wait_deregister_order(void) {
-    printf("[TEST] Proxy loading wait deregister order\n");
+    printf("[TEST] Proxy loading cleanup order (WT_EXECUTEONLYONCE)\n");
 
-    /* Simulate the cleanup sequence */
-    HANDLE Timer = (HANDLE)0xABCD;
+    /* Simulate the cleanup sequence for RtlRegisterWait path */
     HANDLE Event = (HANDLE)0x5678;
     HANDLE Queue = NULL;
-    int deregister_called = 0;
     int event_closed = 0;
     int queue_deleted = 0;
 
-    /* Step 1: Deregister wait (if Timer is set) */
-    if (Timer) {
-        /* RtlDeregisterWaitEx(Timer, INVALID_HANDLE_VALUE) */
-        deregister_called = 1;
-        Timer = NULL;
-    }
-
-    /* Step 2: Close event (if Event is set) */
+    /* Step 1: Close event */
     if (Event) {
         event_closed = 1;
         Event = NULL;
     }
 
-    /* Step 3: Delete queue (if Queue is set — only for RtlCreateTimer path) */
+    /* Step 2: Delete queue (NULL for RtlRegisterWait path) */
     if (Queue) {
         queue_deleted = 1;
         Queue = NULL;
     }
 
-    ASSERT_EQ(deregister_called, 1, "RtlDeregisterWaitEx must be called before closing Event");
-    ASSERT_EQ(event_closed, 1, "Event should be closed after deregistering wait");
+    ASSERT_EQ(event_closed, 1, "Event should be closed");
     ASSERT_EQ(queue_deleted, 0, "Queue should not be deleted (not used for RtlRegisterWait proxy)");
 }
 
@@ -370,7 +367,7 @@ void test_obf_jmp_all_indices(void) {
             if (bypass == SLEEPOBF_BYPASS_NONE) {
                 ASSERT_EQ(Rop[i].Rip, U_PTR(func), "NONE: Rip should be func");
             } else if (bypass == SLEEPOBF_BYPASS_JMPRAX) {
-                ASSERT_EQ(Rop[i].Rip, U_PTR(JmpGadget), "JMPRAX: Rip should be gadget");
+                ASSERT_EQ(Rop[i].Rip, U_PTR(func), "JMPRAX: Rip should be func (gadget bypassed)");
                 ASSERT_EQ(Rop[i].Rax, U_PTR(func), "JMPRAX: Rax should be func");
             } else {
                 ASSERT_EQ(Rop[i].Rip, U_PTR(JmpGadget), "JMPRBX: Rip should be gadget");

@@ -372,7 +372,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					}
 				}
 
-				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), "\r\n") {
+				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), ", ") {
 					if len(s) > 0 {
 						Headers = append(Headers, s)
 					}
@@ -666,7 +666,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					}
 				}
 
-				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), "\r\n") {
+				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), ", ") {
 					if len(s) > 0 {
 						Headers = append(Headers, s)
 					}
@@ -847,11 +847,12 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					}
 
 					var PayloadBuilder = builder.NewBuilder(builder.BuilderConfig{
-						Compiler64: t.Settings.Compiler64,
-						Compiler86: t.Settings.Compiler32,
-						Nasm:       t.Settings.Nasm,
-						DebugDev:   t.Flags.Server.DebugDev,
-						SendLogs:   t.Flags.Server.SendLogs,
+						Compiler64:       t.Settings.Compiler64,
+						Compiler86:       t.Settings.Compiler32,
+						Nasm:             t.Settings.Nasm,
+						DebugDev:         t.Flags.Server.DebugDev,
+						DebugStringsOnly: t.Flags.Server.DebugStringsOnly,
+						SendLogs:         t.Flags.Server.SendLogs,
 					})
 
 					PayloadBuilder.ClientId = ClientID

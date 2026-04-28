@@ -291,7 +291,7 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 
 	if val, ok := RegisterInfo["Process Elevated"]; ok {
 		agent.Info.Elevated = "false"
-		if int(val.(float64)) == 1 {
+		if val == "1" {
 			agent.Info.Elevated = "true"
 		}
 	}
@@ -650,6 +650,9 @@ func (a *Agent) IsKnownRequestID(teamserver TeamServer, RequestID uint32, Comman
 		return true
 	}
 
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
 	for i := range a.Tasks {
 		if a.Tasks[i].RequestID == RequestID {
 			return true
@@ -660,12 +663,17 @@ func (a *Agent) IsKnownRequestID(teamserver TeamServer, RequestID uint32, Comman
 
 // the operator added a new request/command
 func (a *Agent) AddRequest(job Job) []Job {
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
 	a.Tasks = append(a.Tasks, job)
 	return a.Tasks
 }
 
-// after a request has been completed, we can forget about the RequestID so that it is no longer valid
+// after a request has been completed, we can forget about the RequestID so that it is no longer valid.
 func (a *Agent) RequestCompleted(RequestID uint32) {
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
 	for i := range a.Tasks {
 		if a.Tasks[i].RequestID == RequestID {
 			a.Tasks = append(a.Tasks[:i], a.Tasks[i+1:]...)
@@ -675,8 +683,12 @@ func (a *Agent) RequestCompleted(RequestID uint32) {
 }
 
 func (a *Agent) AddJobToQueue(job Job) []Job {
-	// store the RequestID
-	a.AddRequest(job)
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
+	// store the RequestID (caller holds a.JobMtx)
+	a.Tasks = append(a.Tasks, job)
+
 	// if it's a pivot agent then add the job to the parent
 	if a.Pivots.Parent != nil {
 		logger.Debug(fmt.Sprintf("AddJobToQueue: pivot agent %s — routing Command=0x%x through parent %s",
@@ -692,79 +704,17 @@ func (a *Agent) AddJobToQueue(job Job) []Job {
 }
 
 func (a *Agent) GetQueuedJobs() []Job {
-	var Jobs []Job
-	var JobsSize = 0
-	var NumJobs = 0
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
 
-	// make sure we return a number of jobs that doesn't exceed DEMON_MAX_RESPONSE_LENGTH
-	for _, job := range a.JobQueue {
-
-		for i := range job.Data {
-
-			switch job.Data[i].(type) {
-			case int:
-				JobsSize += 4
-				break
-
-			case int64:
-				JobsSize += 8
-				break
-
-			case uint64:
-				JobsSize += 8
-				break
-
-			case int32:
-				JobsSize += 4
-				break
-
-			case uint32:
-				JobsSize += 4
-				break
-
-			case int16:
-				JobsSize += 2
-				break
-
-			case uint16:
-				JobsSize += 2
-				break
-
-			case string:
-				JobsSize += 4 + len(job.Data[i].(string))
-				break
-
-			case []byte:
-				JobsSize += 4 + len(job.Data[i].([]byte))
-				break
-
-			case byte:
-				JobsSize += 1
-				break
-
-			case bool:
-				JobsSize += 4
-				break
-
-			default:
-				logger.Error(fmt.Sprintf("Could determine package size, unknown data type: %v", job.Data[i]))
-			}
-		}
-
-		if JobsSize >= DEMON_MAX_RESPONSE_LENGTH {
-			break
-		}
-
-		NumJobs++
+	if len(a.JobQueue) == 0 {
+		return nil
 	}
 
-	// if there is a very large job, send it anyways
-	if len(a.JobQueue) > 0 && NumJobs == 0 {
-		NumJobs = 1
-	}
-
-	// return NumJobs and leave the rest on the JobQueue
-	Jobs, a.JobQueue = a.JobQueue[:NumJobs], a.JobQueue[NumJobs:]
+	// drain all queued jobs at once
+	Jobs := make([]Job, len(a.JobQueue))
+	copy(Jobs, a.JobQueue)
+	a.JobQueue = nil
 
 	return Jobs
 }
@@ -799,9 +749,8 @@ func (a *Agent) PivotAddJob(job Job) {
 	Packer.AddInt32(int32(AgentID))
 	Packer.AddBytes(Payload)
 
-	// add this job to pivot queue.
-	// tho it's not going to be used besides for the task size calculator
-	// which is going to be displayed to the operator.
+	// add this job to pivot queue (display-only copy for the operator UI).
+	// Caller (AddJobToQueue) already holds a.JobMtx.
 	a.JobQueue = append(a.JobQueue, job)
 
 	PivotJob = Job{
@@ -846,9 +795,13 @@ func (a *Agent) PivotAddJob(job Job) {
 		pivots = &pivots.Parent.Pivots
 	}
 
+	// Lock the root parent's mutex to safely append the pivot job.
+	// This is safe: lock order is always child → parent (no circular dependency).
+	pivots.Parent.JobMtx.Lock()
 	logger.Debug(fmt.Sprintf("PivotAddJob: queuing COMMAND_PIVOT job on parent %s (queue_len=%d→%d)",
 		pivots.Parent.NameID, len(pivots.Parent.JobQueue), len(pivots.Parent.JobQueue)+1))
 	pivots.Parent.JobQueue = append(pivots.Parent.JobQueue, PivotJob)
+	pivots.Parent.JobMtx.Unlock()
 }
 
 func (a *Agent) DownloadAdd(FileID int, FilePath string, FileSize int64) error {
@@ -1245,6 +1198,10 @@ func (a *Agent) ToMap() map[string]interface{} {
 	delete(Info, "Connection")
 	delete(Info, "SessionDir")
 	delete(Info, "JobQueue")
+	delete(Info, "Tasks")
+	delete(Info, "JobMtx")
+	delete(Info, "FragmentBuffer")
+	delete(Info, "FragmentMtx")
 	delete(Info, "Parent")
 
 	MagicValue = fmt.Sprintf("%08x", a.Info.MagicValue)

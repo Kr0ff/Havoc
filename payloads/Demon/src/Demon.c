@@ -317,6 +317,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
 #endif
     };
 
+    PUTS( "============================================================" )
+    PUTS( "===== DemonInit START =====" )
+    PUTS( "============================================================" )
+
     Instance->Teb = NtCurrentTeb();
 
 #ifdef TRANSPORT_HTTP
@@ -612,6 +616,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
     }
 
     PRINTF( "Instance DemonID => %x\n", Instance->Session.AgentID )
+
+    PUTS( "============================================================" )
+    PUTS( "===== DemonInit COMPLETE =====" )
+    PUTS( "============================================================" )
 }
 
 VOID DemonConfig()

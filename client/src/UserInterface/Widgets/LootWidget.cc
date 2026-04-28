@@ -2,6 +2,7 @@
 #include <spdlog/spdlog.h>
 
 #include <UserInterface/Widgets/LootWidget.h>
+#include <Util/ThemeManager.hpp>
 #include <QGraphicsScene>
 #include <QGraphicsView>
 #include <QGraphicsPixmapItem>
@@ -22,8 +23,11 @@ ImageLabel::ImageLabel( QWidget* parent ) : QWidget( parent )
     label->setBackgroundRole( QPalette::Base );
     label->setSizePolicy( QSizePolicy::Ignored, QSizePolicy::Ignored );
     label->setScaledContents( true );
-    label->setStyleSheet( "background-color: #282a36;\n"
-                          "    color: #f8f8f2;" );
+    {
+        const auto& tc = ThemeManager::Instance().ActiveColors();
+        label->setStyleSheet( "background-color: " + tc.panel + ";\n"
+                              "    color: " + tc.text + ";" );
+    }
     label->setPixmap( QPixmap() );
 
     scrollArea->setBackgroundRole(QPalette::Dark);
@@ -94,23 +98,7 @@ LootWidget::LootWidget()
     if ( objectName().isEmpty() )
         setObjectName( QString::fromUtf8( "LootWidget" ) );
 
-    auto MenuStyle = QString(
-            "QMenu {"
-            "    background-color: #282a36;"
-            "    color: #f8f8f2;"
-            "    border: 1px solid #44475a;"
-            "}"
-            "QMenu::separator {"
-            "    background: #44475a;"
-            "}"
-            "QMenu::item:selected {"
-            "    background: #44475a;"
-            "}"
-            "QAction {"
-            "    background-color: #282a36;"
-            "    color: #f8f8f2;"
-            "}"
-    );
+    auto MenuStyle = ThemeManager::MenuStyleSheet();
 
     gridLayout = new QGridLayout( this );
     gridLayout->setContentsMargins( 0, 0, 0, 0 );

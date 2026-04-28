@@ -14,6 +14,7 @@
 #include <UserInterface/Widgets/LootWidget.h>
 
 #include <Util/ColorText.h>
+#include <Util/ThemeManager.hpp>
 
 #include <Havoc/Packager.hpp>
 
@@ -22,6 +23,8 @@
 #include <QToolButton>
 #include <QShortcut>
 #include <QTimer>
+#include <QActionGroup>
+#include <QMessageBox>
 
 using namespace HavocNamespace::HavocSpace;
 
@@ -34,7 +37,7 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
     }
 
     HavocWindow->resize( 1399, 821 );
-    HavocWindow->setStyleSheet( FileRead( ":/stylesheets/Havoc" ) );
+    HavocWindow->setStyleSheet( ThemeManager::Instance().Stylesheet( "Havoc" ) );
 
     actionNew_Client = new QAction( HavocWindow );
     actionNew_Client->setObjectName( QString::fromUtf8( "NewClient" ) );
@@ -103,7 +106,7 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
 
     TeamserverTabWidget = new QTabWidget( centralwidget );
     TeamserverTabWidget->setObjectName( QString::fromUtf8( "TeamserverTabWidget" ) );
-    TeamserverTabWidget->setStyleSheet( FileRead( ":/stylesheets/teamserverTab" ) );
+    TeamserverTabWidget->setStyleSheet( ThemeManager::Instance().Stylesheet( "teamserverTab" ) );
     TeamserverTabWidget->setTabBarAutoHide( true );
     TeamserverTabWidget->setTabsClosable( true );
 
@@ -123,7 +126,7 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
     menubar->setObjectName( QString::fromUtf8( "menubar" ) );
     menubar->setGeometry( QRect( 0, 0, 1143, 20 ) );
 
-    menubar->setStyleSheet( FileRead( ":/stylesheets/menubar" ) );
+    menubar->setStyleSheet( ThemeManager::Instance().Stylesheet( "menubar" ) );
 
     menuHavoc   = new QMenu( menubar );
     menuView    = new QMenu( menubar );
@@ -156,6 +159,49 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
 
     menuHavoc->addAction( actionNew_Client );
     menuHavoc->addSeparator();
+
+    // Theme submenu: dynamically populated from ThemeManager. Selecting a
+    // theme persists the choice to ~/.havoc/theme.conf and asks the user to
+    // restart — Havoc widgets cache their stylesheets at construction time,
+    // so live swaps would leave the UI half-themed.
+    menuTheme = new QMenu( menuHavoc );
+    menuTheme->setObjectName( QString::fromUtf8( "menuTheme" ) );
+    {
+        auto themeGroup = new QActionGroup( this );
+        themeGroup->setExclusive( true );
+
+        const auto available = ThemeManager::Instance().Available();
+        const auto activeNm  = ThemeManager::Instance().ActiveName();
+        for ( const auto& info : available ) {
+            auto* act = new QAction( info.displayName, themeGroup );
+            act->setCheckable( true );
+            act->setChecked( info.name == activeNm );
+            act->setData( info.name );
+            menuTheme->addAction( act );
+        }
+
+        QObject::connect( themeGroup, &QActionGroup::triggered, this,
+            []( QAction* action ) {
+                const QString name = action->data().toString();
+                if ( ThemeManager::Instance().SetActive( name ) ) {
+                    MessageBox(
+                        "Theme changed",
+                        "The selected theme will be applied the next time you start Havoc.",
+                        QMessageBox::Information
+                    );
+                } else {
+                    MessageBox(
+                        "Theme error",
+                        "Failed to save theme selection. See the log for details.",
+                        QMessageBox::Warning
+                    );
+                }
+            }
+        );
+    }
+    menuHavoc->addMenu( menuTheme );
+    menuHavoc->addSeparator();
+
     menuHavoc->addAction( actionDisconnect );
     menuHavoc->addAction( actionExit );
 
@@ -367,7 +413,7 @@ void HavocNamespace::UserInterface::HavocUi::retranslateUi(QMainWindow* Havoc ) 
     actionDisconnect->setText( "Disconnect" );
     actionExit->setText( "Exit" );
     actionTeamserver->setText( "Teamserver" );
-    actionStore->setText( "Extensions" );
+    actionStore->setText( "Extentions" );
     actionGeneratePayload->setText( "Payload" );
     actionLoad_Script->setText(  "Scripts Manager" );
     actionPythonConsole->setText( "Script Console" );
@@ -386,6 +432,7 @@ void HavocNamespace::UserInterface::HavocUi::retranslateUi(QMainWindow* Havoc ) 
     menuScripts->setTitle( "Scripts" );
     menuHelp->setTitle( "Help" );
     MenuSession->setTitle( "Session View" );
+    menuTheme->setTitle( "Theme" );
 
     HavocWindow->setFocus();
     HavocWindow->showMaximized();
@@ -472,7 +519,7 @@ void HavocNamespace::UserInterface::HavocUi::ConnectEvents()
 
         NewBottomTab(
             HavocX::Teamserver.TabSession->Store->StoreWidget,
-            "Extensions"
+            "Extentions"
         );
     } );
 

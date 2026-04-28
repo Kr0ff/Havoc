@@ -1,6 +1,7 @@
 #include <global.hpp>
 #include <UserInterface/Widgets/DemonInteracted.h>
 #include <Util/ColorText.h>
+#include <Util/ThemeManager.hpp>
 
 #include <QDate>
 #include <QTime>

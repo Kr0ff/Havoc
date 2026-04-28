@@ -238,7 +238,7 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             if ( ListenerInfo.Protocol == Listener::PayloadHTTP.toStdString() )
             {
                 auto Headers = QStringList();
-                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( "\r\n" ) ) {
+                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( ", " ) ) {
                     Headers << header;
                 }
 
@@ -376,7 +376,7 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             if ( ListenerInfo.Protocol == Listener::PayloadHTTP.toStdString() )
             {
                 auto Headers = QStringList();
-                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( "\r\n" ) )
+                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( ", " ) )
                     Headers << header;
 
                 auto Uris = QStringList();
@@ -637,7 +637,7 @@ bool Packager::DispatchSession( Util::Packager::PPackage Package )
             TeamserverTab->SessionTableWidget->NewSessionItem( Agent );
             TeamserverTab->LootWidget->AddSessionSection( Agent.Name );
 
-            auto Time    = Agent.First;
+            auto Time    = QString( Package->Head.Time.c_str() );
             auto Message = "[" + Util::ColorText::Cyan( "*" ) + "]" + " Initialized " + Util::ColorText::Cyan( Agent.Name ) + " :: " + Util::ColorText::Yellow( Agent.User + "@" + Agent.Internal ) + Util::ColorText::Cyan( " (" ) + Util::ColorText::Red( Agent.Computer ) + Util::ColorText::Cyan( ")" );
 
             HavocX::Teamserver.TabSession->SmallAppWidgets->EventViewer->AppendText( Time, Message );

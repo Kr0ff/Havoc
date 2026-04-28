@@ -10,7 +10,7 @@ Teamserver {
 }
 
 Operators {
-    user "5pider" {
+    user "kr0ff" {
         Password = "password1234"
     }
 
@@ -28,8 +28,20 @@ Service {
 Demon {
     Sleep = 10
     Jitter = 15
-    IndirectSyscall = true
+
+    IndirectSyscall  = true
     StackDuplication = true
+
+    # Accepted: "WaitForSingleObjectEx", "Foliage", "Ekko", "Zilean"
+    SleepTechnique = "Ekko"
+
+    # Accepted: "None", "jmp rax", "jmp rbx" (only applies to Ekko/Zilean)
+    SleepJmpGadget = "None"
+
+    # Accepted: "None (LdrLoadDll)", "RtlRegisterWait", "RtlCreateTimer", "RtlQueueWorkItem"
+    ProxyLoading = "None (LdrLoadDll)"
+
+    # Accepted: "None", "HWBP", "Hardware breakpoints"
     AmsiEtwPatching = "HWBP"
 
     TrustXForwardedFor = false
@@ -37,6 +49,10 @@ Demon {
     Injection {
         Spawn64 = "C:\\Windows\\System32\\notepad.exe"
         Spawn32 = "C:\\Windows\\SysWOW64\\notepad.exe"
+
+        # Accepted: "Win32", "Native/Syscall"
+        Alloc   = "Native/Syscall"
+        Execute = "Native/Syscall"
     }
 
     Binary {

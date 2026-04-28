@@ -32,6 +32,7 @@
 #define OBF_JMP( i, p ) \
     if ( JmpBypass == SLEEPOBF_BYPASS_JMPRAX ) {         \
         Rop[ i ].Rax = U_PTR( p );                       \
+        Rop[ i ].Rip = U_PTR( p );                       \
     } else if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {  \
         Rop[ i ].Rbx = U_PTR( & p );                     \
     } else {                                             \
@@ -103,7 +104,7 @@ static void test_obf_jmp_jmprax( void ) {
     OBF_JMP( 0, fn );
 
     check( "JMPRAX: Rax = fn address",        Rop[0].Rax == U_PTR( fn ) );
-    check( "JMPRAX: Rip stays JmpGadget",     Rop[0].Rip == U_PTR( JmpGadget ) ); /* critical */
+    check( "JMPRAX: Rip overwritten with fn",  Rop[0].Rip == U_PTR( fn ) ); /* gadget bypassed */
     check( "JMPRAX: Rbx not modified",        Rop[0].Rbx == 0xBBBBBBBB );
 }
 

@@ -4,6 +4,7 @@ import (
 	"sync"
 	"net"
 	"os"
+	"time"
 
 	"Havoc/pkg/common/parser"
 	"Havoc/pkg/packager"
@@ -143,11 +144,24 @@ type SocksServer struct {
 	Addr   string
 }
 
+// FragmentState holds partially-received fragments for a single fragmented
+// SMB package (COMMAND_PACKAGE_FRAGMENT). Fragments arrive with a shared
+// FragID; once all TotalFrags chunks are collected the original command is
+// reassembled and dispatched.
+type FragmentState struct {
+	TotalFrags uint32
+	OrigCmdID  uint32
+	OrigReqID  uint32
+	Chunks     map[uint32][]byte // SeqNum → chunk data
+	CreatedAt  time.Time
+}
+
 // TODO: maybe change this to type map[string]any instead of struct
 type Agent struct {
 	NameID     string
-	JobQueue   []Job
-	Tasks      []Job
+	JobMtx   sync.Mutex // protects JobQueue and Tasks
+	JobQueue []Job
+	Tasks    []Job
 	SessionDir string
 	Active     bool
 	Reason     string
@@ -167,6 +181,12 @@ type Agent struct {
 	SocksCliMtx sync.Mutex
 	SocksSvr    []*SocksServer
 	SocksSvrMtx sync.Mutex
+
+	// FragmentBuffer collects SMB fragment chunks keyed by FragID.
+	// Protected by FragmentMtx. Entries are cleaned up on reassembly
+	// or after a timeout via FragmentCleanup.
+	FragmentBuffer map[uint32]*FragmentState
+	FragmentMtx    sync.Mutex
 
 	Encryption struct {
 		AESKey []byte

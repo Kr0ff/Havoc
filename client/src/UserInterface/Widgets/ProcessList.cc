@@ -1,28 +1,12 @@
 #include <UserInterface/Widgets/ProcessList.hpp>
 #include <UserInterface/Widgets/DemonInteracted.h>
+#include <Util/ThemeManager.hpp>
 #include <QClipboard>
 
 void HavocNamespace::UserInterface::Widgets::ProcessList::setupUi(QWidget *Widget) {
     this->ProcessListWidget = Widget;
 
-    QString MenuStyle = "QMenu {\n"
-                        "    background-color: #282a36;\n"
-                        "    color: #f8f8f2;\n"
-                        "    border: 1px solid #44475a;\n"
-                        "}\n"
-                        "\n"
-                        "QMenu::separator {\n"
-                        "    background: #44475a;\n"
-                        "}\n"
-                        "\n"
-                        "QMenu::item:selected {\n"
-                        "    background: #44475a;\n"
-                        "}\n"
-                        "\n"
-                        "QAction {\n"
-                        "    background-color: #282a36;\n"
-                        "    color: #f8f8f2;\n"
-                        "}";
+    QString MenuStyle = ThemeManager::MenuStyleSheet();
 
 
     if (this->ProcessListWidget->objectName().isEmpty())
@@ -63,24 +47,7 @@ void HavocNamespace::UserInterface::Widgets::ProcessList::setupUi(QWidget *Widge
                                "        border-image: none;\n"
                                "        image: url(:/treewidget/branch-open);\n"
                                "}"
-                               "QMenu {\n"
-                               "    background-color: #282a36;\n"
-                               "    color: #f8f8f2;\n"
-                               "    border: 1px solid #44475a;\n"
-                               "}\n"
-                               "\n"
-                               "QMenu::separator {\n"
-                               "    background: #44475a;\n"
-                               "}\n"
-                               "\n"
-                               "QMenu::item:selected {\n"
-                               "    background: #44475a;\n"
-                               "}\n"
-                               "\n"
-                               "QAction {\n"
-                               "    background-color: #282a36;\n"
-                               "    color: #f8f8f2;\n"
-                               "}");
+                               + MenuStyle);
 
     splitter->addWidget(ProcessTree);
 

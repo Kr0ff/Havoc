@@ -43,6 +43,7 @@ typedef struct
     PVOID TxtBase;
     DWORD TxtSize;
 } KAYN_ARGS, *PKAYN_ARGS;
+#pragma pack()
 
 // TODO: remove all variables that are not switched/changed after some time
 typedef struct
@@ -113,7 +114,7 @@ typedef struct
 #endif
 
 #ifdef TRANSPORT_SMB
-            LPSTR   Name;   /* TODO: change type to BUFFER */
+            LPWSTR  Name;   /* UTF-16 pipe name; teamserver sends via AddWString in builder.go */
             HANDLE  Handle;
 #endif
         } Transport;
@@ -537,8 +538,12 @@ typedef struct
     /* Thread counter. how many threads that are using our code are running ? */
     DWORD  Threads;
 
-    /* A list of packages that have to be sent to the teamserver */
-    PPACKAGE Packages;
+    /* A list of packages that have to be sent to the teamserver.
+     * Protected by PackagesLock (interlocked spinlock) because background
+     * job threads call PackageTransmit while the main thread iterates
+     * the list in PackageTransmitAll. */
+    PPACKAGE      Packages;
+    volatile LONG PackagesLock;
 
     /* Buffer to use for allocating download chunks. */
     BUFFER DownloadChunk;

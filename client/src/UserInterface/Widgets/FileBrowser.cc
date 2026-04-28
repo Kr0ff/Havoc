@@ -6,6 +6,7 @@
 #include <QList>
 #include <spdlog/spdlog.h>
 #include <Util/Base.hpp>
+#include <Util/ThemeManager.hpp>
 
 static auto JoinAtIndex( QStringList list, int index, QString sep ) -> QString
 {
@@ -41,23 +42,7 @@ void FileBrowser::setupUi( QWidget* FileBrowser )
 {
     FileBrowserWidget = FileBrowser;
 
-    auto MenuStyle = QString(
-            "QMenu {"
-            "    background-color: #282a36;"
-            "    color: #f8f8f2;"
-            "    border: 1px solid #44475a;"
-            "}"
-            "QMenu::separator {"
-            "    background: #44475a;"
-            "}"
-            "QMenu::item:selected {"
-            "    background: #44475a;"
-            "}"
-            "QAction {"
-            "    background-color: #282a36;"
-            "    color: #f8f8f2;"
-            "}"
-    );
+    auto MenuStyle = ThemeManager::MenuStyleSheet();
 
     if ( FileBrowser->objectName().isEmpty() )
         FileBrowser->setObjectName( QString::fromUtf8( "FileBrowser" ) );
@@ -336,7 +321,7 @@ void FileBrowser::onTableMenuDownload(){
         box.setWindowTitle(  "FileBrowser error" );
         box.setText( "Please select the file type correctly" );
         box.setIcon( QMessageBox::NoIcon );
-        box.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        box.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         box.exec();
         return;
 

@@ -128,6 +128,12 @@ NTSTATUS HwBpEngineSetBp(
         goto FAILED;
     }
 
+    /* close thread handle on success path (was previously only closed on FAILED) */
+    if ( Thread ) {
+        SysNtClose( Thread );
+        Thread = NULL;
+    }
+
     return Status;
 
 FAILED:
@@ -211,7 +217,7 @@ NTSTATUS HwBpEngineRemove(
     IN DWORD        Tid,
     IN PVOID        Address
 ) {
-    PHWBP_ENGINE HwBpEngine = NULL;
+    PHWBP_ENGINE HwBpEngine = Engine;
     PBP_LIST     BpEntry    = NULL;
     PBP_LIST     BpLast     = NULL;
 
@@ -322,6 +328,14 @@ LONG ExceptionHandler(
 ) {
     PBP_LIST BpEntry = NULL;
     BOOL     Found   = FALSE;
+
+    /* guard against NULL engine — can happen if the engine was destroyed
+     * but the VEH handler was not yet removed, or if an exception fires
+     * during the init/destroy window. Without this check, accessing
+     * Instance->HwBpEngine->Breakpoints would NULL-deref and crash. */
+    if ( ! Instance->HwBpEngine ) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
 
     if ( Exception->ExceptionRecord->ExceptionCode == STATUS_SINGLE_STEP )
     {

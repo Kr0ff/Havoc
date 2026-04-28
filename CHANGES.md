@@ -17,6 +17,551 @@ Description and rationale.
 
 ---
 
+## DEBUG-STRINGS-ONLY — 2026-04-28 — Production-Equivalent Debug Logging
+
+```
+Status         : Applied
+Files          :
+  teamserver/cmd/cmd.go                              new --debug-strings-only flag
+  teamserver/cmd/server/types.go                     DebugStringsOnly field on serverFlags
+  teamserver/cmd/server/dispatch.go                  propagate DebugStringsOnly to BuilderConfig
+  teamserver/pkg/common/builder/builder.go           BuilderConfig.DebugStringsOnly + DEBUG/DEBUG_NOSTDLIB defines + production CFlags
+  payloads/Demon/include/common/Macros.h             route PRINTF/PUTS/PRINT_HEX through LogToConsole when DEBUG_NOSTDLIB is set
+  payloads/Demon/src/core/Win32.c                    extend LogToConsole guard from `SHELLCODE && DEBUG` to `(SHELLCODE || DEBUG_NOSTDLIB) && DEBUG`
+```
+
+### Goal
+
+Provide a third build mode that produces **production-equivalent** Demon binaries
+with debug log output. The existing `--debug-dev` mode links libc (via
+`-nostdlib` removal) and routes PRINTF through `printf` — this destabilizes the
+demon by introducing CRT state, locks, and re-entrancy hazards (see
+`Debug-Build-Instability-Analysis.md`). The new `--debug-strings-only` mode
+keeps the production link line (`-nostdlib -mwindows -s`) and routes debug
+output through the existing `LogToConsole` helper which uses dynamically
+resolved `Instance->Win32.vsnprintf` and `WriteConsoleA` — no libc required.
+
+### Three build modes now exist
+
+| Flag | -DDEBUG | -nostdlib | -s strip | PRINTF target | Stability | Use case |
+|---|---|---|---|---|---|---|
+| _none_ | ✗ | ✓ | ✓ | no-op | stable | production / operations |
+| `--debug-strings-only` | ✓ | ✓ | ✓ | `LogToConsole` | stable | debugging without sacrificing stability |
+| `--debug-dev` | ✓ | ✗ | ✗ | libc `printf` | UNSTABLE | rapid developer iteration only |
+
+### Behavior of `--debug-strings-only`
+
+- Adds `-DDEBUG` and a new `-DDEBUG_NOSTDLIB` define
+- Keeps the **production** CFlags: `-nostdlib -mwindows -s -Wl,-s`
+- `Macros.h` selects the `LogToConsole` branch for `PRINTF` / `PUTS` / `PRINT_HEX` when `DEBUG_NOSTDLIB` is defined (the existing `SHELLCODE` branch is reused — extended via `defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)`)
+- `LogToConsole` (in `Win32.c`) calls `Instance->Win32.AttachConsole(ATTACH_PARENT_PROCESS)` once, caches the stdout handle in `Instance->hConsoleOutput`, then formats with `Instance->Win32.vsnprintf` (resolved from msvcrt by the existing runtime resolver) and writes via `WriteConsoleA`. No libc, no globals, no locks.
+- The `[DEBUG::` post-build audit (DEBUG-AUDIT) is skipped in this mode (debug strings are intentional).
+
+### Compatibility
+
+- All existing `--debug-dev` behavior is preserved unchanged
+- All existing `--send-logs` / `SEND_LOGS` and `SHELLCODE` branches are preserved
+- The `LogToConsole` function definition guard was widened from `defined(SHELLCODE) && defined(DEBUG)` to `(defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)` — no other code change required since all dependencies (`AttachConsole`, `WriteConsoleA`, `GetStdHandle`, `vsnprintf`) are already resolved unconditionally during `DemonInit`
+
+### Verification
+
+- `go build ./...` clean
+- `go test ./pkg/common/builder/ ./pkg/agent/ ./pkg/common/crypt/` pass
+
+### How to use
+
+For investigating sleep-obf or proxy-load issues with full visibility but production-equivalent stability:
+```
+./havoc server --profile profiles/havoc.yaotl --debug-strings-only
+```
+
+Then build any payload from the client UI as normal. Run the resulting EXE from a `cmd.exe` window to see the `[DEBUG::Function::Line]` output via `WriteConsoleA`. The demon's runtime behavior is identical to a production build.
+
+For rapid developer iteration where stability isn't critical:
+```
+./havoc server --profile profiles/havoc.yaotl --debug-dev
+```
+
+For production:
+```
+./havoc server --profile profiles/havoc.yaotl
+```
+
+---
+
+## DEBUG-AUDIT — 2026-04-26 — Production Build Debug Strip Verification
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/common/Macros.h            do/while(0) wrappers + invariant comment
+  teamserver/pkg/common/builder/builder.go          post-build [DEBUG:: marker scan
+```
+
+### Goal
+
+Guarantee that production-built Demon binaries (those built without `--debug-dev`) contain **zero** debug-output calls and **zero** `[DEBUG::` format-string literals. Previously the macros relied on `{ ; }` and `{}` no-ops, which are correct but easy to break by accident.
+
+### Hardening
+
+**1. Stricter macro form (`Macros.h`):**
+
+All debug macros (`PRINTF`, `PRINTF_DONT_SEND`, `PUTS`, `PUTS_DONT_SEND`, `PRINT_HEX`) were converted from `{ ; }` / `{}` blocks to `do { ... } while ( 0 )` form for both DEBUG and non-DEBUG branches. This:
+
+- Makes each macro behave as a single statement requiring a trailing semicolon
+- Prevents dangling-statement bugs in `if (x) PUTS("y");` patterns
+- Compiles to nothing under `-Os` when DEBUG is undefined (verified with GCC)
+
+A multi-line invariant comment was added at the top of the macro block documenting the contract: when DEBUG is undefined, every macro MUST expand to a no-op, and the post-build audit enforces this.
+
+A previously-missing `SVC_EXE` branch was also added to `PUTS` / `PUTS_DONT_SEND` for symmetry with `PRINTF`.
+
+**2. Post-build audit (`builder.go`):**
+
+After successful compilation, the builder now scans the produced binary for the `[DEBUG::` byte sequence. The scan only runs when `--debug-dev` is OFF:
+
+- If the marker is found → the build **fails** with a contextual error showing the offset and surrounding bytes
+- If absent → debug message logged confirming the audit passed
+
+This catches three failure modes that the macro design alone cannot prevent:
+
+1. A direct `printf` / `DbgPrint` / `DemonPrintf` / `LogToConsole` call added without going through the macros
+2. A new debug macro added without `#ifdef DEBUG` guarding
+3. A static string literal containing `[DEBUG::` smuggled into the source
+
+Implementation: `Builder.verifyNoDebugStringsInBinary(path)` reads the output file with `os.ReadFile` and uses `bytes.Index` to find the marker. Triggered after `b.CompileCmd(...)` returns successfully and only when `!b.compilerOptions.Config.DebugDev`.
+
+### Verification
+
+- `go test ./pkg/common/builder/ ./pkg/agent/ ./pkg/common/crypt/` → all pass
+- Production build (no `--debug-dev`): audit runs, expected to pass with no `[DEBUG::` markers
+- Debug build (`--debug-dev`): audit is skipped (markers expected to be present)
+
+To intentionally test the audit: introduce a stray `printf("[DEBUG::test]\n")` in any demon source file and rebuild without `--debug-dev` — the build should now fail with the exact offset of the leaked marker.
+
+---
+
+## DEBUG-INSTRUMENT — 2026-04-26 — Comprehensive Demon Debug Instrumentation
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/Command.c        sleep cycle banner around CommandDispatcher loop
+  payloads/Demon/src/core/Obf.c            SleepObf entry/branch/exit logging
+  payloads/Demon/src/core/ObfFoliage.c     full instrumentation (was 0% covered)
+  payloads/Demon/src/core/ObfTimer.c       per-step ROP/queue/cleanup logging
+  payloads/Demon/src/core/Win32.c          LdrModuleLoad entry + per-retry PEB poll
+  payloads/Demon/src/core/Package.c        PackageTransmitNow/All entry+exit, IV hex, compress, send result
+  payloads/Demon/src/core/TransportHttp.c  HTTP request/response status + body length
+  payloads/Demon/src/Demon.c               DemonInit START/COMPLETE markers
+```
+
+### Goal
+
+The agent eventually crashes (ACCESS_VIOLATION) but the existing log output is too sparse to localise the fault. Add comprehensive `PRINTF` / `PUTS` instrumentation throughout the demon so a single console log can be read end-to-end and reconstruct exactly what the agent was doing up to the crash. Each sleep cycle is wrapped in a clearly visible banner with cycle number, sleep technique, jitter, proxy-load setting, AMSI/ETW patch mode, and stack-spoof state.
+
+### Zero Cost in Release Builds
+
+All new logging uses the existing `PRINTF` / `PUTS` macros defined in `payloads/Demon/include/common/Macros.h`. When `DEBUG` is not defined, both macros expand to `{ ; }` and modern GCC eliminates them at all optimization levels — zero binary growth and zero runtime overhead in production builds.
+
+The `--debug-dev` flag on the teamserver (`teamserver/cmd/cmd.go:36`) controls the `-DDEBUG` compiler define via `teamserver/pkg/common/builder/builder.go:303-304`. No changes to either side were needed; the propagation already worked correctly.
+
+### Cycle Banner Format
+
+Each iteration of the `CommandDispatcher` loop now emits:
+
+```
+============================================================
+===== SLEEP CYCLE 7 START | Sleep=10000ms Jitter=15% Technique=1 ProxyLoad=0 AmsiEtw=1 StackSpoof=0 =====
+============================================================
+SleepObf: ENTRY TimeOut=11340 ms Technique=1 Threads=0
+SleepObf: dispatch -> EKKO
+TimerObf: ENTRY TimeOut=11340 Method=1 (EKKO) JmpBypass=0 StackSpoof=0 ImageBase=... ImageSize=...
+TimerObf: RtlCreateTimerQueue NtStatus=0 Queue=...
+TimerObf: Rops to be executed: 13 (TimeOut=11340 Delay base=...)
+TimerObf: all ROPs queued, signaling EvntStart and waiting for EvntDelay
+TimerObf: sleep cycle completed, EvntDelay signaled
+TimerObf: cleanup begin
+TimerObf: EXIT Success=1
+SleepObf: EXIT
+PackageTransmitAll: ENTRY
+PackageTransmitAll: encrypt PayloadLen=... Padding=... Compressed=0
+PackageTransmitAll: TransportSend AuthWireLength=... (Wire=... + HMAC=32)
+TransportSend: WinHttpSendRequest body=... bytes (encoded)
+TransportSend: HTTP status=200
+TransportSend: response body=... bytes (base64)
+TransportSend: response decoded=... bytes
+PackageTransmitAll: TransportSend OK Response=... ResponseSize=...
+PackageTransmitAll: EXIT Success=1
+===== SLEEP CYCLE 7 END =====
+```
+
+### To Revert
+
+The instrumentation is purely additive (no control-flow changes). To revert, remove the added `PRINTF` / `PUTS` calls in the listed files. The macro infrastructure and the `--debug-dev` flag remain unchanged.
+
+---
+
+## SEQ-EXEC-REVERT — 2026-04-26 — Revert Sequential Task Execution
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/agent/types.go        removed InFlightRequestIDs, InFlightSince fields
+  teamserver/pkg/agent/agent.go        reverted GetQueuedJobs to drain all jobs, simplified RequestCompleted
+  teamserver/pkg/agent/demons.go       removed InFlight references from task list/clear/cancel
+  teamserver/pkg/handlers/handlers.go  updated comment
+  teamserver/pkg/db/agents.go          removed InFlightRequestIDs init from DB agent restore
+```
+
+### Context
+
+SEQ-EXEC (applied 2026-04-17) changed the teamserver from draining all queued tasks
+per check-in to a one-task-per-check-in model with in-flight tracking. This was
+intended to prevent overlapping execution, but it significantly slowed task
+throughput — every task took at least one full sleep cycle to dispatch.
+
+### What Was Reverted
+
+**`GetQueuedJobs()`** — Reverted to drain ALL queued jobs at once (original behavior).
+Removed: InFlight blocking, 10-minute stale timeout, MEM_FILE grouping logic,
+single-job dequeue.
+
+**`InFlightRequestIDs` / `InFlightSince`** — Removed from `Agent` struct in `types.go`.
+Removed initialization in `RegisterInfoToInstance`, `ParseDemonRegisterRequest`,
+and `agents.go` DB restore. Removed cleanup in `AgentInfoToJSON`.
+
+**`RequestCompleted()`** — Simplified: still removes from `Tasks` (needed for
+`IsKnownRequestID` validation), but no longer deletes from InFlightRequestIDs.
+
+**Task list/clear/cancel** — Removed in-flight count display from `task list`,
+removed InFlightRequestIDs clearing from `task clear` and `task cancel all`,
+removed in-flight detection from `task cancel <id>`.
+
+### What Was Kept
+
+- **JobMtx** (ISSUE-1) — Mutex on JobQueue/Tasks stays (data race fix)
+- **`RequestCompleted()` calls** throughout `demons.go` — still needed for Tasks cleanup
+- **`IsKnownRequestID()`** — still validates incoming responses
+- **`AgentConsoleWithTaskID()`** (TASK-UX) — still injects TaskID into console output
+- **`task cancel`** command — still works for queued (not yet dispatched) tasks
+
+---
+
+## SLEEPOBF-REVERT — 2026-04-24 — Revert All Sleep Obfuscation to Original Implementation
+
+```
+Status         : Applied
+Version        : 0.8.10 "Silent Storm" (teamserver) / 1.3 "Silent Anchor" (client)
+Files          :
+  payloads/Demon/src/core/ObfTimer.c           rewritten — original TimerObf with NtContinue ROP chain
+  payloads/Demon/src/core/ObfFoliage.c         rewritten — original FoliageObf with LocalAlloc/SystemFunction032
+  payloads/Demon/src/core/Obf.c                rewritten �� original SleepObf dispatcher with #ifdef guards
+  payloads/Demon/include/core/SleepObf.h       reverted — original OBF_JMP macro + conditional declarations
+```
+
+### Context
+
+After extensive debugging over multiple sessions (BUGFIX-005, BUGFIX-006, HVC-009
+through HVC-012, FIX-10 through FIX-15), the experimental sleep obfuscation fixes
+introduced more instability than they solved. The Demon agent crashed after ~10-15
+sleep cycles across all proxy loading methods. Root causes investigated included:
+NtContinue corruption, stack spoofing context mixing, timer queue lifecycle,
+RtlQueueWorkItem use-after-free race, sizeof(VOID) vs sizeof(PVOID), and
+RtlDeleteTimerQueueEx blocking cleanup.
+
+The operator decided to revert all sleep obfuscation code to the **exact original
+implementation** while preserving two structural improvements:
+1. File separation (ObfTimer.c, ObfFoliage.c, Obf.c) with compile-time guards
+2. Client UI option selectability (disable invalid combinations)
+
+### What Was Reverted
+
+**ObfTimer.c** — Replaced the NtCreateThreadEx stub-based rewrite (introduced to
+fix the use-after-free race) with the original NtContinue-based ROP chain
+implementation. Restored: timer queue (Ekko) / registered wait (Zilean), full
+13-entry ROP chain with `OBF_JMP` macro, stack spoofing via NtGetContextThread /
+NtSetContextThread / RtlCopyMappedMemory, `SysNtSignalAndWaitForSingleObject` for
+sleep synchronization, `RtlDeleteTimerQueue` (non-blocking) cleanup, and all
+original event handles (EvntStart, EvntTimer, EvntDelay, EvntWait).
+
+**ObfFoliage.c** �� Replaced the RC4-stub/NtWaitForSingleObject rewrite with the
+original FoliageObf implementation. Restored: `LocalAlloc` for CONTEXT structs,
+`SystemFunction032` for encryption/decryption, `WaitForSingleObjectEx` for the
+sleep call, 10-entry APC ROP chain, `SysNtTerminateThread` for APC thread cleanup,
+and original fiber-based execution flow.
+
+**Obf.c** — Reverted the SleepObf dispatcher to original behavior. Removed FIX-12
+comments and `goto DEFAULT` fallback on `ConvertThreadToFiberEx` failure (back to
+`break`). Kept `#ifdef SLEEPOBF_USE_FOLIAGE` / `#ifdef SLEEPOBF_USE_TIMER` guards
+around case blocks (needed because functions are in separate files). Original
+`SleepTime` function was already correct — unchanged.
+
+**SleepObf.h** — Reverted `OBF_JMP` macro to the **original form**: uses `} if (`
+instead of `} else if (`, and JMPRAX branch only sets `Rax` (not both `Rax` and
+`Rip`). This means JMPRAX is functionally equivalent to NONE (same as the original
+codebase). Added conditional `#ifdef` declarations for `FoliageObf` and `TimerObf`
+since the functions are in separate files.
+
+### Changes That Were Superseded
+
+This revert supersedes the following entries (their code changes are no longer
+present in the sleep obfuscation files):
+
+| Entry | Description | Status |
+|-------|-------------|--------|
+| BUGFIX-005 BUG-A | OBF_JMP else-if fix | Reverted (original `if`/`if`/`else` restored) |
+| BUGFIX-006 | FoliageObf RopExitThd copy-paste fix | Reverted (original code restored) |
+| HVC-009 BUG-TIMER-1 | sizeof(VOID) → sizeof(PVOID) | Reverted (original sizeof(VOID) restored) |
+| HVC-010 | OBF_JMP JMPRAX Rip override | Reverted (original macro restored) |
+| HVC-011 | Non-blocking timer queue cleanup | N/A (original was already non-blocking) |
+| HVC-012 | Revert sizeof(PVOID) Rip copy | N/A (original sizeof(VOID) restored) |
+| FIX-10 | Foliage Rsp alignment | Reverted (original code restored) |
+| FIX-11 | Foliage NtWaitForSingleObject | Reverted (original WaitForSingleObjectEx restored) |
+| FIX-12 | Foliage goto DEFAULT fallback | Reverted (original break restored) |
+| FIX-13 | Foliage deadlock-safe Leave | Reverted (original cleanup restored) |
+| FIX-14 | Demon.h #pragma pack restore | Reverted (original code restored) |
+| FIX-15 | Foliage RC4 stub replacement | Reverted (original SystemFunction032 restored) |
+
+### What Was NOT Reverted (Kept)
+
+- **File separation** — ObfTimer.c, ObfFoliage.c remain as separate files
+  (original was monolithic Obf.c). Builder adds `SLEEPOBF_USE_TIMER` or
+  `SLEEPOBF_USE_FOLIAGE` compile-time defines based on selected technique.
+- **Client UI** — Sleep option selectability (JmpGadget and StackDuplication
+  disabled when Foliage or WaitForSingleObjectEx is selected).
+- **All traffic/protocol changes** — HVC-001 through HVC-008 are unaffected.
+- **All teamserver fixes** — ISSUE-1, ISSUE-2, ISSUE-5, SEQ-EXEC, TASK-UX,
+  BUGFIX-007 are unaffected.
+- **HVC-009 HWBP fixes** — BUG-HWBP-1/2/3 in HwBpEngine.c are unaffected
+  (separate from sleep obfuscation code).
+- **Mingw-w64 v15 compatibility** — GCC 14+ compilation fixes are unaffected.
+
+### To Re-apply Experimental Fixes
+
+The original experimental implementations are documented in FIX-10 through FIX-15,
+HVC-009 through HVC-012, and BUGFIX-005/006 entries in this file. The original
+files are preserved in `payloads-originalfiles/Demon/` for reference.
+
+---
+
+## MINGW-COMPAT — 2026-04-08 — Mingw-w64 v15 (GCC 14+) Compilation Compatibility
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/core/MiniStd.h        MemSet/MemZero macros: (unsigned char*) cast
+  payloads/Demon/include/core/MiniStd.h        StringCompareIW/EndsWithIW declarations added
+  payloads/Demon/include/core/Token.h          GetTokenInfo/IsNotCurrentUser declarations added
+  payloads/Demon/include/core/Syscalls.h       SysInvoke variadic declaration fix
+  payloads/Demon/src/core/Command.c            NULL→0 for integer types, #include Runtime.h, pointer casts
+  payloads/Demon/src/core/Syscalls.c           NULL→0 for integer types
+  payloads/Demon/src/core/Win32.c              NULL→0 for integer types
+  payloads/Demon/src/core/Socket.c             NULL��0 for integer types, (u_long*) cast
+  payloads/Demon/src/core/Package.c            (PBYTE)/(PCHAR) casts for PackageAddBytes/PackageAddString
+  payloads/Demon/src/core/MiniStd.c            WCHAR Deli[2] fix for StringConcatW
+  payloads/Demon/src/core/ObjectApi.c          (PBYTE) casts
+  payloads/Demon/src/inject/InjectUtil.c       (LPSTARTUPINFOW) cast, (PLDR_DATA_TABLE_ENTRY) casts
+  payloads/Demon/test/test_mingw_compat.c      12 tests (new file)
+  payloads/Demon/CMakeLists.txt                DemonMingwTest target
+```
+
+### Problem
+
+GCC 14+ (shipped with mingw-w64 v14/v15) promoted several warnings to hard errors:
+- `-Wincompatible-pointer-types` → error
+- `-Wint-conversion` → error
+- `-Wimplicit-function-declaration` → error
+
+The Demon code previously compiled only with mingw-w64 v11. The existing `-w` flag
+in CMakeLists.txt cannot suppress these new errors because they are now treated as
+errors by default.
+
+### Fix Categories
+
+1. **MemSet/MemZero macros (~60% of errors):** `__stosb` in mingw-w64 v14+ requires
+   `unsigned char*` first argument. Added `(unsigned char*)` cast to both macros.
+
+2. **Integer from pointer (`= NULL` for integer types):** Changed `= NULL` to `= 0`
+   for `UINT32`, `SIZE_T`, `WORD` variables across `Command.c`, `Syscalls.c`,
+   `Win32.c`, `Socket.c`.
+
+3. **Implicit function declarations:** Added missing forward declarations for
+   `StringCompareIW`, `EndsWithIW` (MiniStd.h), `GetTokenInfo`, `IsNotCurrentUser`
+   (Token.h), and added `#include <core/Runtime.h>` for `RtMscoree` in `Command.c`.
+
+4. **SysInvoke variadic declaration:** GCC 14+ treats `SysInvoke(_Inout_)` as
+   `SysInvoke(void)` since `_Inout_` expands to nothing. Changed to:
+   `NTSTATUS SysInvoke(ULONG_PTR Arg1, ...)`.
+
+5. **Incompatible pointer type casts:** Added explicit casts at ~15 call sites:
+   `(PBYTE)` for PackageAddBytes, `(PCHAR)` for PackageAddString, `(UINT32)` for
+   ParserGetBytes locals, `(LPSTARTUPINFOW)` for CreateProcessW, `(u_long*)` for
+   ioctlsocket, `(PRTL_OSVERSIONINFOW)` for RtlGetVersion,
+   `(PLDR_DATA_TABLE_ENTRY)` for loader data entries, `(UINT_PTR)` for Rva2Offset.
+
+### To Revert
+
+Revert individual cast additions, macro changes, and declaration additions.
+Reference `Demon-mingw-updates.md` at repo root for detailed per-file changes.
+
+---
+
+## UI-SLEEPOBF — 2026-04-08 — Client UI: Disable Invalid Sleep Obfuscation Combinations
+
+```
+Status         : Applied
+Files          :
+  client/src/UserInterface/Dialogs/Payload.cc  lines 625-639  (QComboBox signal/slot)
+  teamserver/pkg/common/builder/builder.go     lines 778-784  (compile-time defines)
+```
+
+### Problem
+
+The payload configuration dialog allowed operators to select invalid combinations
+of sleep obfuscation options. For example, selecting Foliage with a `jmp rax`
+gadget or Stack Duplication enabled would produce a payload that compiled but had
+undefined behavior — these features only apply to Timer-based techniques
+(Ekko/Zilean) which use the ROP chain with `OBF_JMP`.
+
+### What Was Changed
+
+**Client — `Payload.cc`**
+
+Added a `QComboBox::currentTextChanged` signal handler on the `SleepObfTechnique`
+combo box that:
+1. Checks if the selected technique is timer-based (`Ekko` or `Zilean`)
+2. Disables the `SleepObfJmpBypass` combo box and resets it to index 0 ("None")
+   when a non-timer technique is selected
+3. Disables the `ConfigStackSpoof` checkbox and unchecks it when a non-timer
+   technique is selected
+4. Emits the initial state on dialog creation to set the correct disabled state
+
+**Teamserver — `builder.go`**
+
+Added compile-time technique selection after the runtime config switch:
+```go
+switch val {
+case "Foliage":
+    b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_FOLIAGE")
+case "Ekko", "Zilean":
+    b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_TIMER")
+}
+```
+
+This ensures only the relevant sleep obfuscation code is compiled into the Demon
+binary, reducing binary size and attack surface. `ObfFoliage.c` is only compiled
+when `SLEEPOBF_USE_FOLIAGE` is defined; `ObfTimer.c` is only compiled when
+`SLEEPOBF_USE_TIMER` is defined. For `WaitForSingleObjectEx` (no obfuscation),
+neither file's code is included.
+
+### To Revert
+
+1. Remove the `connect(SleepObfTechnique, ...)` block and the `emit` line from
+   `Payload.cc`.
+2. Remove the second `switch val` block (compile-time defines) from `builder.go`.
+
+---
+
+## SLEEPOBF-SPLIT — 2026-04-08 — Split Sleep Obfuscation Into Separate Files
+
+```
+Status         : Applied (structural change, kept during SLEEPOBF-REVERT)
+Files          :
+  payloads/Demon/src/core/ObfTimer.c           new file — TimerObf (Ekko/Zilean)
+  payloads/Demon/src/core/ObfFoliage.c         new file — FoliageObf
+  payloads/Demon/src/core/Obf.c                reduced — SleepTime + SleepObf dispatcher only
+  payloads/Demon/include/core/SleepObf.h       updated — conditional FoliageObf/TimerObf declarations
+```
+
+### Problem
+
+The original `Obf.c` was a 779-line monolithic file containing FoliageObf,
+TimerObf, SleepTime, and the SleepObf dispatcher. This made it difficult to work
+on individual techniques in isolation, and the entire file was always compiled
+regardless of which technique was selected.
+
+### What Was Changed
+
+**File separation:**
+- `ObfFoliage.c` — Contains `FoliageObf`, wrapped in `#ifdef SLEEPOBF_USE_FOLIAGE`
+  and `#if _WIN64`. Only compiled when Foliage is the selected technique.
+- `ObfTimer.c` — Contains `TimerObf`, wrapped in `#ifdef SLEEPOBF_USE_TIMER` and
+  `#if _WIN64`. Only compiled when Ekko or Zilean is selected.
+- `Obf.c` — Contains `SleepTime` (always needed) and the `SleepObf` dispatcher.
+  The dispatcher uses `#ifdef` guards around the Foliage and Timer case blocks.
+
+**Header updates:**
+- `SleepObf.h` — Added conditional declarations:
+  ```c
+  #ifdef SLEEPOBF_USE_FOLIAGE
+  VOID FoliageObf( IN PSLEEP_PARAM Param );
+  #endif
+  #ifdef SLEEPOBF_USE_TIMER
+  BOOL TimerObf( _In_ ULONG TimeOut, _In_ ULONG Method );
+  #endif
+  ```
+
+**Builder integration:**
+The builder (`builder.go`) already compiles all `.c` files in `src/core/` (lines
+340-369), so `ObfTimer.c` and `ObfFoliage.c` are automatically picked up. The
+`#ifdef` guards ensure their code is only compiled when the corresponding define
+is present.
+
+### To Revert
+
+Merge ObfTimer.c and ObfFoliage.c back into Obf.c, remove the `#ifdef` guards
+from the dispatcher, and remove the conditional declarations from SleepObf.h.
+The original monolithic file is preserved at `payloads-originalfiles/Demon/src/core/Obf.c`.
+
+---
+
+## HVC-012 — Fix proxy loading crash (revert sizeof(PVOID) Rip copy)
+
+**Files changed:**
+- `payloads/Demon/src/core/ObfTimer.c` — reverted `sizeof(PVOID)` to `sizeof(VOID)` in ROP step 4 (Rip copy), added diagnostic PRINTFs in timer creation loop
+- `teamserver/cmd/cmd.go` — version bump 0.8.9 → 0.8.10
+
+**Root cause:**
+HVC-009 (BUG-TIMER-1) changed the Rip copy in the stack spoofing ROP chain from `sizeof(VOID)` (1 byte) to `sizeof(PVOID)` (8 bytes). With `sizeof(PVOID)`, the full main thread Rip is copied into `TimerCtx.Rip`, then `NtSetContextThread` applies this mixed context (main thread's Rip + timer thread's Rsp/registers) to the sleeping main thread. This mixed context corrupts the thread pool's dispatch state over ~10 cycles, especially when proxy loading has primed the pool with additional timer/wait threads.
+
+With the original `sizeof(VOID)` (1 byte), the copy is effectively a no-op — `TimerCtx.Rip` stays as the timer thread's Rip, creating a fully self-consistent spoofed context that the kernel handles correctly.
+
+**Supersedes:** HVC-009 BUG-TIMER-1 (for the Rip copy field only — other HVC-009 fixes remain)
+
+**Note:** HVC-011 (non-blocking cleanup revert) was confirmed defensively correct but was NOT the root cause. The crash pattern was identical before and after HVC-011.
+
+**Revert:**
+If reverting sizeof doesn't fix the crash, the next step is to remove the Rip copy ROP step entirely (reduce chain from 13 to 12 entries).
+
+---
+
+## HVC-011 — Fix proxy loading crash (non-blocking timer queue cleanup)
+
+**Files changed:**
+- `payloads/Demon/src/core/ObfTimer.c` — reverted blocking `RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE)` to non-blocking `RtlDeleteTimerQueue(Queue)`
+- `payloads/Demon/src/core/Win32.c` — reverted blocking cleanup in `LdrModuleLoad`, restored `WT_EXECUTEONLYONCE` in `RtlRegisterWait`, removed explicit `RtlDeregisterWaitEx`
+- `teamserver/cmd/cmd.go` — version bump 0.8.8 → 0.8.9
+
+**Root cause:**
+Blocking `RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE)` waits for all timer callbacks to "complete" per the thread pool's internal accounting. TimerObf uses `NtContinue` as timer callbacks, which replaces the timer thread's entire CONTEXT rather than returning normally. The thread pool's callback-completion tracking cannot handle this correctly, and over ~10 sleep cycles (plus 9 proxy loading queue lifecycles) the accumulated corruption causes a hard crash.
+
+The original code used non-blocking `RtlDeleteTimerQueue` which does not interact with callback completion tracking and never crashed.
+
+**What was reverted:**
+- `RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE)` → `RtlDeleteTimerQueue(Queue)` in both `ObfTimer.c` and `LdrModuleLoad`
+- Removed explicit `RtlDeregisterWaitEx(Wait, INVALID_HANDLE_VALUE)` from `LdrModuleLoad`
+- Restored `WT_EXECUTEONLYONCE` flag in `RtlRegisterWait` proxy loading (auto-deregistration, no explicit deregister needed)
+- Restored original cleanup order: Event close → Queue delete
+
+**What was kept:**
+- BUG-LDR-1 handle separation (`Wait` vs `TimerHdl`) — this is correct and prevents type confusion
+
+**Revert:**
+If non-blocking cleanup causes use-after-free on error paths, revert `RtlDeleteTimerQueue` back to `RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE)` in both files.
+
+---
+
 ## HVC-001 — 2026-03-26 — Remove X-Havoc Response Header Leak
 
 ```
@@ -1137,8 +1682,481 @@ In `Obf.c`, change `RopExitThd->Rsp` back to `RopBegin->Rsp` in the
 
 ---
 
+## HVC-009 — 2026-04-12 — Fix Demon Agent Termination (HWBP/Sleep Obfuscation Bugs)
+
+```
+Suggestion ref : (none — bug fixes for latent issues unmasked by BUGFIX-001–006)
+Status         : Applied
+Files:
+  payloads/Demon/src/core/HwBpEngine.c    lines 131, 214, 326
+  payloads/Demon/src/core/ObfTimer.c       lines 198, 285
+  teamserver/cmd/cmd.go                    line 14
+```
+
+After the profile settings fixes (BUGFIX-001–006) correctly propagated profile
+values like HWBP, SleepJmpGadget, and StackDuplication to the Demon agent,
+previously-dormant code paths became exercised. Five bugs were found by three
+specialized analysis agents (low-level dev, QA, tester) running in parallel:
+
+1. **BUG-HWBP-1 (HIGH):** Thread handle leak in `HwBpEngineSetBp` — handle
+   opened via `SysNtOpenThread` at line 81, never closed on success path
+   (only on FAILED label). Each breakpoint operation leaked one handle.
+   Fix: added `SysNtClose(Thread)` before success return.
+
+2. **BUG-HWBP-2 (MEDIUM):** `HwBpEngineRemove` ignores `Engine` parameter —
+   local initialized to NULL at line 214, so `if (!HwBpEngine)` at line 222
+   was always true. Fix: initialized local from parameter (`= Engine`).
+
+3. **BUG-HWBP-3 (HIGH):** `ExceptionHandler` NULL dereference — accesses
+   `Instance->HwBpEngine->Breakpoints` without NULL check. Any
+   STATUS_SINGLE_STEP exception when HwBpEngine is NULL crashes the agent.
+   Fix: added NULL guard returning EXCEPTION_CONTINUE_SEARCH.
+
+4. **BUG-TIMER-1 (MEDIUM):** `sizeof(VOID)` in stack spoofing ROP copies 1
+   byte instead of 8 — GCC `sizeof(void)` = 1. Fix: changed to
+   `sizeof(PVOID)`.
+
+5. **BUG-TIMER-2 (LOW):** `RtlDeleteTimerQueueEx` blocking cleanup — documented
+   as known limitation (blocking is correct for ROP chain safety).
+
+Four false positives were identified and ruled out (documented in
+DemonTerminationFixes.md). Config packing/parsing alignment between builder.go
+and Demon.c was verified correct.
+
+Version bumped from 0.8 to 0.8.1.
+
+**To revert:** Restore original lines in HwBpEngine.c (remove handle close,
+revert local init to NULL, remove NULL guard) and ObfTimer.c (revert to
+sizeof(VOID)). Revert version in cmd.go.
+
+---
+
+## FIX-10 — 2026-04-12 — Foliage Rsp Alignment Fix
+
+```
+Suggestion ref : SleepObf-Analysis.md §8 BUG-FOL-4
+Status         : Applied
+Files:
+  payloads/Demon/src/core/ObfFoliage.c    line 149 (after NtGetContextThread)
+```
+
+Foliage sleep obfuscation crashed the Demon agent within the first few sleep
+cycles on Windows builds where `NtGetContextThread` on a freshly-created
+suspended thread returns `Rsp % 16 == 0` instead of `% 16 == 8`.
+
+The x64 ABI requires `Rsp % 16 == 8` at function entry (after the `call`
+instruction pushes the return address). When the initial Rsp was 16-aligned,
+the entire ROP chain inherited the wrong alignment. Target functions that save
+XMM registers via `movaps [rsp+N]` hit a `#GP` fault on the misaligned access,
+crashing the APC thread and leaving the Demon image encrypted.
+
+The Ekko/Zilean code already had this fix (`ObfTimer.c:164`: `Rop[i].Rsp -=
+sizeof(PVOID)`). Foliage was missing the equivalent adjustment.
+
+**Fix:** After `NtGetContextThread(hThread, RopInit)`, conditionally normalize:
+```c
+if ( ( RopInit->Rsp & 0xF ) == 0 ) {
+    RopInit->Rsp -= sizeof( PVOID );
+}
+```
+Applied before the `MemCopy` to all 10 ROP entries, so all inherit correct
+alignment. The subsequent `Rsp -= 0x1000 * N` preserves the invariant.
+
+Safe on ALL Windows builds — only adjusts when `Rsp % 16 == 0`.
+
+**To revert:** Remove the `if ( ( RopInit->Rsp & 0xF ) == 0 )` block in
+`ObfFoliage.c`.
+
+---
+
+### FIX-11 — Foliage: WaitForSingleObjectEx → NtWaitForSingleObject (2026-04-12)
+
+**Severity:** CRITICAL — primary crash vector  
+**File:** `payloads/Demon/src/core/ObfFoliage.c`  
+**Version:** 0.8.3
+
+The Foliage ROP chain's sleep entry (step 6 of 10 APCs) called
+`WaitForSingleObjectEx` — a Win32 API from kernelbase.dll. The APC thread
+executing this chain was created with `NtCreateThreadEx` + `NtTestAlert` as
+start address + `CREATE_SUSPENDED`, meaning it never went through
+`BaseThreadInitThunk` / `RtlUserThreadStart`. Its TEB Win32 subsystem state
+(activation context, FLS callbacks, loader lock) was uninitialised. Calling any
+Win32 API wrapper on this thread caused access violations from those fields.
+
+**Fix:** Replace `WaitForSingleObjectEx(hDupObj, TimeOut, FALSE)` with
+`NtWaitForSingleObject(hDupObj, FALSE, &SleepTimeout)` — a direct NT syscall
+that is safe on any thread. Added `LARGE_INTEGER SleepTimeout` on the slave
+fiber stack (outside the encrypted image region). Timeout converted from
+milliseconds to 100ns units: `QuadPart = -(TimeOut * 10000)`.
+
+Also updated `RopSpoof->Rip` to `NtWaitForSingleObject` for consistent
+call-stack spoofing.
+
+**To revert:** Change `NtWaitForSingleObject` back to `WaitForSingleObjectEx`
+and remove the `SleepTimeout` variable.
+
+---
+
+### FIX-12 — Foliage: fallback to DEFAULT sleep on fiber failure (2026-04-12)
+
+**Severity:** HIGH — agent enters tight loop without sleeping  
+**File:** `payloads/Demon/src/core/Obf.c`  
+**Version:** 0.8.3
+
+When `ConvertThreadToFiberEx` returned NULL (e.g. thread already a fiber from
+a previous failed cycle, or API not available), the Foliage case simply did
+`break` — NO sleep occurred. The agent looped back immediately, burning 100%
+CPU and flooding the teamserver with check-ins.
+
+**Fix:** Added `goto DEFAULT` on the failure path so the agent falls back to
+the unobfuscated `WaitForSingleObjectEx(NtCurrentProcess(), TimeOut, FALSE)`
+sleep. The agent survives at the cost of no sleep obfuscation.
+
+**To revert:** Change `goto DEFAULT` back to `break` (not recommended).
+
+---
+
+### FIX-13 — Foliage: deadlock-safe Leave cleanup (2026-04-12)
+
+**Severity:** HIGH — agent hangs permanently  
+**File:** `payloads/Demon/src/core/ObfFoliage.c`  
+**Version:** 0.8.3
+
+If any `SysNtQueueApcThread` call failed (goto Leave), the APC thread was
+still suspended (never resumed). The Leave cleanup then called
+`SysNtWaitForSingleObject(hThread, FALSE, NULL)` — an infinite wait on a
+suspended thread → permanent deadlock.
+
+**Fix:** Track resume state with `BOOL ThreadResumed`. In Leave, if the thread
+was never resumed, call `SysNtTerminateThread(hThread, STATUS_SUCCESS)` before
+the wait so it completes immediately.
+
+**To revert:** Remove the `ThreadResumed` tracking and the
+`SysNtTerminateThread` call.
+
+---
+
+### FIX-14 — Demon.h: restore #pragma pack after KAYN_ARGS (2026-04-12)
+
+**Severity:** MEDIUM — silent struct layout corruption  
+**File:** `payloads/Demon/include/Demon.h`  
+**Version:** 0.8.3
+
+`#pragma pack(1)` was set before the `KAYN_ARGS` typedef (needed for correct
+reflective loader layout) but never restored. Every struct defined after it —
+including `INSTANCE` — was compiled with 1-byte packing instead of the
+platform default (8 bytes on x64). This changed field offsets and total struct
+size, potentially causing misalignment penalties and subtle corruption if any
+code assumed natural alignment.
+
+**Fix:** Added `#pragma pack()` immediately after the `KAYN_ARGS` typedef to
+restore default packing before `INSTANCE`.
+
+**To revert:** Remove the `#pragma pack()` line. **Warning:** This will change
+the INSTANCE struct layout at compile time.
+
+---
+
+### FIX-15 — Foliage: replace SystemFunction032 with position-independent RC4 stub (2026-04-13)
+
+**Severity:** HIGH — intermittent crash on APC thread  
+**File:** `payloads/Demon/src/core/ObfFoliage.c`  
+**Version:** 0.8.4
+
+After FIX-11 eliminated the primary crash (`WaitForSingleObjectEx`), the agent
+survived much longer but still crashed intermittently. Root cause analysis
+identified `SystemFunction032` (advapi32 → cryptbase.dll) as the **only
+non-ntdll function** remaining in the Foliage ROP chain. On the APC thread
+(created via `NtCreateThreadEx` + `CREATE_SUSPENDED`, never went through
+`BaseThreadInitThunk`), advapi32/cryptbase functions may intermittently access
+uninitialised TEB Win32 subsystem state — the exact same class of bug as
+FIX-11.
+
+Ekko/Zilean don't have this problem because their timer queue thread is
+properly initialised by the OS.
+
+**Fix:** Replaced both `SystemFunction032` calls (encrypt + decrypt) with a
+manual position-independent RC4 implementation:
+
+1. `Rc4Cipher` is a `static __attribute__((noinline))` C function compiled
+   alongside FoliageObf. A sentinel `Rc4CipherEnd` marks the end of its code.
+2. Each Foliage cycle allocates a single `PAGE_EXECUTE_READ` page OUTSIDE
+   the Demon image
+3. Copies `Rc4CipherEnd - Rc4Cipher` bytes of compiled machine code there
+4. Uses the stub address in the ROP chain instead of SystemFunction032
+5. Arguments are raw `(Buffer, Size, Key, KeySize)` instead of `PUSTRING`
+6. The page is freed in Leave cleanup after the APC thread exits
+
+The RC4 stub uses only stack-local state (256-byte S-box on stack) and has
+zero dependencies on TEB, heap, or any initialisation state. The key is a
+random 16-byte array generated each cycle. RC4 is its own inverse — the same
+call encrypts and decrypts.
+
+The stub page is outside the Demon image and is NOT encrypted during sleep,
+so the APC thread can safely execute it while the image is encrypted.
+
+Also removed the `USTRING Key`, `USTRING Rc4` locals from FoliageObf (no
+longer needed).
+
+**To revert:** Restore `SystemFunction032` calls and `USTRING` locals from the
+pre-FIX-15 version.
+
+---
+
+## ISSUE-1 — 2026-04-17 — Mutex on Agent.JobQueue (Teamserver Data Race)
+
+**Problem:** `Agent.JobQueue` and `Agent.Tasks` (Go slices) were accessed from
+multiple goroutines (HTTP handler thread + WebSocket dispatch thread) without
+synchronization. This is a data race that can crash the teamserver or silently
+lose tasks.
+
+**Fix:** Added `sync.Mutex` (`JobMtx`) to the `Agent` struct. All read/write
+accesses to `JobQueue` and `Tasks` now acquire the mutex:
+- `AddJobToQueue`, `GetQueuedJobs`, `RequestCompleted`, `IsKnownRequestID`
+- `PivotAddJob` (child→parent lock ordering to prevent deadlock)
+- `TeamserverTaskPrepare` (task::list, task::clear)
+- `handlers.go` snapshot reads before NOJOB checks
+
+**Files changed:** `pkg/agent/types.go`, `pkg/agent/agent.go`,
+`pkg/agent/demons.go`, `pkg/handlers/handlers.go`
+
+---
+
+## ISSUE-2 — 2026-04-17 — Spinlock on Demon Instance->Packages (Linked List Race)
+
+**Problem:** `Instance->Packages` (singly-linked list) was accessed by the
+Demon's main thread and background job threads (BOF, .NET) without
+synchronization. Concurrent `PackageTransmit` + `PackageTransmitAll` could
+corrupt the linked list, causing crashes or lost responses.
+
+**Fix:** Added `volatile LONG PackagesLock` to the INSTANCE struct with
+interlocked spinlock macros (`PACKAGES_LOCK`/`PACKAGES_UNLOCK`) using GCC
+`__sync_lock_test_and_set`/`__sync_lock_release` built-ins + `pause`.
+
+Split `PackageDestroy` into `PackageDestroyInner` (no lock, called from locked
+context in `PackageTransmitAll`) and `PackageDestroy` (acquires lock for list
+traversal). All linked-list operations now protected.
+
+**Files changed:** `payloads/Demon/include/Demon.h`,
+`payloads/Demon/include/core/Package.h`, `payloads/Demon/src/core/Package.c`
+
+---
+
+## ISSUE-5 — 2026-04-17 — SMB Packet Fragmentation (Oversized Package Fix)
+
+**Problem:** When a Demon response exceeded `PIPE_BUFFER_MAX` (64KB) on an SMB
+transport, `PackageTransmit` silently dropped the package and sent a
+`COMMAND_PACKAGE_DROPPED` notification. Large responses (screenshots, process
+lists, .NET output) were lost for SMB pivot agents.
+
+**Fix — Demon side (Package.c):** Oversized packages are now split into
+`DEMON_PACKAGE_FRAGMENT` (command ID 2580) chunks. Each fragment carries a
+header: `[FragID(4)][SeqNum(4)][TotalFrags(4)][OrigCmdID(4)][OrigReqID(4)]`
+followed by chunk data. Max chunk size = `PIPE_BUFFER_MAX / 2` (32KB), leaving
+room for the outer wire frame (AES IV, HMAC, headers).
+
+**Fix — Teamserver side (demons.go):** New `COMMAND_PACKAGE_FRAGMENT` handler
+in `TaskDispatch` collects chunks by FragID in a per-agent `FragmentBuffer`
+map (protected by `FragmentMtx`). When all fragments arrive, the original
+command is reassembled and recursively dispatched via `TaskDispatch`. Stale
+incomplete fragment sets are cleaned up after 5 minutes.
+
+**Files changed:** `payloads/Demon/include/core/Command.h`,
+`payloads/Demon/include/core/Package.h`, `payloads/Demon/src/core/Package.c`,
+`teamserver/pkg/agent/commands.go`, `teamserver/pkg/agent/types.go`,
+`teamserver/pkg/agent/demons.go`, `teamserver/pkg/agent/agent.go`
+
+---
+
+## SEQ-EXEC — 2026-04-17 — Sequential Task Execution (One-Task-Per-Check-In)
+
+**Version:** 0.8.5
+
+**Problem:** When a Demon agent checked in, the teamserver drained ALL queued
+tasks (up to 30MB) and sent them in a single HTTP response. The Demon processed
+all received tasks at once, which caused overlapping execution, resource
+contention, and if one task crashed the agent all subsequent queued tasks were
+lost. Operators could not cancel mid-batch.
+
+**Fix:** Changed to a one-task-per-check-in model with in-flight tracking:
+
+- Added `InFlightRequestIDs map[uint32]bool` and `InFlightSince time.Time` to
+  the Agent struct (protected by existing `JobMtx`).
+- `GetQueuedJobs()` rewritten: returns nil (NOJOB) while any task is in-flight.
+  Dequeues exactly 1 job per check-in. When all in-flight RequestIDs are
+  completed via `RequestCompleted()`, the next check-in dequeues the next task.
+- **MEM_FILE grouping:** BOF/dotnet uploads create N MEM_FILE chunk jobs + 1
+  consuming command. These are detected and dispatched as a single atomic group
+  so file uploads don't take N*sleep_interval seconds.
+- **Safety timeout:** In-flight tasks older than 10 minutes are auto-cleared to
+  prevent permanent queue stalls from lost responses.
+- **task::clear:** Now also resets `InFlightRequestIDs` to unblock the queue.
+- Handler check-in path simplified: removed redundant `jobQueueLen` pre-check.
+
+**Files changed:** `teamserver/pkg/agent/types.go`,
+`teamserver/pkg/agent/agent.go`, `teamserver/pkg/agent/demons.go`,
+`teamserver/pkg/handlers/handlers.go`, `teamserver/pkg/db/agents.go`,
+`teamserver/cmd/cmd.go`
+
+---
+
+## TASK-UX — 2026-04-17 — Task System UX Improvements (v0.8.6)
+
+```
+Suggestion ref : N/A (operator request)
+Status         : Applied
+Files          : teamserver/pkg/agent/agent.go, teamserver/pkg/agent/demons.go,
+                 teamserver/cmd/cmd.go, client/src/Havoc/Demon/ConsoleInput.cc,
+                 client/src/Havoc/Demon/Commands.cc
+```
+
+Four UX improvements to the sequential task execution system (SEQ-EXEC):
+
+1. **COMMAND_CHECKIN excluded from queue blocking:** Check-in tasks no longer
+   occupy an in-flight slot in the sequential queue. Added COMMAND_CHECKIN to
+   the exclusion list alongside COMMAND_PIVOT and COMMAND_SOCKET in
+   `GetQueuedJobs()`.
+
+2. **TaskID in command output:** New `AgentConsoleWithTaskID()` wrapper method
+   on Agent injects `TaskID` (uppercase 8-char hex of RequestID) into every
+   console output message. All ~40 `AgentConsole` calls in `TaskDispatch` were
+   converted. Operators can now correlate output to specific queued tasks.
+   COMMAND_SOCKET calls intentionally excluded (async, not task-correlated).
+
+3. **`task cancel` command:** New server-side and client-side command:
+   - `task cancel all` — clears JobQueue, Tasks, and InFlightRequestIDs.
+   - `task cancel <id>` — removes a specific task from the queue by TaskID.
+     If the task is already in-flight, reports it cannot be recalled.
+
+4. **QA fixes:** `task::clear` and `task::cancel all` now also clear the
+   `Tasks` tracking slice to prevent phantom entries in `task::list`.
+   Cancel of in-flight tasks returns a distinct error message.
+
+**Files changed:** `teamserver/pkg/agent/agent.go`,
+`teamserver/pkg/agent/demons.go`, `teamserver/cmd/cmd.go`,
+`client/src/Havoc/Demon/ConsoleInput.cc`,
+`client/src/Havoc/Demon/Commands.cc`
+
+---
+
+## BUGFIX-007 — 2026-04-17 — Nil map panic in AgentConsoleWithTaskID (v0.8.7)
+
+```
+Suggestion ref : N/A (crash bug introduced by TASK-UX)
+Status         : Applied
+Files          : teamserver/pkg/agent/demons.go, teamserver/cmd/cmd.go
+```
+
+**Root cause:** The `AgentConsoleWithTaskID` wrapper introduced in TASK-UX
+writes `Message["TaskID"] = ...` to the message map before passing it to
+`AgentConsole`. Four command handlers in `TaskDispatch` declared their
+`Message` variable as `var Message map[string]string` (nil map) and had
+code paths where the map was never initialized before reaching the
+`AgentConsoleWithTaskID` call:
+
+1. **COMMAND_PACKAGE_DROPPED** — if `Parser.CanIRead()` failed, `Message`
+   remained nil.
+2. **COMMAND_TRANSFER** — if SubCommand hit the `default` case, `Message`
+   was never assigned.
+3. **COMMAND_KERBEROS** — if the outer `Parser.CanIRead()` failed or
+   SubCommand hit `default`, `Message` was nil.
+4. **COMMAND_SOCKET** — same pattern (though this handler uses `a.Console`
+   rather than `AgentConsoleWithTaskID`, the nil map was still latent).
+
+Before TASK-UX, the original `teamserver.AgentConsole(a.NameID, ..., Message)`
+passed the nil map to `json.Marshal()`, which safely serialized it as
+`"null"`. The client received an empty JSON document and silently skipped
+it. After TASK-UX, the wrapper's map write on a nil map caused a Go
+runtime panic, crashing the teamserver process and dropping the WebSocket
+connection to all connected clients — manifesting as an immediate client
+UI crash when any command was issued.
+
+**Fix:** Two-layer defense:
+1. Changed all four `var Message map[string]string` declarations to
+   `var Message = make(map[string]string)` so the map is always initialized.
+2. Added a nil guard in `AgentConsoleWithTaskID` itself:
+   `if Message == nil { Message = make(map[string]string) }` — protects
+   against any future code path that might pass a nil map.
+
+**Files changed:** `teamserver/pkg/agent/demons.go`, `teamserver/cmd/cmd.go`
+
+---
+
+## HVC-010 — 2026-04-18 — Fix OBF_JMP JMPRAX Behavioral Regression
+
+```
+Suggestion ref : SleepObf-Analysis.md §9.6 Phase 1+2
+Status         : Applied
+Files:
+  payloads/Demon/include/core/SleepObf.h               line 18  (added Rip override in JMPRAX branch)
+  payloads/Demon/src/core/ObfTimer.c                    lines 71, 158, 166  (diagnostic PRINTF)
+  payloads/Demon/test/test_sleepobf.c                   lines 34, 106  (macro sync + assertion update)
+  payloads/Demon/test/test_sleepobf_combos.c            lines 65, 145, 373  (macro sync + assertion updates)
+  teamserver/cmd/cmd.go                                 line 14  (version 0.8.7 → 0.8.8)
+```
+
+The `else if` fix in HVC-009 corrected the OBF_JMP macro's control flow but
+introduced a behavioral regression: JMPRAX now actually routes execution
+through the `jmp rax` gadget, which requires stack setup that was never
+implemented — causing crashes in Ekko/Zilean TimerObf when JMPRAX is selected.
+
+**Fix:** Added `Rop[ i ].Rip = U_PTR( p );` inside the JMPRAX branch so that
+Rip is explicitly set to the function address, bypassing the jmp gadget. This
+makes JMPRAX functionally equivalent to NONE (direct call) while preserving
+the correct `else if` structure. The gadget address in Rax is still set but
+unused — a future HVC can implement proper gadget-based dispatch (Phase 2
+Option B/C from SleepObf-Analysis.md §9.6).
+
+**Diagnostics:** Three `PRINTF()` calls added to `ObfTimer.c` to trace
+JmpBypass/Method on entry, JmpGadget/JmpBypass after gadget search, and
+Rop[0].Rsp alignment before the ROP chain. These are compile-time no-ops in
+release builds.
+
+**Tests updated:** Both `test_sleepobf.c` and `test_sleepobf_combos.c` macro
+copies synced and assertions changed to expect Rip == function address (not
+JmpGadget) when JMPRAX is active.
+
+**Version bump:** 0.8.7 → 0.8.8
+
+**To revert:** Remove the `Rop[ i ].Rip = U_PTR( p );` line from the JMPRAX
+branch in `SleepObf.h` (line 19), remove the three PRINTF lines from
+`ObfTimer.c`, revert test assertions to expect `Rip == JmpGadget`, and change
+version back to `0.8.7` in `cmd.go`.
+
+---
+
+## Version History
+
+| Version | CodeName | Date | Key Changes |
+|---------|----------|------|-------------|
+| 1.0 | Iron Veil | 2026-03-28 | HVC-005 (RSA key wrapping) |
+| 1.1 | Cobalt Veil | 2026-03-28 | HVC-007 (LZNT1 compression) |
+| 1.2 | Iron Spectre | 2026-03-28 | HVC-008 (SMB framing obfuscation) |
+| 1.3 | Silent Anchor | 2026-03-29 | BUGFIX-004 (HTTP beacon stability) |
+| 0.8.1 | — | 2026-04-12 | HVC-009 (HWBP + timer fixes) |
+| 0.8.2 | — | 2026-04-12 | FIX-10 (Foliage Rsp alignment) |
+| 0.8.3 | — | 2026-04-12 | FIX-11..14 (Foliage crash root causes) |
+| 0.8.4 | — | 2026-04-13 | FIX-15 (Foliage RC4 stub) |
+| 0.8.5 | — | 2026-04-17 | SEQ-EXEC (sequential task execution) |
+| 0.8.6 | — | 2026-04-17 | TASK-UX (task system UX improvements) |
+| 0.8.7 | — | 2026-04-17 | BUGFIX-007 (nil map panic) |
+| 0.8.8 | — | 2026-04-18 | HVC-010 (OBF_JMP JMPRAX behavioral fix) |
+| 0.8.9 | — | 2026-04-18 | HVC-011 (non-blocking timer queue cleanup) |
+| 0.8.10 | Silent Storm | 2026-04-18 | HVC-012 (revert sizeof(PVOID) Rip copy) |
+| 0.8.10 | Silent Storm | 2026-04-24 | SLEEPOBF-REVERT (revert all sleep obf to original) |
+
+**Current versions:**
+- Teamserver: `0.8.10` "Silent Storm" (`teamserver/cmd/cmd.go`)
+- Client: `1.3` "Silent Anchor" (`client/src/global.cc`)
+
+**Note:** The teamserver and client version numbers diverged during development.
+The client version tracks protocol/wire-format changes (HVC-001..008); the
+teamserver version tracks agent-side and server-side bugfixes.
+
+---
+
 ## Future / Planned
 
 | ID      | Suggestion                          | Status  |
 |---------|-------------------------------------|---------|
-| HVC-009 | Raw TCP transport                   | Pending |
+| HVC-013 | Raw TCP transport                   | Pending |

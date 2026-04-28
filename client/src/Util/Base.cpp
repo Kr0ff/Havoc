@@ -1,4 +1,5 @@
 #include <Util/Base.hpp>
+#include <Util/ThemeManager.hpp>
 
 auto FileRead( const QString& FilePath ) -> QByteArray
 {
@@ -33,7 +34,7 @@ auto MessageBox( QString Title, QString Text, QMessageBox::Icon Icon ) -> void
     box.setWindowTitle( Title );
     box.setText( Text );
     box.setIcon( Icon );
-    box.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+    box.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
     box.exec();
 }
 

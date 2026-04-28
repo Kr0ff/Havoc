@@ -40,7 +40,7 @@ About::About( QDialog* dialog )
                                                                "p, li { white-space: pre-wrap; }\n"
                                                                "</style></head><body style=\" font-family:'Sans Serif'; font-size:9pt; font-weight:400; font-style:normal;\">\n"
                                                                "<p align=\"center\" style=\" margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;\"><span style=\" font-size:x-large; font-weight:600;\">About Havoc</span> </p>\n"
-                                                               "<p align=\"center\" style=\" margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;\">Welcome to Havoc. Havoc is a Software for Adversary Simulations and Red Team Operations by <a href=\"https://www.twitter.com/C5pider\"><span style=\" text-decoration: underline; color:#e100ff;\">5pider</span></a>. </p></body></html>", nullptr));
+                                                               "<p align=\"center\" style=\" margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;\">Welcome to Havoc. Havoc is a Software for Adversary Simulations and Red Team Operations by <a href=\"https://www.twitter.com/C5pider\"><span style=\" text-decoration: underline; color:#e100ff;\">5pider</span>Modifications done by <span>@Kr0ff</span></a>. </p></body></html>", nullptr));
 
     QObject::connect( pushButton, &QPushButton::clicked, this, &About::onButtonClose );
     QMetaObject::connectSlotsByName( AboutDialog );

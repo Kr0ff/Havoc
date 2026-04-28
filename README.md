@@ -3,7 +3,8 @@
   <h1>Havoc</h1>
   <br/>
 
-  <p><i>Havoc is a modern and malleable post-exploitation command and control framework, created by <a href="https://twitter.com/C5pider">@C5pider</a>.</i></p>
+  <p><i>Havoc is a modern and malleable post-exploitation command and control framework, originally created by <a href="https://twitter.com/C5pider">@C5pider</a> and co-developed by <a href="https://x.com/CptXRat">@Kr0ff</a>.</i></p>
+  <p><i>The free upstream version of Havoc is no longer maintained. This is a private fork actively maintained by <a href="https://x.com/CptXRat">@Kr0ff</a> with substantial protocol hardening, agent stability fixes, and operator UX improvements.</i></p>
   <br />
 
   <img src="assets/Screenshots/FullSessionGraph.jpeg" width="90%" /><br />
@@ -79,34 +80,71 @@ base64(
 
 #### Client
 
-> Cross-platform UI written in C++ and Qt
+> Cross-platform UI written in C++ and Qt5
 
 - Modern, dark theme based on [Dracula](https://draculatheme.com/)
-
+- Multi-operator session graph and session table views with live agent state
+- Payload builder dialog with profile-driven defaults
+- Sleep obfuscation option selectability — invalid combinations (e.g. JmpGadget or Stack Duplication with non-timer techniques) are automatically disabled in the builder
+- Task queue management commands: `task list`, `task clear`, `task cancel <id|all>`
+- TaskID injected into all console output messages so operators can correlate output to specific queued tasks
+- File browser, process list, loot vault, and credential manager widgets
+- Script manager with Python API integration
+- Connect dialog with saved profile support
 
 #### Teamserver
 
-> Written in Golang
+> Written in Go
 
-- Multiplayer
-- Payload generation (exe/shellcode/dll)
-- HTTP/HTTPS listeners
-- Customizable C2 profiles
-- External C2
+- Multiplayer with WebSocket-based client connections
+- Payload generation (exe / shellcode / DLL / service exe)
+- HTTP/HTTPS listeners with malleable profile support
+- SMB pivot listener (parent → child relay over named pipes)
+- External C2 endpoint for third-party agents
+- Customizable C2 profiles via YAOTL (HCL-based) with full spec test suite
+- SQLite persistence layer for agent sessions, tasks, and credentials
+- Discord webhook integration for new-agent notifications
+- RSA-2048-OAEP-SHA256 session key wrapping for the registration packet (HVC-005)
+- Per-request random AES-256-CTR IV for every beacon packet (HVC-004)
+- HMAC-SHA256 encrypt-then-MAC authentication on all post-registration traffic (HVC-006)
+- LZNT1 payload compression for large beacon responses (HVC-007)
+- XOR-masked outer wire header — eliminates the static `0xDEADBEEF` magic-value signature (HVC-003)
+- Base64-encoded HTTP request and response bodies (HVC-002)
+- SMB pipe framing obfuscation — XOR-masks the `[DemonID][PkgSize]` header on parent↔child pipes (HVC-008)
+- Removed `X-Havoc: true` response header that previously fingerprinted the teamserver (HVC-001)
+- Mutex-protected agent job queue and task list (data-race fix, ISSUE-1)
+- SMB packet fragmentation — large responses (>64 KB) are split into `DEMON_PACKAGE_FRAGMENT` chunks and reassembled server-side (ISSUE-5)
+- HTTP beacon stability fixes for retransmission, HMAC handling on reconnect, and AES-CTR counter reuse (BUGFIX-004)
+- SMB pivot stability fixes for package leaks, error masking, NULL allocation, and PIPE_BUFFER_MAX overflow (BUGFIX-003)
 
 #### Demon
 
-> Havoc's flagship agent written in C and ASM
+> [!CAUTION]
+>  **Compiling with `--debug-dev` payloads**: 
+> 
+> Debug builds fail to run for extensive time. They crash randomly at the moment. Use only for short debug sessions.
 
-- Sleep Obfuscation via [Ekko](https://github.com/Cracked5pider/Ekko), Ziliean or [FOLIAGE](https://github.com/SecIdiot/FOLIAGE)
-- x64 return address spoofing
-- Indirect Syscalls for Nt* APIs
-- SMB support
-- Token vault
-- Variety of built-in post-exploitation commands
-- Patching Amsi/Etw via Hardware breakpoints
-- Proxy library loading
-- Stack duplication during sleep.
+> Havoc's flagship agent written in C and x86/x64 ASM
+
+- Sleep obfuscation via [Ekko](https://github.com/Cracked5pider/Ekko), Zilean, or [FOLIAGE](https://github.com/SecIdiot/FOLIAGE)
+- Sleep obfuscation source split into per-technique files (`ObfTimer.c`, `ObfFoliage.c`) with compile-time `SLEEPOBF_USE_TIMER` / `SLEEPOBF_USE_FOLIAGE` guards — only the selected technique is compiled into the binary
+- Sleep jump gadget bypass: `jmp rax` and `jmp [rbx]` ROP-chain dispatch (Ekko/Zilean)
+- x64 return address spoofing during indirect syscalls
+- Indirect syscalls for `Nt*` APIs with dynamically resolved SSNs
+- SMB transport for child agents over named pipes
+- Token vault and impersonation primitives
+- Kerberos authentication support
+- Hardware-breakpoint-based AMSI / ETW patching (HwBpEngine)
+- Proxy library loading via `RtlRegisterWait` / `RtlCreateTimer` / `RtlQueueWorkItem`
+- Stack duplication / call-stack spoofing during sleep
+- BOF (Beacon Object File) loader and inline .NET assembly execution
+- Per-process AES-256-CTR session encryption with embedded key material
+- Pure-C SHA-256 + HMAC-SHA-256 implementation (no CRT, no BCrypt dependency)
+- LZNT1 compression of large response payloads via `RtlCompressBuffer`
+- Spinlock-protected `Instance->Packages` linked list (data-race fix, ISSUE-2)
+- mingw-w64 v15 / GCC 14+ compilation compatibility (MINGW-COMPAT)
+- Hardware breakpoint engine fixes: thread handle leaks, NULL guards, parameter handling (HVC-009)
+- Working-hours scheduling and kill-date enforcement
 
 <div align="center">
   <img src="assets/Screenshots/SessionConsoleHelp.png" width="90%" /><br />

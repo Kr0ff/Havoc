@@ -5,6 +5,7 @@
 #include <Havoc/Havoc.hpp>
 
 #include <UserInterface/Dialogs/Connect.hpp>
+#include <Util/ThemeManager.hpp>
 
 void HavocNamespace::UserInterface::Dialogs::Connect::setupUi( QDialog* Form )
 {
@@ -17,7 +18,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::setupUi( QDialog* Form )
     Form->setMinimumSize( QSize( 500, 260 ) );
     Form->setMaximumSize( QSize( 500, 260 ) );
 
-    Form->setStyleSheet( FileRead( ":/stylesheets/Dialogs/Connect" ) );
+    Form->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/Connect" ) );
 
     gridLayout = new QGridLayout( Form );
     gridLayout->setObjectName( QString::fromUtf8( "gridLayout" ) );
@@ -73,21 +74,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::setupUi( QDialog* Form )
     listContextMenu = new QMenu( this );
     listContextMenu->addAction( "Remove", this, &Connect::itemRemove );
     listContextMenu->addAction( "Clear",  this, &Connect::itemsClear );
-    listContextMenu->setStyleSheet( "QMenu {"
-                                    "    background-color: #282a36;"
-                                    "    color: #f8f8f2;"
-                                    "    border: 1px solid #44475a;"
-                                    "}"
-                                    "QMenu::separator {"
-                                    "    background: #44475a;"
-                                    "}"
-                                    "QMenu::item:selected {"
-                                    "    background: #44475a;"
-                                    "}"
-                                    "QAction {"
-                                    "    background-color: #282a36;"
-                                    "    color: #f8f8f2;"
-                                    "}" );
+    listContextMenu->setStyleSheet( ThemeManager::MenuStyleSheet() );
 
     listWidget = new QListWidget( Form );
     listWidget->setObjectName( QString::fromUtf8( "listWidget" ) );
@@ -239,7 +226,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_Connect()
         MessageBox.setWindowTitle( "Error" );
         MessageBox.setText( "Name is empty" );
         MessageBox.setIcon( QMessageBox::Critical );
-        MessageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        MessageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         MessageBox.exec();
 
         return;
@@ -252,7 +239,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_Connect()
         MessageBox.setWindowTitle( "Error" );
         MessageBox.setText( "Host is empty" );
         MessageBox.setIcon( QMessageBox::Critical );
-        MessageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        MessageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         MessageBox.exec();
 
         return;
@@ -265,7 +252,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_Connect()
         MessageBox.setWindowTitle( "Error" );
         MessageBox.setText( "Port is empty" );
         MessageBox.setIcon( QMessageBox::Critical );
-        MessageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        MessageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         MessageBox.exec();
 
         return;
@@ -278,7 +265,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_Connect()
         MessageBox.setWindowTitle( "Error" );
         MessageBox.setText( "User is empty" );
         MessageBox.setIcon( QMessageBox::Critical );
-        MessageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        MessageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         MessageBox.exec();
 
         return;
@@ -291,7 +278,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_Connect()
         MessageBox.setWindowTitle( "Error" );
         MessageBox.setText( "Password is empty" );
         MessageBox.setIcon( QMessageBox::Critical );
-        MessageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        MessageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         MessageBox.exec();
 
         return;
@@ -304,7 +291,7 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_Connect()
         MessageBox.setWindowTitle( "Error" );
         MessageBox.setText( "Profile Name already exists" );
         MessageBox.setIcon( QMessageBox::Critical );
-        MessageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        MessageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         MessageBox.exec();
 
         return;
@@ -349,8 +336,8 @@ void HavocNamespace::UserInterface::Dialogs::Connect::onButton_NewProfile()
 
     lineEdit_Host->setText( "127.0.0.1" );
     lineEdit_Port->setText( "40056" );
-    lineEdit_User->setText( "5pider" );
-    lineEdit_Password->setText( "password" );
+    lineEdit_User->setText( "kr0ff" );
+    lineEdit_Password->setText( "password1234" );
 }
 
 void HavocNamespace::UserInterface::Dialogs::Connect::handleContextMenu( const QPoint &pos )

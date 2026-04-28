@@ -58,6 +58,7 @@ public:
     QMenu*                 menuScripts                   = {};
     QMenu*                 menuHelp                      = {};
     QMenu*                 MenuSession                   = {};
+    QMenu*                 menuTheme                     = {};
     QStatusBar*            statusbar                     = {};
     Dialogs::Connect*      ConnectDialog                 = {};
     About*                 AboutDialog                   = {};

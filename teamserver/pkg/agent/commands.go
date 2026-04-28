@@ -58,6 +58,7 @@ const (
 	COMMAND_KERBEROS                = 2550
 	COMMAND_MEM_FILE                = 2560
 	COMMAND_PACKAGE_DROPPED         = 2570
+	COMMAND_PACKAGE_FRAGMENT        = 2580
 
 	DEMON_INFO = 89
 

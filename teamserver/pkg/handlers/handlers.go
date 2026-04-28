@@ -137,14 +137,17 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 		Agent = Teamserver.AgentInstance(Header.AgentID)
 		Agent.UpdateLastCallback(Teamserver)
 
+		Agent.JobMtx.Lock()
 		pivotJobCount := 0
 		for _, pj := range Agent.JobQueue {
 			if pj.Command == agent.COMMAND_PIVOT {
 				pivotJobCount++
 			}
 		}
+		queueLen := len(Agent.JobQueue)
+		Agent.JobMtx.Unlock()
 		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x (%s) checkin, data=%d bytes, queue=%d (pivot_jobs=%d)",
-			Header.AgentID, Agent.NameID, Header.Data.Length(), len(Agent.JobQueue), pivotJobCount))
+			Header.AgentID, Agent.NameID, Header.Data.Length(), queueLen, pivotJobCount))
 
 		// while we can read a command and request id, parse new packages
 		first_iter := true
@@ -227,11 +230,17 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 			}
 		}
 
-		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, asked_for_jobs=%v, queue_len=%d",
-			Header.AgentID, asked_for_jobs, len(Agent.JobQueue)))
+		/* GetQueuedJobs returns nil if the queue is empty.
+		 * In that case, reply with COMMAND_NOJOB. */
+		var job []agent.Job
+		if asked_for_jobs {
+			job = Agent.GetQueuedJobs()
+		}
 
-		/* if there is no job then just reply with a COMMAND_NOJOB */
-		if asked_for_jobs == false || len(Agent.JobQueue) == 0 {
+		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, asked_for_jobs=%v, dequeued=%d",
+			Header.AgentID, asked_for_jobs, len(job)))
+
+		if len(job) == 0 {
 			logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, sending NOJOB", Header.AgentID))
 			var NoJob = []agent.Job{{
 				Command: agent.COMMAND_NOJOB,
@@ -247,11 +256,8 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 			}
 
 		} else {
-			/* if there is a job then send the Task Queue */
-			var (
-				job     = Agent.GetQueuedJobs()
-				payload = agent.BuildPayloadMessage(job, Agent.Encryption.AESKey, Agent.Encryption.AESIv)
-			)
+			/* send the single dequeued task (or MEM_FILE group) */
+			var payload = agent.BuildPayloadMessage(job, Agent.Encryption.AESKey, Agent.Encryption.AESIv)
 			logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, sending %d queued job(s), payload=%d bytes",
 				Header.AgentID, len(job), len(payload)))
 
