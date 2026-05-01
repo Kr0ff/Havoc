@@ -202,7 +202,7 @@ func ParseHeader(data []byte) (Header, error) {
 	// following 16 bytes using the full SIZE value (bit 31 included) as the
 	// mask base.  We must therefore compute the XOR mask from the raw SIZE
 	// (before stripping bit 31) to match what the Demon computed.
-	Parser.XorMaskNextBytes(Header.Size^HeaderMaskSeed, 16)
+	Parser.XorMaskNextBytes(Header.Size^int(HeaderMaskSeed), 16)
 
 	// Now safe to extract the compression flag and strip bit 31.
 	// See TrafficImprovements.md §7.

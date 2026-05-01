@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	VersionNumber = "0.8.10"
-	VersionName   = "Silent Storm"
+	VersionNumber = "0.9.1"
+	VersionName   = "Eclipse Anchor"
 	DatabasePath  = "data/teamserver.db"
 
 	HavocCli = &cobra.Command{
@@ -33,8 +33,7 @@ func init() {
 	CobraServer.Flags().SortFlags = false
 	CobraServer.Flags().StringVarP(&flags.Server.Profile, "profile", "", "", "set havoc teamserver profile")
 	CobraServer.Flags().BoolVarP(&flags.Server.Debug, "debug", "", false, "enable debug mode")
-	CobraServer.Flags().BoolVarP(&flags.Server.DebugDev, "debug-dev", "", false, "enable debug mode for developers (compiles the agent with the debug mode/macro enabled and links libc — UNSTABLE; use --debug-strings-only for production-equivalent debug logs)")
-	CobraServer.Flags().BoolVarP(&flags.Server.DebugStringsOnly, "debug-strings-only", "", false, "compile the agent with DEBUG strings enabled but keep -nostdlib (production-equivalent stability + debug logs via dynamic vsnprintf/WriteConsoleA)")
+	CobraServer.Flags().BoolVarP(&flags.Server.DebugDev, "debug-dev", "", false, "compile a DEBUG demon: -DDEBUG, console subsystem (output to cmd.exe), no libc/libgcc (NO STDLIB) — debug logs via dynamic vsnprintf/WriteConsoleA. Binary is marked with a 'debug' trailer so operators can identify debug builds with a single tail of the file.")
 	CobraServer.Flags().BoolVarP(&flags.Server.SendLogs, "send-logs", "", false, "the agent will send logs over http(s) to the teamserver")
 	CobraServer.Flags().BoolVarP(&flags.Server.Default, "default", "d", false, "uses default profile (overwrites --profile)")
 	CobraServer.Flags().BoolVarP(&flags.Server.Verbose, "verbose", "v", false, "verbose messages")

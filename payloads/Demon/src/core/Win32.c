@@ -1458,46 +1458,66 @@ VOID DemonPrintf( PCHAR fmt, ... )
 
 #elif (defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)
 
+/* [DEBUG-STRINGS-ONLY 2026-04-28]
+ * LogToConsole writes a formatted line to STD_OUTPUT_HANDLE without using
+ * libc. With --debug-strings-only the demon EXE is built as a CONSOLE
+ * subsystem app (-mconsole + -e WinMain in builder.go), so cmd.exe
+ * automatically hooks our stdout to its window — GetStdHandle returns the
+ * console handle directly, no AttachConsole needed.
+ *
+ * Implementation notes:
+ *   - Uses a 2 KB stack buffer to avoid LocalAlloc on every log line.
+ *   - Calls vsnprintf ONCE (the previous code called it twice with the same
+ *     va_list, which is undefined behaviour on x64 mingw — likely cause of
+ *     the "crashes instantly" symptom users reported).
+ *   - Checks both NULL and INVALID_HANDLE_VALUE on the std handle.
+ *   - For SHELLCODE builds (where the host process may be GUI subsystem and
+ *     stdout is not connected), AttachConsole(ATTACH_PARENT_PROCESS) is
+ *     called once to hook the parent's console. For DEBUG_NOSTDLIB EXE
+ *     builds it's harmless: the call just returns FALSE since the console
+ *     is already attached. */
 VOID LogToConsole(
     IN LPCSTR fmt,
     ...)
 {
-    INT     OutputSize   = 0;
-    LPSTR   OutputString = NULL;
-    va_list VaListArg    = 0;
+    CHAR    Buf[ 2048 ];
+    va_list args;
+    INT     Len = 0;
 
-    // have we initialized all the function addresses?
-    if ( Instance->Win32.AttachConsole == NULL ||
-         Instance->Win32.vsnprintf     == NULL ||
-         Instance->Win32.GetStdHandle  == NULL ||
-         Instance->Win32.WriteConsoleA == NULL ||
-         Instance->Win32.LocalAlloc    == NULL )
+    /* CRITICAL: Instance itself may be NULL when LogToConsole is called from
+     * WinMain — the PRINTF on the very first line of WinMain runs BEFORE
+     * DemonMain has set `Instance = &Inst`. Without this guard, dereferencing
+     * Instance->... causes an instant access violation. Production builds
+     * don't hit this because PRINTF expands to a no-op, but --debug-dev does. */
+    if ( Instance == NULL )
         return;
 
-    // get the handle to the output console
-    if ( Instance->hConsoleOutput == NULL )
+    /* Required Win32 fn pointers — drop silently if not yet resolved. */
+    if ( Instance->Win32.vsnprintf     == NULL ||
+         Instance->Win32.GetStdHandle  == NULL ||
+         Instance->Win32.WriteConsoleA == NULL )
+        return;
+
+    if ( Instance->hConsoleOutput == NULL ||
+         Instance->hConsoleOutput == INVALID_HANDLE_VALUE )
     {
-        Instance->Win32.AttachConsole( ATTACH_PARENT_PROCESS );
+        if ( Instance->Win32.AttachConsole != NULL ) {
+            Instance->Win32.AttachConsole( ATTACH_PARENT_PROCESS );
+        }
         Instance->hConsoleOutput = Instance->Win32.GetStdHandle( STD_OUTPUT_HANDLE );
-        if ( ! Instance->hConsoleOutput  )
+        if ( Instance->hConsoleOutput == NULL ||
+             Instance->hConsoleOutput == INVALID_HANDLE_VALUE )
             return;
     }
 
-    va_start( VaListArg, fmt );
+    va_start( args, fmt );
+    Len = Instance->Win32.vsnprintf( Buf, sizeof( Buf ), fmt, args );
+    va_end( args );
 
-    // allocate space for the final string
-    OutputSize   = Instance->Win32.vsnprintf( NULL, 0, fmt, VaListArg ) + 1;
-    OutputString = Instance->Win32.LocalAlloc( LPTR, OutputSize );
+    if ( Len <= 0 ) return;
+    if ( Len > (INT) sizeof( Buf ) ) Len = sizeof( Buf );
 
-    // write the final string
-    Instance->Win32.vsnprintf( OutputString, OutputSize, fmt, VaListArg );
-
-    // write it to the console
-    Instance->Win32.WriteConsoleA( Instance->hConsoleOutput, OutputString, OutputSize, NULL, NULL );
-
-    DATA_FREE( OutputString, OutputSize );
-
-    va_end( VaListArg );
+    Instance->Win32.WriteConsoleA( Instance->hConsoleOutput, Buf, (DWORD) Len, NULL, NULL );
 }
 
 #endif

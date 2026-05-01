@@ -64,7 +64,11 @@ typedef struct
     SIZE_T SizeOfProxyForUrl;
 #endif
 
-#if defined(SHELLCODE) && defined(DEBUG)
+/* [HVC-014 / DEBUG-STRINGS-ONLY 2026-04-28] hConsoleOutput is needed by
+ * LogToConsole, which is now compiled for both SHELLCODE and DEBUG_NOSTDLIB
+ * (= --debug-strings-only) builds. Guard must match the LogToConsole
+ * definition guard in Win32.c:1461. */
+#if (defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)
     HANDLE hConsoleOutput;
 #endif
 

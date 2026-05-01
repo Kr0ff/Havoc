@@ -50,7 +50,6 @@ func newTestBuilder(arch, format int, runner func(string) (bool, string)) *Build
 		Compiler64: "/fake/x86_64-w64-mingw32-gcc",
 		Compiler86: "/fake/i686-w64-mingw32-gcc",
 		Nasm:       "/fake/nasm",
-		DebugDev:   false,
 		SendLogs:   false,
 	}
 	b := NewBuilder(cfg)

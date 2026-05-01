@@ -3,13 +3,22 @@ package agent
 const (
 	DEMON_MAGIC_VALUE = 0xDEADBEEF
 
-	// [HVC-003 2026-03-26] Compile-time seed for the per-packet XOR mask that
-	// obfuscates the outer header fields (bytes 4-19: magic, agent ID, command ID,
-	// request ID) before wire transmission. The mask is SIZE ^ HeaderMaskSeed so it
-	// varies per packet. Must match HEADER_MASK_SEED in
-	// payloads/Demon/include/common/Defines.h.
-	HeaderMaskSeed = 0xA3F1C2B4
+	// HeaderMaskSeedDefault is the compile-time default for the per-packet XOR
+	// mask seed. Used when the profile YAOTL does not specify a custom seed.
+	// Must match HEADER_MASK_SEED's default in payloads/Demon/include/common/Defines.h.
+	HeaderMaskSeedDefault uint32 = 0xA3F1C2B4
 )
+
+// [HVC-003 2026-03-26] Runtime seed for the per-packet XOR mask that obfuscates
+// the outer header fields (bytes 4-19: magic, agent ID, command ID, request ID)
+// before wire transmission. The mask is SIZE ^ HeaderMaskSeed so it varies per
+// packet.
+//
+// This is a `var` (not `const`) so it can be overridden at startup from the
+// profile YAOTL `Teamserver { HeaderMaskSeed = "0x..." }` field. The same value
+// is propagated to the Demon at compile time via -DHEADER_MASK_SEED=... in
+// builder.go, so both sides always agree on the wire format.
+var HeaderMaskSeed uint32 = HeaderMaskSeedDefault
 
 const (
 	/*

@@ -1,7 +1,11 @@
 #include <global.hpp>
 #include <UserInterface/Widgets/DemonInteracted.h>
+#include <Havoc/Packager.hpp>
+#include <Havoc/Connector.hpp>
 #include <Util/ColorText.h>
 #include <Util/ThemeManager.hpp>
+#include <UserInterface/Widgets/SessionTable.hpp>
+#include <UserInterface/Widgets/TeamserverTabSession.h>
 
 #include <QDate>
 #include <QTime>
@@ -107,39 +111,72 @@ void DemonInteracted::setupUi( QWidget *Form )
     gridLayout->setVerticalSpacing( 4 );
     gridLayout->setContentsMargins( 1, 4, 1, 4 );
 
-    label = new QLabel( Form );
-    label->setObjectName( QString::fromUtf8( "label" ) );
+    // ── Console tab ────────────────────────────────────────────────────────
+    ConsoleContainer = new QWidget( Form );
+    ConsoleLayout    = new QGridLayout( ConsoleContainer );
+    ConsoleLayout->setContentsMargins( 0, 0, 0, 0 );
+    ConsoleLayout->setVerticalSpacing( 4 );
 
-    gridLayout->addWidget( label, 3, 0, 1, 1 );
-
-    lineEdit = new DemonInput( Form );
-    lineEdit->setObjectName( QString::fromUtf8( "lineEdit" ) );
-
-    gridLayout->addWidget( lineEdit, 3, 1, 1, 1 );
-
-    Console = new QTextEdit(Form);
-    Console->setObjectName(QString::fromUtf8("Console"));
-    Console->setReadOnly(true);
+    Console = new QTextEdit( ConsoleContainer );
+    Console->setObjectName( QString::fromUtf8( "Console" ) );
+    Console->setReadOnly( true );
     Console->setLineWrapMode( QTextEdit::LineWrapMode::NoWrap );
     Console->setStyleSheet(
-            "background-color: "+Util::ColorText::Colors::Hex::Background+";"
-            + "color: "+Util::ColorText::Colors::Hex::Foreground+";"
-            );
+        "background-color: " + Util::ColorText::Colors::Hex::Background + ";"
+        + "color: " + Util::ColorText::Colors::Hex::Foreground + ";"
+    );
+    ConsoleLayout->addWidget( Console, 0, 0, 1, 2 );
 
-    gridLayout->addWidget(Console, 0, 0, 1, 2);
+    label = new QLabel( ConsoleContainer );
+    label->setObjectName( QString::fromUtf8( "label" ) );
+    label->setText( ">>>" );
+    label->setStyleSheet( "padding-bottom: 3px; padding-left: 5px;" );
+    ConsoleLayout->addWidget( label, 1, 0, 1, 1 );
 
-    label_2 = new QLabel(Form);
-    label_2->setObjectName(QString::fromUtf8("label_2"));
-    label_2->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    lineEdit = new DemonInput( ConsoleContainer );
+    lineEdit->setObjectName( QString::fromUtf8( "lineEdit" ) );
+    lineEdit->setText( QString() );
+    ConsoleLayout->addWidget( lineEdit, 1, 1, 1, 1 );
 
-    gridLayout->addWidget(label_2, 2, 0, 1, 2);
+    // ── Notes tab ──────────────────────────────────────────────────────────
+    NotesContainer = new QWidget( Form );
+    NotesLayout    = new QGridLayout( NotesContainer );
+    NotesLayout->setContentsMargins( 0, 0, 0, 0 );
 
-    Form->setWindowTitle(QCoreApplication::translate("Form", "Form", nullptr));
-    lineEdit->setText(QString());
+    Notes = new QTextEdit( NotesContainer );
+    Notes->setObjectName( QString::fromUtf8( "Notes" ) );
+    Notes->setPlaceholderText( "Add operator notes for this agent here. Changes are saved automatically." );
+    Notes->setStyleSheet(
+        "background-color: " + Util::ColorText::Colors::Hex::Background + ";"
+        + "color: " + Util::ColorText::Colors::Hex::Foreground + ";"
+    );
+    if ( ! this->SessionInfo.Notes.isEmpty() ) {
+        Notes->setPlainText( this->SessionInfo.Notes );
+    }
+    NotesLayout->addWidget( Notes, 0, 0, 1, 1 );
 
-    label->setText(QCoreApplication::translate("Form", ">>>", nullptr));
-    label->setStyleSheet("padding-bottom: 3px;"
-                         "padding-left: 5px;");
+    // ── Tab widget combining both ──────────────────────────────────────────
+    TabWidget = new QTabWidget( Form );
+    TabWidget->setObjectName( QString::fromUtf8( "TabWidget" ) );
+    TabWidget->addTab( ConsoleContainer, "Console" );
+    TabWidget->addTab( NotesContainer,   "Notes"   );
+
+    gridLayout->addWidget( TabWidget, 0, 0, 1, 2 );
+
+    // ── Session info label (always visible below the tabs) ─────────────────
+    label_2 = new QLabel( Form );
+    label_2->setObjectName( QString::fromUtf8( "label_2" ) );
+    label_2->setTextInteractionFlags( Qt::TextSelectableByMouse );
+    gridLayout->addWidget( label_2, 1, 0, 1, 2 );
+
+    Form->setWindowTitle( QCoreApplication::translate( "Form", "Form", nullptr ) );
+
+    if ( this->SessionInfo.Domain.compare( "" ) == 0 )
+    {
+        label_2->setText( "[" + this->SessionInfo.User + "/" + this->SessionInfo.Computer + "] " + this->SessionInfo.Process + "/" + this->SessionInfo.PID + " " + this->SessionInfo.Arch );
+    } else {
+        label_2->setText( "[" + this->SessionInfo.User + "/" + this->SessionInfo.Computer + "] " + this->SessionInfo.Process + "/" + this->SessionInfo.PID + " " + this->SessionInfo.Arch + " (" + this->SessionInfo.Domain + ")" );
+    }
 
     if ( SessionInfo.MagicValue == DemonMagicValue )
     {
@@ -185,16 +222,7 @@ void DemonInteracted::setupUi( QWidget *Form )
     CommandCompleter = new QCompleter( CompleterCommands, this );
     CommandCompleter->setCaseSensitivity( Qt::CaseInsensitive );
     CommandCompleter->setCompletionMode( QCompleter::InlineCompletion );
-
     lineEdit->setCompleter( CommandCompleter );
-
-
-    if ( this->SessionInfo.Domain.compare( "" ) == 0 )
-    {
-        label_2->setText( "[" + this->SessionInfo.User + "/" + this->SessionInfo.Computer + "] " + this->SessionInfo.Process + "/" + this->SessionInfo.PID + " " + this->SessionInfo.Arch );
-    } else {
-        label_2->setText( "[" + this->SessionInfo.User + "/" + this->SessionInfo.Computer + "] " + this->SessionInfo.Process + "/" + this->SessionInfo.PID + " " + this->SessionInfo.Arch + " ("+ this->SessionInfo.Domain + ")" );
-    }
 
     DemonCommands = new HavocSpace::DemonCommands;
     DemonCommands->Teamserver = this->TeamserverName;
@@ -202,9 +230,44 @@ void DemonInteracted::setupUi( QWidget *Form )
     DemonCommands->MagicValue = this->SessionInfo.MagicValue;
     DemonCommands->SetDemonConsole( this );
 
+    // Auto-save notes 2 seconds after the user stops typing.
+    NotesSaveTimer = new QTimer( this );
+    NotesSaveTimer->setSingleShot( true );
+    NotesSaveTimer->setInterval( 2000 );
+    connect( NotesSaveTimer, &QTimer::timeout, this, &DemonInteracted::SaveNotes );
+    connect( Notes, &QTextEdit::textChanged, this, [this]() {
+        NotesSaveTimer->start();
+    } );
+
     connect( lineEdit, &QLineEdit::returnPressed, this, &DemonInteracted::AppendFromInput );
 
     QMetaObject::connectSlotsByName( Form );
+}
+
+void DemonInteracted::SaveNotes()
+{
+    auto noteText = this->Notes->toPlainText();
+
+    this->SessionInfo.Notes = noteText;
+
+    for ( auto& session : HavocX::Teamserver.Sessions ) {
+        if ( session.Name == this->SessionInfo.Name ) {
+            session.Notes = noteText;
+            break;
+        }
+    }
+
+    HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(
+        this->SessionInfo.Name, 10, noteText );
+
+    Util::Packager::Package pkg;
+    pkg.Head.Event = Util::Packager::Note::Type;
+    pkg.Head.User  = HavocX::Teamserver.User.toStdString();
+    pkg.Head.Time  = CurrentTime().toStdString();
+    pkg.Body.SubEvent          = Util::Packager::Note::Set;
+    pkg.Body.Info[ "AgentID" ] = this->SessionInfo.Name.toStdString();
+    pkg.Body.Info[ "Notes" ]   = noteText.toStdString();
+    HavocX::Connector->SendPackage( &pkg );
 }
 
 void DemonInteracted::AppendFromInput()

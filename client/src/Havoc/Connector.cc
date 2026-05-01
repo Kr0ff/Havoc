@@ -43,6 +43,15 @@ Connector::Connector( Util::ConnectionInfo* ConnectionInfo )
 
     QObject::connect( Socket, &QWebSocket::disconnected, this, [&]()
     {
+        // During the initial authentication phase the server closes the socket
+        // on auth failure; the error was already shown by DispatchInitConnection
+        // and Reconnect() has been scheduled.  Do not exit the process here —
+        // the operator needs the opportunity to retry with correct credentials.
+        if ( HavocApplication->ClientInitConnect ) {
+            Socket->close();
+            return;
+        }
+
         MessageBox( "Teamserver error", Socket->errorString(), QMessageBox::Critical );
 
         Socket->close();

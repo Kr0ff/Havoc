@@ -34,7 +34,7 @@ LONG WINAPI VehDebugger( PEXCEPTION_POINTERS Exception )
     UINT32 RequestID = 0;
     PPACKAGE Package = NULL;
 
-    PRINTF( "Exception: %p\n", Exception->ExceptionRecord->ExceptionCode )
+    PRINTF( "Exception: %p\n", Exception->ExceptionRecord->ExceptionCode );
 
     // Leave faulty function
 #if _WIN64
@@ -248,7 +248,7 @@ VOID CoffeeFunction( PVOID Address, PVOID Argument, SIZE_T Size )
     // Execute our function
     Function( Argument, Size );
 
-    PUTS( "Finished" )
+    PUTS( "Finished" );
 }
 
 BOOL CoffeeExecuteFunction( PCOFFEE Coffee, PCHAR Function, PVOID Argument, SIZE_T Size, UINT32 RequestID )
@@ -263,7 +263,7 @@ BOOL CoffeeExecuteFunction( PCOFFEE Coffee, PCHAR Function, PVOID Argument, SIZE
 
     if ( Instance->Config.Implant.CoffeeVeh )
     {
-        PUTS( "Register VEH handler..." )
+        PUTS( "Register VEH handler..." );
         // Add Veh Debugger in case that our BOF crashes etc.
         VehHandle = Instance->Win32.RtlAddVectoredExceptionHandler( 1, &VehDebugger );
         if ( ! VehHandle )

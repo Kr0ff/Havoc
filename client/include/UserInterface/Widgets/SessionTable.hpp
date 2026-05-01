@@ -21,6 +21,7 @@ private:
     QTableWidgetItem*   TitleArch        = nullptr;
     QTableWidgetItem*   TitleLast        = nullptr;
     QTableWidgetItem*   TitleHealth      = nullptr;
+    QTableWidgetItem*   TitleNote        = nullptr;
 
 public:
     QTableWidget*   SessionTableWidget = nullptr;

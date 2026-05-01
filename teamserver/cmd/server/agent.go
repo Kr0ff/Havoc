@@ -204,6 +204,13 @@ func (t *Teamserver) AgentConsole(AgentID string, CommandID int, Output map[stri
 
 	t.EventAppend(pk)
 	t.EventBroadcast("", pk)
+
+	// Persist the full JSON payload to history (skip heartbeat callbacks).
+	if CommandID != agent.COMMAND_NOJOB {
+		if agentIDInt, err := strconv.ParseInt(AgentID, 16, 64); err == nil {
+			_ = t.DB.AgentAddHistory(int(agentIDInt), time.Now().UTC().Format("02/01/2006 15:04:05"), "", string(out))
+		}
+	}
 }
 
 func (t *Teamserver) PythonModuleCallback(ClientID string, AgentID string, CommandID int, Output map[string]string) {

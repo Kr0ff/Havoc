@@ -34,6 +34,12 @@ type ServerProfile struct {
 	Host  string       `yaotl:"Host"`
 	Port  int          `yaotl:"Port"`
 	Build *BuildConfig `yaotl:"Build,block"`
+
+	// HeaderMaskSeed is the per-packet XOR mask seed (HVC-003). Used by
+	// both the Demon (compile-time -DHEADER_MASK_SEED=...) and the teamserver
+	// (runtime parsing). Optional; defaults to 0xA3F1C2B4 when omitted.
+	// Accepts hex ("0xA3F1C2B4") or decimal ("2750595252"). Must fit in 32 bits.
+	HeaderMaskSeed string `yaotl:"HeaderMaskSeed,optional"`
 	// TODO: add WebSocket server config
 	// Path for Havoc connection
 	// TLS or not

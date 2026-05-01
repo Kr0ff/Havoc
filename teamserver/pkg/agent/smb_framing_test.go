@@ -9,12 +9,18 @@ package agent
 
 import "testing"
 
-// TestSmbFramingConstant verifies HeaderMaskSeed matches the C compile-time
-// constant HEADER_MASK_SEED (0xA3F1C2B4) defined in Defines.h.
-func TestSmbFramingConstant(t *testing.T) {
+// TestSmbFramingDefault verifies HeaderMaskSeedDefault matches the C
+// compile-time fallback HEADER_MASK_SEED (0xA3F1C2B4) in Defines.h. The runtime
+// HeaderMaskSeed variable starts equal to HeaderMaskSeedDefault unless a
+// profile YAOTL `Teamserver { HeaderMaskSeed = "0x..." }` overrides it.
+func TestSmbFramingDefault(t *testing.T) {
 	const expected uint32 = 0xA3F1C2B4
+	if HeaderMaskSeedDefault != expected {
+		t.Errorf("HeaderMaskSeedDefault = 0x%08X, want 0x%08X", HeaderMaskSeedDefault, expected)
+	}
 	if HeaderMaskSeed != expected {
-		t.Errorf("HeaderMaskSeed = 0x%08X, want 0x%08X", HeaderMaskSeed, expected)
+		t.Errorf("HeaderMaskSeed (runtime) = 0x%08X, want 0x%08X (no profile override expected in tests)",
+			HeaderMaskSeed, expected)
 	}
 }
 

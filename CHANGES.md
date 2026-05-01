@@ -17,6 +17,784 @@ Description and rationale.
 
 ---
 
+## HVC-016 — 2026-05-01 — Console History Persistence on Reconnect — v0.9.1 "Eclipse Anchor"
+
+```
+Status         : Applied
+Version bump   : teamserver 0.9.0 → 0.9.1 "Eclipse Anchor"
+                 client 1.5 → 1.6 "Eclipse Anchor"
+Files          :
+  teamserver/cmd/cmd.go                           version bump 0.9.0 → 0.9.1
+  teamserver/cmd/server/agent.go                  AgentConsole: store full JSON (not extracted text); skip COMMAND_NOJOB
+  teamserver/cmd/server/dispatch.go               Console closure: persist task messages to DB history
+  teamserver/cmd/server/teamserver.go             SendAllPackagesToNewClient: fix ordering; skip cached output; send DB history
+  teamserver/pkg/packager/types.go                Session.History = 0x6
+  teamserver/pkg/events/demons.go                 DemonHistory() event builder
+  teamserver/pkg/db/agents.go                     HistoryEntry type; AgentGetHistory()
+  client/src/global.cc                            version bump 1.5 → 1.6
+  client/include/Havoc/Packager.hpp               Session::History extern const
+  client/src/Havoc/Packager.cc                    Session::History = 0x6; History case handler in DispatchSession
+```
+
+### Problem
+
+When an operator disconnected and reconnected, all previous console output for
+every agent was lost. The QTextEdit was re-created blank.
+
+### Root Causes
+
+**Cause 1 — Wrong event ordering in `SendAllPackagesToNewClient`.**
+The old code sent all cached `EventsList` entries (which included `Session.Output`
+events) *before* sending `NewDemon` events for active agents. The client receives
+output events and tries to find the matching session, fails (session doesn't exist
+yet), and silently discards the output.
+
+**Cause 2 — No cross-restart persistence.**
+`EventsList` is in-memory only. After a server restart it is empty, so a
+reconnecting client received no output history at all even for long-running agents.
+
+**Cause 3 — Partial DB storage.**
+`AgentConsole()` previously stored only the extracted `Message` or `Output`
+plain-text field, not the full JSON (`{"Type":"Good","Message":"...","Output":"..."}`)
+needed by the client's `MessageOutput()` renderer. History entries were unusable
+for replay.
+
+**Cause 4 — Task messages not persisted.**
+The `Console()` closure in `dispatch.go` (which broadcasts "Tasked demon to sleep…"
+messages) wrote to `EventsBroadcast` but never called `AgentAddHistory()`.
+
+### Fix: Server
+
+- **`agent.go`**: `AgentConsole()` now stores `string(out)` (full JSON) in
+  `TS_AgentHistory.Output`. `COMMAND_NOJOB` heartbeat callbacks are skipped (not
+  displayed in console).
+- **`dispatch.go`**: The `Console()` closure now also calls `AgentAddHistory()`
+  so task feedback messages are captured.
+- **`db/agents.go`**: Added `HistoryEntry` struct and `AgentGetHistory(AgentID)` 
+  querying `TS_AgentHistory` in insertion order.
+- **`packager/types.go`**: Added `Session.History = 0x6` event subtype.
+- **`events/demons.go`**: Added `DemonHistory()` which builds a `Session.History`
+  packet. Each entry's `Output` field is base64-encoded and the full entries array
+  is double-encoded as base64 JSON for wire transport.
+- **`teamserver.go`**: `SendAllPackagesToNewClient()` rewritten with three steps:
+  1. Send `NewDemon` events for all active agents **first** (sessions must exist
+     before any output arrives).
+  2. Send non-output `EventsList` entries (listeners, chat, markers, etc.); skip
+     any `Session.Output` events since history from DB supersedes them.
+  3. For each active agent, query `TS_AgentHistory` and send a `Session.History`
+     packet immediately after the session is established — works after server
+     restarts because it reads from SQLite, not the in-memory event list.
+
+### Fix: Client
+
+- **`Packager.hpp`**: Declared `Session::History` extern const.
+- **`Packager.cc`**: Defined `Session::History = 0x6`. Added `case Session::History`
+  in `DispatchSession()` that:
+  1. Decodes the double-base64 entries array.
+  2. For entries with a `CommandLine`, renders a prompt line using the stored
+     timestamp and agent name.
+  3. For entries with an `Output`, passes the base64-encoded JSON directly to
+     `MessageOutput()`, preserving all color formatting (Good/Info/Error/Warning).
+  4. Scrolls the console to the bottom after replay.
+
+---
+
+## HVC-015 — 2026-05-01 — Auth Retry, Agent Notes UI, DB History — v0.9.0 "Eclipse Anchor"
+
+```
+Status         : Applied
+Version bump   : teamserver 0.8.11 → 0.9.0 "Eclipse Anchor"
+                 client 1.4 → 1.5 "Eclipse Anchor"
+Files          :
+  teamserver/cmd/cmd.go                                  version bump
+  teamserver/cmd/server/teamserver.go                    auth retry fix: RemoveClient on failure; fix isExist check
+  teamserver/cmd/server/agent.go                         AgentConsole: write output to DB history
+  teamserver/cmd/server/dispatch.go                      Note event handler; addCommandHistory helper; DB writes
+  teamserver/pkg/packager/types.go                       Note event type 0x8 (Set=0x1)
+  teamserver/pkg/agent/types.go                          Agent.Notes field
+  teamserver/pkg/db/db.go                                TS_AgentHistory table; Notes column; DB migration
+  teamserver/pkg/db/agents.go                            AgentSetNotes, AgentGetNotes, AgentAddHistory; Notes in CRUD
+  teamserver/pkg/events/demons.go                        Notes field in NewDemon info map
+  client/src/global.cc                                   version bump
+  client/include/global.hpp                              QTimer include; Notes in SessionItem
+  client/include/Havoc/Havoc.hpp                         Reconnect() declaration
+  client/include/Havoc/Packager.hpp                      Note namespace
+  client/include/UserInterface/Widgets/DemonInteracted.h Notes tab members; SaveNotes slot
+  client/src/Havoc/Connector.cc                          disconnected: skip Exit during ClientInitConnect phase
+  client/src/Havoc/Packager.cc                           Note constants; auth error schedules Reconnect; Notes in NewSession
+  client/src/Havoc/Havoc.cc                              Reconnect() implementation
+  client/src/UserInterface/Widgets/DemonInteracted.cc    Notes QTabWidget; auto-save timer; SaveNotes()
+```
+
+### 1 — Authentication retry
+
+**Problem**: A failed login (wrong password) caused the teamserver to close the
+socket without calling `RemoveClient`, leaving a stale `Client` entry in the
+map. On the client side the `disconnected` signal unconditionally called
+`Havoc::Exit()` (terminating the process), so the operator could not retry.
+
+**Server fix** (`teamserver.go`):
+- Replaced manual `Connection.Close()` + bare `return` with `t.RemoveClient(id)` + `return`, cleaning up the stale map entry.
+- Fixed the "already logged in" check: the old code compared `client.Username`
+  (the *new*, not-yet-authenticated client, always `""`) against `pk.Head.User`,
+  so it never triggered. Now each iterated `existingClient` is checked with
+  `existingClient.Username != "" && existingClient.Username == pk.Head.User`.
+
+**Client fix** (`Connector.cc`, `Packager.cc`, `Havoc.cc/.hpp`):
+- `disconnected` handler: when `HavocApplication->ClientInitConnect` is still
+  `true` (initial auth phase), the handler closes the socket silently and
+  returns—no `Havoc::Exit()`.
+- `DispatchInitConnection::Error`: after showing the error MessageBox, schedules
+  `HavocApplication->Reconnect()` via `QTimer::singleShot(0, ...)`.
+- `Reconnect()`: re-opens the Connect dialog so the operator can enter correct
+  credentials without restarting the application.
+
+### 2 — Agent Notes tab in client UI
+
+Each `DemonInteracted` widget now has a **QTabWidget** with two tabs:
+- **Console** — the existing command console + input field (unchanged behaviour).
+- **Notes** — a writable `QTextEdit` pre-populated with any notes stored in the
+  server DB. Changes are auto-saved 2 seconds after the operator stops typing
+  (debounced `QTimer`). Notes are transmitted to the teamserver as a `Note.Set`
+  (event 0x8 / subEvent 0x1) WebSocket package.
+
+Notes are delivered to connecting clients inside the `Session::NewSession` event
+info map so every operator always sees the current note on first open.
+
+### 3 — Database persistence of agent data
+
+**New DB column** `Notes TEXT DEFAULT ''` added to `TS_Agents`.
+
+**New DB table** `TS_AgentHistory`:
+```sql
+CREATE TABLE "TS_AgentHistory" (
+    "ID" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "AgentID" int,
+    "Time" text,
+    "CommandLine" text,
+    "Output" text
+);
+```
+
+**Schema migration**: `DatabaseNew()` now calls `migrate()` when the DB already
+existed, using `ALTER TABLE … ADD COLUMN IF NOT EXISTS` and
+`CREATE TABLE IF NOT EXISTS` so existing installations upgrade silently.
+
+**Write paths**:
+- Commands: each `logr.LogrInstance.AddAgentInput` call in `dispatch.go` is
+  followed by `t.addCommandHistory(agentIDHex, cmdLine)`.
+- Output: `AgentConsole()` in `agent.go` writes the `Message` / `Output` value
+  to `AgentAddHistory` after broadcasting the event.
+
+---
+
+## DEBUG-DEV-V2 — 2026-04-28 — Real Crash Fix + Rename + File Trailer
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/Win32.c                   LogToConsole — NULL Instance guard
+  teamserver/pkg/common/builder/builder.go          remove redundant -Wl,-e,WinMain; add DEBUG banner; append "debug" trailer
+  teamserver/cmd/cmd.go                             rename --debug-strings-only → --debug-dev
+  teamserver/cmd/server/types.go                    rename DebugStringsOnly → DebugDev
+  teamserver/cmd/server/dispatch.go                 rename DebugStringsOnly → DebugDev
+  teamserver/pkg/common/builder/builder_test.go     no-op (was already DebugDev: false)
+```
+
+### The actual crash cause (third attempt)
+
+Three sub-agents (developer / QA / tester) ran in parallel against the demon
+codebase. The TESTER agent identified the real cause that two prior fix
+attempts (-mconsole subsystem swap, va_list reuse fix, defensive main() stub)
+all missed:
+
+**`Instance` is a NULL global pointer when WinMain runs.**
+
+```c
+/* Demon.c line 28 */
+SEC_DATA PINSTANCE Instance = { 0 };       // global, initialized to NULL
+
+/* Demon.c line 49 (in DemonMain — runs LATER) */
+INSTANCE Inst = { 0 };
+Instance = & Inst;                          // sets Instance non-NULL
+
+/* MainExe.c WinMain — runs FIRST, before DemonMain */
+INT WINAPI WinMain( ... )
+{
+    PRINTF( "WinMain: ..." )                // ← Instance is still NULL here
+    DemonMain( NULL, NULL );                // ← only after this is Instance set
+    return 0;
+}
+```
+
+With `--debug-dev`, `PRINTF` expands to a `LogToConsole(...)` call. The very
+first line of `LogToConsole` is:
+
+```c
+if ( Instance->Win32.vsnprintf == NULL || ... )
+```
+
+Dereferencing a NULL `Instance` → access violation → instant crash, before a
+single character of debug output is ever produced.
+
+Production builds don't hit this because `PRINTF` expands to `{ ; }` (no-op)
+when `DEBUG` is undefined; `Instance` is never accessed before being set.
+
+### Fix #1 — NULL guard at the top of LogToConsole
+
+```c
+/* CRITICAL: Instance itself may be NULL when LogToConsole is called from
+ * WinMain — the PRINTF on the very first line of WinMain runs BEFORE
+ * DemonMain has set `Instance = &Inst`. */
+if ( Instance == NULL )
+    return;
+```
+
+This MUST come before any `Instance->...` field access. Added at
+`payloads/Demon/src/core/Win32.c` immediately inside `LogToConsole`.
+
+### Fix #2 — Remove redundant `-Wl,-e,WinMain`
+
+The DEVELOPER agent caught a secondary issue: line 449 of `builder.go`
+already adds `-e WinMain` for ALL EXE builds. My previous attempt added
+`-Wl,-e,WinMain` to `CFlags[0]` for `--debug-strings-only`, creating dual
+entry-point directives whose precedence is linker-version-dependent. The
+redundant flag is removed; the existing `-e WinMain` from line 449 is the
+single source of truth.
+
+### Rename `--debug-strings-only` → `--debug-dev`
+
+Per operator request: the long name was awkward. The new name matches the
+mental model — operators are "compiling a debug demon" — without the libc
+baggage that made the original `--debug-dev` (now removed) unstable.
+Internally:
+- CLI flag: `--debug-strings-only` → `--debug-dev`
+- Go field: `DebugStringsOnly` → `DebugDev`
+- C-side compiler define: still `DEBUG_NOSTDLIB` (technically accurate)
+
+### Clear DEBUG BUILD indication during build
+
+The teamserver now prints a 7-line banner when `--debug-dev` is active and
+a payload is being built:
+
+```
+[+] starting build
+[+] ================================================================
+[+]   DEBUG BUILD (--debug-dev)
+[+]   - PE subsystem : CONSOLE (debug logs print to cmd.exe)
+[+]   - linkage      : -nostdlib (no libc, no libgcc)
+[+]   - debug output : LogToConsole (dynamic vsnprintf+WriteConsoleA)
+[+]   - file trailer : binary appended with 'debug' marker
+[+]   - DO NOT ship  : intended for analysis runs only
+[+] ================================================================
+[+] config size [732 bytes]
+...
+```
+
+### "debug" file trailer
+
+After a successful `--debug-dev` build, the teamserver appends the literal
+ASCII bytes `debug` to the end of the produced binary file. The bytes sit
+after the PE end and are ignored by the Windows loader at runtime. Operators
+can identify a debug build with a single command:
+
+```
+$ tail -c 5 demon.exe
+debug
+```
+
+Or visually with `xxd demon.exe | tail -1`. Production builds end with their
+last section bytes (usually `\x00` padding); only debug builds end with `debug`.
+
+This eliminates a real ops risk: accidentally shipping a debug binary instead
+of a production binary. Both are now distinguishable in 100ms without running
+them.
+
+### Verification
+
+- `go build ./...` clean
+- `go test ./pkg/agent/ ./pkg/common/builder/` all pass
+- `havoc server --help` shows the new `--debug-dev` flag with full description
+- The crash fix (NULL Instance guard) targets the exact code path the Tester
+  agent identified by reading source
+
+### Operator usage after this change
+
+```
+# Production build (no debug, no logs, audit-checked)
+./havoc server --profile profiles/havoc.yaotl
+
+# Debug build (logs in cmd.exe, no libc, "debug" trailer)
+./havoc server --profile profiles/havoc.yaotl --debug-dev
+```
+
+The `--debug-strings-only` flag no longer exists. `--debug-dev` is the only
+debug build mode, and it's now stable (no libc) by design.
+
+---
+
+## DEBUG-STRINGS-ONLY-CONSOLE — 2026-04-28 — Console Subsystem + LogToConsole Crash Fix
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/common/builder/builder.go    -mconsole + -Wl,-e,WinMain for --debug-strings-only EXE
+  payloads/Demon/src/core/Win32.c             rewrote LogToConsole — fix va_list reuse, drop AttachConsole
+  payloads/Demon/src/main/MainExe.c           defensive main() stub under DEBUG_NOSTDLIB
+```
+
+### Problem #1 — wrong PE subsystem made debug output invisible
+
+`--debug-strings-only` builds were linked with `-mwindows`, marking the PE
+subsystem as `IMAGE_SUBSYSTEM_WINDOWS_GUI`. When run from cmd.exe, the binary
+detached from the parent console immediately on startup; even when
+`AttachConsole(ATTACH_PARENT_PROCESS)` was called inside `LogToConsole`,
+output was unreliable and operators saw nothing in the terminal.
+
+The user explicitly asked for "console subsystem like Visual Studio" — i.e.
+`/SUBSYSTEM:CONSOLE`. The fix: `-mconsole` instead of `-mwindows` for
+`--debug-strings-only` EXE builds. Now Windows automatically connects stdout
+to cmd.exe's console; `WriteConsoleA(GetStdHandle(STD_OUTPUT_HANDLE), ...)`
+just works.
+
+### Problem #2 — `LogToConsole` crashed instantly
+
+The previous implementation had a real undefined-behaviour bug:
+
+```c
+va_start( VaListArg, fmt );
+OutputSize   = vsnprintf( NULL, 0, fmt, VaListArg ) + 1;     // consumes VaListArg
+OutputString = LocalAlloc( LPTR, OutputSize );
+vsnprintf( OutputString, OutputSize, fmt, VaListArg );        // ← UB: reuse without va_copy
+```
+
+On x64 mingw-w64, `va_list` is an implementation-defined type whose state
+after the first `vsnprintf` is undefined. The second call typically reads
+past the original arg-list bounds → access violation → "crashes instantly".
+
+This bug existed in the original SHELLCODE branch too but wasn't triggered
+because shellcode builds are rare and may have masked it via fortunate
+register state.
+
+### Problem #3 — `INVALID_HANDLE_VALUE` not caught
+
+`GetStdHandle` returns `INVALID_HANDLE_VALUE` (-1, all-ones) on failure,
+not NULL. The check `if (! Instance->hConsoleOutput)` fails to catch -1,
+so the demon proceeded to call `WriteConsoleA(-1, ...)` — undefined.
+
+### Fixes applied
+
+**`builder.go`:**
+```go
+if b.FileType == FILETYPE_WINDOWS_SERVICE_EXE {
+    b.compilerOptions.CFlags[0] = "-mwindows -ladvapi32"
+} else if b.compilerOptions.Config.DebugStringsOnly && b.FileType == FILETYPE_WINDOWS_EXE {
+    b.compilerOptions.CFlags[0] += " -nostdlib -mconsole -Wl,-e,WinMain"
+} else {
+    b.compilerOptions.CFlags[0] += " -nostdlib -mwindows"
+}
+```
+
+`-Wl,-e,WinMain` pins the PE entry point to the existing `WinMain` symbol.
+With `-nostdlib` the linker loses its default `mainCRTStartup` reference,
+and `-mconsole`'s default entry would be `main` — so the entry must be
+explicit. Service / DLL / RDLL / RAW_BINARY builds keep `-mwindows`
+unchanged (services and DLLs have no console; raw binaries have no PE).
+
+**`Win32.c::LogToConsole`:**
+- 2 KB stack buffer (no LocalAlloc per log line)
+- Single `vsnprintf` call (no va_list reuse)
+- Checks both `NULL` and `INVALID_HANDLE_VALUE`
+- `AttachConsole` call kept but defensive (unnecessary when console subsystem
+  is set; harmless if already attached — for SHELLCODE builds where the host
+  process is GUI subsystem this still hooks the parent's console)
+
+**`MainExe.c`:**
+Defensive `int main(void)` stub under `#ifdef DEBUG_NOSTDLIB`. Prevents
+"undefined reference to main" link errors if some MinGW configuration emits
+references to `main` from runtime boilerplate. With `--gc-sections` the
+stub is stripped if unreferenced.
+
+### Verification
+
+- `go build ./...` clean
+- `go test ./pkg/common/builder/` passes
+- `--debug-strings-only` EXE build: subsystem = console, entry = WinMain,
+  `-nostdlib` preserved (no libc dependency)
+- Production EXE build: unchanged (`-mwindows`)
+- Service EXE / DLL / RDLL / RAW_BINARY: unchanged
+
+### Operator UX
+
+```
+$ ./havoc server --profile profiles/havoc.yaotl --debug-strings-only
+[*] starting build
+[*] sleep obfuscation "Ekko" has been specified
+...
+
+C:\> demon-debug.exe
+[DEBUG::DemonInit::320] ============================================================
+[DEBUG::DemonInit::321] ===== DemonInit START =====
+[DEBUG::DemonConfig::651] Config Size: 760
+[DEBUG::DemonConfig::660] [HVC-014] config decrypted in-place
+...
+```
+
+Same UX as the removed `--debug-dev` mode, but no libc, no stability hazards.
+
+---
+
+## DEBUG-STRINGS-ONLY-FIX — 2026-04-28 — hConsoleOutput Guard Mismatch
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/Demon.h    widen hConsoleOutput field guard
+```
+
+### Problem
+
+When DEBUG-STRINGS-ONLY (2026-04-28) opened `LogToConsole` to compile under
+`(SHELLCODE || DEBUG_NOSTDLIB) && DEBUG`, the matching `Instance->hConsoleOutput`
+field declaration in `Demon.h` was missed — its guard remained
+`SHELLCODE && DEBUG`. Building with `--debug-strings-only` (which sets
+`DEBUG && DEBUG_NOSTDLIB` but NOT `SHELLCODE`) compiled `LogToConsole` but the
+`INSTANCE` struct had no `hConsoleOutput` member, producing:
+
+```
+src/core/Win32.c:1478:18: error: 'struct <anonymous>' has no member named 'hConsoleOutput'
+```
+
+at every read/write of `Instance->hConsoleOutput`.
+
+### Fix
+
+`payloads/Demon/include/Demon.h:67-72` — widened the guard to match `LogToConsole`'s
+definition guard:
+
+```c
+#if (defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)
+    HANDLE hConsoleOutput;
+#endif
+```
+
+### Lesson
+
+Any future change that opens up a debug helper to a new build mode must
+audit every `Instance->`/struct-field reference inside that helper for matching
+preprocessor guards in the struct definition.
+
+---
+
+## VERSION-0.8.11 — 2026-04-28 — Bump to 0.8.11 "Veiled Anchor"
+
+```
+Status         : Applied
+Files          :
+  teamserver/cmd/cmd.go       VersionNumber 0.8.10 → 0.8.11, VersionName "Silent Storm" → "Veiled Anchor"
+  client/src/global.cc        Version 1.3 → 1.4, CodeName "Silent Anchor" → "Veiled Anchor"
+```
+
+Bumped to mark the encrypted-config-embedding milestone (HVC-014) and the
+removal of the unstable `--debug-dev` mode.
+
+---
+
+## HVC-014 — 2026-04-28 — Encrypted Config Embedding (AES-256-CTR)
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/common/builder/builder.go    generate per-build random key+IV, AES-CTR encrypt
+                                              CONFIG_BYTES, emit CONFIG_KEY + CONFIG_IV defines
+  payloads/Demon/src/Demon.c                  decrypt AgentConfig in-place at top of DemonConfig()
+                                              before ParserNew; wipe key material after use
+```
+
+### Problem
+
+Previously the demon's listener configuration — URLs, headers, user-agent,
+URI paths, pivot pipe names, AES session key/IV — was embedded as plaintext
+bytes in the binary via the `CONFIG_BYTES` macro define. A simple
+`xxd demon.exe | grep -i http` or `strings` exposed the entire C2
+infrastructure to any analyst with the binary, with zero reverse-engineering
+required.
+
+### Solution
+
+Encrypt the config at build time, decrypt in-place at runtime.
+
+**Build (teamserver, `builder.go`):**
+
+1. After `PatchConfig()` produces the plaintext config bytes, generate a
+   fresh 32-byte key and 16-byte IV via `crypto/rand.Read`. The key/IV
+   are unique per build — different for every demon binary.
+2. Call `crypt.XCryptBytesAES256(Config, cfgKey, cfgIV)` to encrypt the
+   plaintext. AES-CTR is a stream cipher, so ciphertext length equals
+   plaintext length; assert this with an explicit check.
+3. Emit three compiler defines instead of the previous one:
+   - `CONFIG_BYTES = {ciphertext bytes}`
+   - `CONFIG_KEY   = {32 random bytes}`
+   - `CONFIG_IV    = {16 random bytes}`
+
+**Runtime (demon, `Demon.c::DemonConfig()`):**
+
+1. `AgentConfig[]` is initialized from `CONFIG_BYTES` — at startup it holds
+   ciphertext. To `xxd` / `strings`, the bytes look like uniform random data.
+2. At the top of `DemonConfig()`, BEFORE the existing `ParserNew(...)`:
+   ```c
+   AESCTX CfgAes        = { 0 };
+   BYTE   CfgKey[ 32 ]  = CONFIG_KEY;   // macro expands to {0xAA,0xBB,...}
+   BYTE   CfgIv [ 16 ]  = CONFIG_IV;    // macro expands to {0xCC,0xDD,...}
+
+   AesInit( &CfgAes, CfgKey, CfgIv );
+   AesXCryptBuffer( &CfgAes, ( PUINT8 ) AgentConfig, sizeof( AgentConfig ) );
+
+   RtlSecureZeroMemory( CfgKey,  sizeof( CfgKey ) );
+   RtlSecureZeroMemory( CfgIv,   sizeof( CfgIv  ) );
+   RtlSecureZeroMemory( &CfgAes, sizeof( CfgAes ) );
+   ```
+3. After this block, `AgentConfig` holds plaintext. The existing
+   `ParserNew(&Parser, AgentConfig, sizeof(AgentConfig))` copies it to a heap
+   buffer; the existing `RtlSecureZeroMemory(AgentConfig, ...)` wipes the
+   plaintext from `.data`. All subsequent `ParserGet*` calls work unchanged.
+
+### What's protected
+
+- All listener metadata: hostnames, ports, URI paths, user-agent strings, headers
+- Pivot SMB pipe names
+- Inline-execute spawn paths (`C:\\Windows\\System32\\notepad.exe`)
+- Sleep/jitter, technique flags, etc.
+
+### What's still visible (intentional or out-of-scope)
+
+- The 32-byte `CONFIG_KEY` and 16-byte `CONFIG_IV` are present in the
+  binary as raw bytes. They don't look like URLs/strings — uniform random.
+  An attacker who locates them, locates the ciphertext, and knows AES-CTR
+  can still decrypt. The bar is now "real RE work" instead of `xxd`.
+- `SERVER_PUBKEY_BLOB` (RSA pubkey, HVC-005) is binary, not human-readable.
+- `HEADER_MASK_SEED` is a 32-bit constant.
+- The DEMON_MAGIC_VALUE (`0xDEADBEEF`) at offsets in the binary is not
+  encrypted (it's part of the wire-protocol header, separate from config).
+
+### Reviewer sign-off
+
+Three independent sub-agent reviews ran in parallel:
+
+- **Developer review**: ✓ Implementation correct. Argument order matches Go signature; demon decrypt block runs before parser; key wipes in place; no DebugDev refs remain.
+- **QA review**: ✓ Security correct. Uses `crypto/rand`, fresh per build, no derivation from constants, key/IV/AESCTX wiped after use, plaintext wipe preserved, length preservation enforced. No regressions in `--debug-strings-only`, `--send-logs`, HVC-003, HVC-005, DEBUG-AUDIT.
+- **Tester review**: ✓ Runtime flow end-to-end clean. Macro expands to valid C array initializer; CTR length preservation confirmed; static-analysis defeat verified (listener strings not in binary).
+
+### Verification
+
+- `go build ./...` clean
+- `go test ./pkg/agent/ ./pkg/common/builder/ ./pkg/common/crypt/` all pass
+- `/tmp/havoc-test --help` shows version 0.8.11 "Veiled Anchor"
+- `--debug-dev` flag no longer registered; `--debug-strings-only` is the only debug build mode
+
+### To revert
+
+1. Remove the HVC-014 block in `builder.go` (encryption + 3 defines)
+2. Restore the original `array := "{...}"` block emitting unencrypted `CONFIG_BYTES`
+3. Remove the decrypt block at top of `Demon.c::DemonConfig()`
+4. Remove `#include <crypt/AesCrypt.h>` from `Demon.c`
+5. Remove `crypt` import and `crypto/rand` import from `builder.go`
+
+---
+
+## DEBUG-DEV-REMOVED — 2026-04-28 — Removed --debug-dev Flag
+
+```
+Status         : Applied (breaking — removed from CLI)
+Files          :
+  teamserver/cmd/cmd.go                       deleted --debug-dev flag registration
+  teamserver/cmd/server/types.go              removed DebugDev from serverFlags
+  teamserver/cmd/server/dispatch.go           removed DebugDev: from BuilderConfig literal
+  teamserver/pkg/common/builder/builder.go    removed DebugDev field, collapsed if/else branches
+  teamserver/pkg/common/builder/builder_test.go  dropped DebugDev: false from fixture
+```
+
+### Reason
+
+The `--debug-dev` mode linked libc into the demon (no `-nostdlib`), routing
+PRINTF through libc's `printf`. As documented in
+`Debug-Build-Instability-Analysis.md` (2026-04-28), this caused VEH-libc
+deadlocks, encrypted-`.rodata` reads from non-main threads, and use-after-free
+on CRT TLS state during sleep obfuscation. Crashes that appeared "random"
+were entirely debug-build artifacts; production builds (no `--debug-dev`)
+ran 7+ hours stably on the same configuration.
+
+`--debug-strings-only` (DEBUG-STRINGS-ONLY, 2026-04-28) replaces it: keeps
+`-nostdlib`, routes PRINTF through `LogToConsole` (dynamic vsnprintf +
+WriteConsoleA), produces production-equivalent stable demons WITH debug logs.
+There is no remaining use case for `--debug-dev`.
+
+### Migration
+
+Operators using `--debug-dev` must switch to `--debug-strings-only`. The
+output format is identical (`[DEBUG::Function::Line]` prefix), just routed
+through a different output mechanism.
+
+---
+
+## DEBUG-AUDIT-FIX — 2026-04-28 — Revert Macros to Compound-Statement Form
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/common/Macros.h    do/while(0) → { ... } compound statement
+```
+
+### Problem
+
+The DEBUG-AUDIT change converted `PRINTF` / `PUTS` / `PRINT_HEX` macros from
+brace-enclosed compound statements (`{ ... }` / `{ ; }`) to `do { ... } while ( 0 )`
+form. While `do/while(0)` is the textbook-correct macro idiom in isolation, it
+**requires a trailing semicolon at the call site** to be a complete statement.
+
+The Demon codebase calls these macros throughout WITHOUT trailing semicolons:
+
+```c
+PRINTF( "...", x )           /* no semicolon */
+PUTS( "msg" )                /* no semicolon */
+case X: PUTS( "y" ) { ... }  /* statement followed by block */
+```
+
+With `do/while(0)` and no trailing `;`, the compiler sees `do { } while ( 0 )`
+glued to the next token (e.g. `if (...)`, `Instance->...`, `}`), producing
+"expected ';'" cascades that broke compilation across **every** demon source
+file (Command.c, ObfTimer.c, Win32.c, Package.c, Demon.c, Token.c, Inject.c, etc.).
+
+### Fix
+
+Reverted all macro forms to brace-enclosed compound statements:
+- DEBUG branches: `{ printf(...); }` / `{ DemonPrintf(...); }` / `{ LogToConsole(...); }` / `{ DbgPrint(...); }`
+- Production no-op branches: `{ ; }` for PRINTF/PUTS, `{}` for PRINT_HEX
+- `PRINT_HEX` body: `{ ... for-loop ... }`
+
+Compound-statement form is a complete statement on its own and works
+regardless of whether the call site adds `;`. This is the form the codebase
+was originally written against.
+
+The production-safety contract is unchanged: when `DEBUG` is undefined, the
+macros expand to `{ ; }` / `{}` no-ops that GCC eliminates at every `-O` level.
+The post-build `[DEBUG::` audit (DEBUG-AUDIT) still runs.
+
+### Why this regression slipped through
+
+The Go-side build passed cleanly because Go doesn't preprocess C macros. The
+clang-on-macOS diagnostics were treated as spurious noise (Windows headers
+unavailable). Only the actual MinGW cross-compile by the teamserver caught the
+issue. Lesson: any change to `Macros.h` should be validated by triggering an
+actual demon build.
+
+---
+
+## HVC-003-PROFILE — 2026-04-28 — Profile-Driven HeaderMaskSeed
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/profile/config.go            ServerProfile.HeaderMaskSeed (optional string)
+  teamserver/pkg/agent/commands.go            const → var; HeaderMaskSeedDefault constant added
+  teamserver/pkg/agent/agent.go               int(HeaderMaskSeed) cast in ParseHeader
+  teamserver/pkg/agent/smb_framing_test.go    TestSmbFramingDefault (was TestSmbFramingConstant)
+  teamserver/cmd/server/teamserver.go         parse + apply seed in FindSystemPackages, log on --debug
+  teamserver/pkg/common/builder/builder.go    inject -DHEADER_MASK_SEED=0x...U into every Demon build
+  payloads/Demon/include/common/Defines.h     #ifndef guard around fallback HEADER_MASK_SEED
+  profiles/havoc.yaotl                        commented example showing how to set the seed
+```
+
+### Goal
+
+Allow operators to change the per-packet XOR mask seed (`HeaderMaskSeed`,
+introduced by HVC-003) via the YAOTL profile instead of editing source code.
+The teamserver propagates the value to every Demon payload built that session
+so wire format stays consistent on both ends.
+
+### Profile syntax
+
+In `profiles/havoc.yaotl` under the `Teamserver` block (optional):
+
+```yaotl
+Teamserver {
+    Host = "0.0.0.0"
+    Port = 40056
+
+    HeaderMaskSeed = "0xC0FFEEEE"   # or "3221225966" (decimal also accepted)
+
+    Build { ... }
+}
+```
+
+Accepts hex (`0x...`) or decimal. Must fit in 32 bits and be non-zero (zero
+would disable header obfuscation entirely). When omitted, the default
+`0xA3F1C2B4` is used — preserving wire-format compatibility with previous
+builds.
+
+### How the value flows through the system
+
+1. **Profile parse** — `ServerProfile.HeaderMaskSeed string` is populated from
+   YAOTL by the existing yaotl gohcl decoder.
+
+2. **Runtime apply** — `FindSystemPackages` (called early in teamserver init)
+   parses the string with `strconv.ParseUint(raw, 0, 32)` (base 0 auto-detects
+   hex prefix), validates non-zero, and assigns to `agent.HeaderMaskSeed`.
+   Bad input or zero value falls back to `HeaderMaskSeedDefault` with an error log.
+
+3. **Demon compile** — Every payload build appends
+   `-DHEADER_MASK_SEED=0x<value>U` to the compiler defines, reading the active
+   `agent.HeaderMaskSeed`. The `U` suffix forces an unsigned 32-bit literal so
+   GCC doesn't emit `-Wnarrowing` warnings on the high bit.
+
+4. **Demon override** — `payloads/Demon/include/common/Defines.h` now wraps the
+   default in `#ifndef HEADER_MASK_SEED ... #endif`, so the compile-time
+   `-D...` flag overrides the header default. All existing call sites in
+   `Package.c`, `Pivot.c`, `Command.c`, `TransportSmb.c` continue to use
+   `HEADER_MASK_SEED` unchanged.
+
+### Debug logging (enabled by --debug)
+
+When the teamserver is started with `--debug`, the following lines appear:
+
+```
+[INF] HeaderMaskSeed: profile override applied = 0xC0FFEEEE          # if profile sets it
+[DBG] HeaderMaskSeed: using default = 0xA3F1C2B4 (no profile override) # if profile omits it
+[DBG] HeaderMaskSeed: active value = 0x<value> (decimal <value>)       # always
+[DBG] Builder: HEADER_MASK_SEED define = 0x<value>                     # on each payload build
+```
+
+The `[DBG]` lines are gated by `--debug` (the existing `logger.SetDebug(true)`
+toggle in `cmd/server.go`), so they only appear when the operator explicitly
+asks for debug-level visibility.
+
+### Type-conversion details
+
+The teamserver constant was previously an untyped `const` (`HeaderMaskSeed = 0xA3F1C2B4`),
+which Go silently coerced to whatever integer type was needed at the use site.
+With the var conversion to a typed `uint32`, one call site needed an explicit
+cast: `agent.go:205` now reads `Header.Size^int(HeaderMaskSeed)` because
+`Header.Size` is `int` and `Parser.XorMaskNextBytes` takes `int`.
+
+### Verification
+
+- `go build ./...` clean
+- `go test ./pkg/agent/ ./pkg/common/builder/ ./pkg/common/crypt/` all pass
+- `TestSmbFramingDefault` confirms the default still equals the C-side fallback (0xA3F1C2B4)
+- All other `TestSmbFraming*` tests still pass against the runtime variable
+
+### To revert
+
+1. Convert `agent.HeaderMaskSeed` back to a `const`
+2. Remove `HeaderMaskSeed` field from `ServerProfile`
+3. Remove the parse/apply block from `FindSystemPackages`
+4. Remove the `-DHEADER_MASK_SEED=...` append from `builder.go`
+5. Remove the `#ifndef HEADER_MASK_SEED` guard in `Defines.h`
+6. Remove the example comment block from `profiles/havoc.yaotl`
+7. Restore `int(HeaderMaskSeed)` → `HeaderMaskSeed` in `agent.go:205`
+
+---
+
 ## DEBUG-STRINGS-ONLY — 2026-04-28 — Production-Equivalent Debug Logging
 
 ```

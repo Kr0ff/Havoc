@@ -197,6 +197,9 @@ type Agent struct {
 
 	/* general value. leave it... */
 	BackgroundCheck bool
+
+	// Operator-editable notes stored in the DB and sent to clients on connect.
+	Notes string
 }
 
 type AgentInfo struct {

@@ -79,6 +79,7 @@ namespace HavocNamespace::Util::Packager
         extern const int ReceiveCommand;
         extern const int MarkAs;
         extern const int Remove;
+        extern const int History;
     }
 
     namespace Service
@@ -93,6 +94,12 @@ namespace HavocNamespace::Util::Packager
         extern const int Type;
         extern const int Logger;
         extern const int Profile;
+    }
+
+    namespace Note
+    {
+        extern const int Type;
+        extern const int Set;
     }
 }
 

@@ -13,12 +13,20 @@ namespace HavocNamespace::UserInterface::Widgets
         QLabel*      label;
         QLabel*      label_2;
 
+        QTabWidget*  TabWidget;
+        QWidget*     ConsoleContainer;
+        QWidget*     NotesContainer;
+        QGridLayout* ConsoleLayout;
+        QGridLayout* NotesLayout;
+        QTimer*      NotesSaveTimer;
+
     public:
         QWidget*                    DemonInteractedWidget;
         HavocSpace::DemonCommands*  DemonCommands;
         QString                     TeamserverName;
         Util::SessionItem           SessionInfo;
         QTextEdit*                  Console;
+        QTextEdit*                  Notes;
         QCompleter*                 CommandCompleter;
         QStringList                 CompleterCommands;
         QString                     AgentTypeName = "Demon";
@@ -57,6 +65,7 @@ namespace HavocNamespace::UserInterface::Widgets
 
     private slots:
         void AppendFromInput();
+        void SaveNotes();
 
     };
 }

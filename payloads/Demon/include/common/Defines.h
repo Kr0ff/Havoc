@@ -18,8 +18,16 @@
  * obfuscates the plaintext outer header fields (bytes 4-19: magic, agent ID,
  * command ID, request ID) before wire transmission. The mask is derived as
  * SIZE ^ HEADER_MASK_SEED so it varies per packet. Must match HeaderMaskSeed
- * in teamserver/pkg/agent/commands.go. */
+ * in teamserver/pkg/agent/commands.go.
+ *
+ * The teamserver's builder.go injects -DHEADER_MASK_SEED=0x... reading the
+ * value from `Teamserver { HeaderMaskSeed = "..." }` in the profile. When
+ * unspecified the default 0xA3F1C2B4 is used, kept in sync with the
+ * teamserver's HeaderMaskSeedDefault constant. The #ifndef guard below lets
+ * the compile-time define override this header. */
+#ifndef HEADER_MASK_SEED
 #define HEADER_MASK_SEED  0xA3F1C2B4
+#endif
 
 #define WIN_VERSION_UNKNOWN 0
 #define WIN_VERSION_XP      1

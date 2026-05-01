@@ -32,6 +32,13 @@ std::vector<DemonCommands::Command_t> DemonCommands::DemonCommandList = {
             NO_SUBCOMMANDS
         },
         {
+            .CommandString  = "note",
+            .Description    = "set operator note for this agent",
+            .Usage          = "[text]",
+            .Example        = "this is a test agent",
+            NO_SUBCOMMANDS
+        },
+        {
             .CommandString  = "job",
             .Description    = "job manager",
             .Module         = true,

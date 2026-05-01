@@ -42,11 +42,21 @@
  * DEBUG MACROS — production-safety contract
  * ─────────────────────────────────────────────────────────────────────────
  * INVARIANT: When DEBUG is not defined (production builds), every macro
- * below MUST expand to a do/while(0) no-op. This guarantees:
+ * below MUST expand to a brace-enclosed compound statement no-op. This
+ * guarantees:
  *   1. Zero call to printf / DbgPrint / DemonPrintf / LogToConsole / puts
  *   2. Zero "[DEBUG::" format-string literal in the compiled binary
  *   3. Zero linkage dependency on libc stdio (printf/puts)
- *   4. The macros remain valid single statements (`if (x) PUTS("y");` works)
+ *
+ * IMPORTANT — call-site convention: throughout the demon codebase, these
+ * macros are invoked WITHOUT a trailing semicolon, e.g.
+ *     PRINTF( "hello %d\n", x )
+ *     PUTS( "ok" )
+ * which is why the macro body MUST be a brace-enclosed compound statement
+ * `{ ... }` and NOT a `do { ... } while (0)` (the latter requires a `;` at
+ * the call site to be a complete statement). Compound-statement form is a
+ * complete statement on its own and works regardless of whether the call
+ * site adds a `;`.
  *
  * Teamserver flags that control these macros:
  *   --debug-dev           → -DDEBUG, libc linked, PRINTF→printf (UNSTABLE)
@@ -57,9 +67,6 @@
  * VERIFICATION: After a release build (no --debug-dev / --debug-strings-only),
  * the builder runs `strings` against the produced binary and fails if any
  * `[DEBUG::` marker appears. See verifyNoDebugStringsInBinary() in builder.go.
- *
- * If you add a new debug-output macro, follow the same pattern: define the
- * verbose form under #ifdef DEBUG, and a do/while(0) no-op for the #else.
  * ───────────────────────────────────────────────────────────────────────── */
 /* Forward declarations for the debug-output helpers. Each is defined under
  * its own guard in Win32.c — see DemonPrintf / LogToConsole there. */
@@ -73,70 +80,67 @@ VOID LogToConsole( LPCSTR fmt, ... );
 
 #ifdef DEBUG
 #if SEND_LOGS
-#define PRINTF( f, ... )                do { DemonPrintf( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
-#define PRINTF_DONT_SEND( f, ... )      do { } while ( 0 )
+#define PRINTF( f, ... )                { DemonPrintf( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
+#define PRINTF_DONT_SEND( f, ... )      { ; }
 #elif SVC_EXE
-#define PRINTF( f, ... )                do { DbgPrint( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
-#define PRINTF_DONT_SEND( f, ... )      do { DbgPrint( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
+#define PRINTF( f, ... )                { DbgPrint( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
+#define PRINTF_DONT_SEND( f, ... )      { DbgPrint( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
 #elif defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)
 /* No libc available — route through LogToConsole which uses dynamically
  * resolved Instance->Win32.vsnprintf and WriteConsoleA. */
-#define PRINTF( f, ... )                do { LogToConsole( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
-#define PRINTF_DONT_SEND( f, ... )      do { LogToConsole( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
+#define PRINTF( f, ... )                { LogToConsole( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
+#define PRINTF_DONT_SEND( f, ... )      { LogToConsole( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
 #else
-#define PRINTF( f, ... )                do { printf( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
-#define PRINTF_DONT_SEND( f, ... )      do { printf( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); } while ( 0 )
+#define PRINTF( f, ... )                { printf( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
+#define PRINTF_DONT_SEND( f, ... )      { printf( "[DEBUG::%s::%d] " f, __FUNCTION__, __LINE__, __VA_ARGS__ ); }
 #endif
 #else
-/* Production: stripped to a do/while(0) no-op. The compiler eliminates the
- * empty loop at every -O level. The format string and arguments after the
- * first one are never evaluated and never appear in the compiled binary. */
-#define PRINTF( f, ... )                do { } while ( 0 )
-#define PRINTF_DONT_SEND( f, ... )      do { } while ( 0 )
+/* Production: brace-enclosed empty statement. No call, no string literal. */
+#define PRINTF( f, ... )                { ; }
+#define PRINTF_DONT_SEND( f, ... )      { ; }
 #endif
 
 #ifdef DEBUG
 #if SEND_LOGS
-#define PUTS( s )           do { DemonPrintf( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
-#define PUTS_DONT_SEND( s ) do { } while ( 0 )
+#define PUTS( s )           { DemonPrintf( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
+#define PUTS_DONT_SEND( s ) { ; }
 #elif SVC_EXE
-#define PUTS( s )           do { DbgPrint( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
-#define PUTS_DONT_SEND( s ) do { DbgPrint( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
+#define PUTS( s )           { DbgPrint( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
+#define PUTS_DONT_SEND( s ) { DbgPrint( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
 #elif defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)
-#define PUTS( s )           do { LogToConsole( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
-#define PUTS_DONT_SEND( s ) do { LogToConsole( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
+#define PUTS( s )           { LogToConsole( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
+#define PUTS_DONT_SEND( s ) { LogToConsole( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
 #else
-#define PUTS( s )           do { printf( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
-#define PUTS_DONT_SEND( s ) do { printf( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); } while ( 0 )
+#define PUTS( s )           { printf( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
+#define PUTS_DONT_SEND( s ) { printf( "[DEBUG::%s::%d] %s\n", __FUNCTION__, __LINE__, s ); }
 #endif
 #else
-/* Production: stripped to a do/while(0) no-op. */
-#define PUTS( s )           do { } while ( 0 )
-#define PUTS_DONT_SEND( s ) do { } while ( 0 )
+#define PUTS( s )           { ; }
+#define PUTS_DONT_SEND( s ) { ; }
 #endif
 
 #ifdef DEBUG
 #if defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)
-/* No libc available — emit hex dump via LogToConsole one chunk at a time. */
+/* No libc available — emit hex dump via LogToConsole one chunk at a time.
+ * Wrapped in an inner block so the for-loop scope is contained. */
 #define PRINT_HEX( b, l )                                                       \
-    do {                                                                        \
+    {                                                                           \
         LogToConsole( #b ": [%d] [ ", (int)(l) );                               \
         for ( int _ph_i = 0; _ph_i < (l); _ph_i++ )                             \
             LogToConsole( "%02x ", ( ( PUCHAR ) (b) ) [ _ph_i ] );              \
         LogToConsole( "]\n" );                                                  \
-    } while ( 0 )
+    }
 #else
 #define PRINT_HEX( b, l )                                       \
-    do {                                                        \
+    {                                                           \
         printf( #b ": [%d] [ ", l );                            \
         for ( int _ph_i = 0; _ph_i < (l); _ph_i++ )             \
             printf( "%02x ", ( ( PUCHAR ) (b) ) [ _ph_i ] );    \
         puts( "]" );                                            \
-    } while ( 0 )
+    }
 #endif
 #else
-/* Production: stripped to a do/while(0) no-op. */
-#define PRINT_HEX( b, l ) do { } while ( 0 )
+#define PRINT_HEX( b, l ) {}
 #endif
 
 #endif

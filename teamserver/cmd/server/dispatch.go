@@ -18,8 +18,43 @@ import (
 	"Havoc/pkg/packager"
 )
 
+// addCommandHistory writes a dispatched command line to the DB history table.
+func (t *Teamserver) addCommandHistory(agentIDHex, cmdLine string) {
+	agentIDInt, err := strconv.ParseInt(agentIDHex, 16, 64)
+	if err != nil {
+		return
+	}
+	_ = t.DB.AgentAddHistory(int(agentIDInt), time.Now().UTC().Format("02/01/2006 15:04:05"), cmdLine, "")
+}
+
 func (t *Teamserver) DispatchEvent(pk packager.Package) {
 	switch pk.Head.Event {
+
+	case packager.Type.Note.Type:
+		switch pk.Body.SubEvent {
+		case packager.Type.Note.Set:
+			agentIDHex, ok := pk.Body.Info["AgentID"].(string)
+			if !ok {
+				return
+			}
+			notes, _ := pk.Body.Info["Notes"].(string)
+
+			agentIDInt, err := strconv.ParseInt(agentIDHex, 16, 64)
+			if err != nil {
+				return
+			}
+			if err := t.DB.AgentSetNotes(int(agentIDInt), notes); err != nil {
+				logger.Error("AgentSetNotes: " + err.Error())
+			}
+			// Update the in-memory agent so newly connecting clients get current notes.
+			for _, a := range t.Agents.Agents {
+				if a.NameID == agentIDHex {
+					a.Notes = notes
+					break
+				}
+			}
+		}
+		return
 
 	case packager.Type.Session.Type:
 
@@ -80,6 +115,11 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 								t.EventAppend(pk)
 								t.EventBroadcast("", pk)
+
+								// Persist task messages for history replay on reconnect.
+								if agentIDInt, err := strconv.ParseInt(AgentID, 16, 64); err == nil {
+									_ = t.DB.AgentAddHistory(int(agentIDInt), time.Now().UTC().Format("02/01/2006 15:04:05"), "", string(out))
+								}
 							}
 						)
 
@@ -89,6 +129,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 								// TODO: move to own function.
 								logr.LogrInstance.AddAgentInput("Demon", pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+								t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 
 								if pk.Head.OneTime == "true" {
 									return
@@ -125,6 +166,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 								// TODO: move to own function.
 								logr.LogrInstance.AddAgentInput("Demon", pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+								t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 
 								var Command = pk.Body.Info["Command"].(string)
 
@@ -201,9 +243,10 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 									if t.Agents.Agents[i].Pivots.Parent != nil {
 										logr.LogrInstance.AddAgentInput("Demon", t.Agents.Agents[i].NameID, pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
-
+										t.addCommandHistory(t.Agents.Agents[i].NameID, pk.Body.Info["CommandLine"].(string))
 									} else {
 										logr.LogrInstance.AddAgentInput("Demon", pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+										t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 									}
 
 									if pk.Head.OneTime == "true" {
@@ -288,6 +331,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 									// log agent input
 									logr.LogrInstance.AddAgentInput(a.Name, pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+									t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 								}
 
 							}
@@ -847,12 +891,11 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					}
 
 					var PayloadBuilder = builder.NewBuilder(builder.BuilderConfig{
-						Compiler64:       t.Settings.Compiler64,
-						Compiler86:       t.Settings.Compiler32,
-						Nasm:             t.Settings.Nasm,
-						DebugDev:         t.Flags.Server.DebugDev,
-						DebugStringsOnly: t.Flags.Server.DebugStringsOnly,
-						SendLogs:         t.Flags.Server.SendLogs,
+						Compiler64: t.Settings.Compiler64,
+						Compiler86: t.Settings.Compiler32,
+						Nasm:       t.Settings.Nasm,
+						DebugDev:   t.Flags.Server.DebugDev,
+						SendLogs:   t.Flags.Server.SendLogs,
 					})
 
 					PayloadBuilder.ClientId = ClientID
