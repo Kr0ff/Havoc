@@ -9,7 +9,6 @@
 
   <img src="assets/Screenshots/FullSessionGraph.jpeg" width="90%" /><br />
   <img src="assets/Screenshots/MultiUserAgentControl.png" width="90%" /><br />
-
 </div>
 
 ### Quick Start
@@ -159,10 +158,6 @@ base64(
 - [Modules](https://github.com/HavocFramework/Modules)
 
 ---
-
-### Community
-
-You can join the official [Havoc Discord](https://discord.gg/z3PF3NRDE5) to chat with the community!
 
 ### Note
 
