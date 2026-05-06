@@ -17,6 +17,59 @@ Description and rationale.
 
 ---
 
+## HVC-017 — 2026-05-01 — Extension-Kit Havoc Python API Port
+
+```
+Status         : Applied
+Files          :
+  Extension-Kit/havoc/utils.py        NEW — shared utilities: bof_pack, get_arch, read_file, parse_flags
+  Extension-Kit/havoc/sal.py          NEW — SAL-BOF: 13 commands + privcheck (13 subs)
+  Extension-Kit/havoc/sar.py          NEW — SAR-BOF: smartscan, taskhound, quser, nbtscan
+  Extension-Kit/havoc/process.py      NEW — Process-BOF: findobj (2 subs), process (1 sub), procfreeze (2 subs)
+  Extension-Kit/havoc/postex.py       NEW — PostEx-BOF: firewallrule (1 sub), screenshot_bof, sauroneye
+  Extension-Kit/havoc/inject.py       NEW — Injection-BOF: inject-cfg, inject-sec, inject-poolparty, inject-32to64
+  Extension-Kit/havoc/elevate.py      NEW — Elevation-BOF: getsystem (1 sub), uacbybass (2 subs), potato-dcom, potato-print
+  Extension-Kit/havoc/lateral.py      NEW — LateralMovement-BOF: jump (2 subs), invoke (2 subs), token (2 subs), runas-user, runas-session
+  Extension-Kit/havoc/execution.py    NEW — Execution-BOF: execute-assembly, noconsolation (27-param BOF)
+  Extension-Kit/havoc/creds.py        NEW — Creds-BOF: askcreds, get-netntlm, hashdump, lsadump_*, underlaycopy, cookie-monster, nanodump (4 variants)
+  Extension-Kit/havoc/ad.py           NEW — AD-BOF: adwssearch, badtakeover, dcsync (2 subs), ldapsearch, ldapq, readlaps, webdav (2 subs),
+                                             certi (5 subs), kerbeus (16 subs), ldap (51 subs), mssql (28 subs), relay-informer (4 subs)
+  Extension-Kit/havoc/load_all.py     NEW — loader: import all modules in one script for the Havoc script manager
+---
+Port all Extension-Kit BOF extensions from AdaptixC2 AXS format to Havoc Python API.
+
+The Extension-Kit ships BOF source code for use with AdaptixC2 via .axs scripts.
+Each .axs file contains JavaScript that packs BOF arguments using ax.bof_pack() and
+dispatches them via ax.execute_alias(). This change translates every command into
+equivalent Havoc Python callbacks registered with havoc.RegisterCommand() /
+havoc.RegisterModule().
+
+Key design decisions:
+- utils.py provides bof_pack() matching the exact Beacon Object File wire format
+  (4-byte LE total length prefix, then sequential args in the BOF-standard encoding).
+  get_arch() maps Havoc's demon.ProcessArch ("x86"/"x64") to BOF filename suffixes
+  ("x32"/"x64"), with the known exception inject_32to64 which uses ".x86.o".
+- parse_flags() handles flag-value pairs and boolean flags from the raw token list
+  that Havoc's Python dispatcher passes to callbacks.
+- All callbacks return a non-None string on success (Havoc's Python API requirement)
+  and None after writing to demon.CONSOLE_ERROR on validation failure.
+- Three-level AXS hierarchies are flattened to the two-level module+command hierarchy
+  that Havoc's RegisterModule/RegisterCommand supports.
+- Kerbeus-BOF uses a single cstr arg (the entire param string in /key:value format)
+  matching the BOF's BeaconDataExtract call.
+- nanodump_ppl_dump and nanodump_ppl_medic read a companion .dll file from the _bin/
+  directory and pass its bytes as the first or last "bytes" argument.
+- The mssql CLR command reads a DLL from disk, converts to hex string (no bytes type),
+  and passes the hex alongside a required SHA-512 hash.
+- LDAP-BOF commands implement _is_dn() to replicate AXS identifyInputType() which
+  determines whether a target argument is a DN (int=1) or a plain name (int=0).
+
+Prerequisites: BOF source must be compiled with `make` in each Extension-Kit
+subdirectory using MinGW cross-compilers before the Python wrappers can dispatch tasks.
+```
+
+---
+
 ## HVC-016 — 2026-05-01 — Console History Persistence on Reconnect — v0.9.1 "Eclipse Anchor"
 
 ```
