@@ -24,6 +24,7 @@ public:
 
     void Init( int argc, char** argv );
     void Start();
+    void Reconnect();
 
     static void Exit();
 };

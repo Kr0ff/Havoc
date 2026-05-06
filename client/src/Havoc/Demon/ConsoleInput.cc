@@ -4,6 +4,9 @@
 #include <UserInterface/Widgets/DemonInteracted.h>
 #include <Util/ColorText.h>
 #include <Havoc/Packager.hpp>
+#include <Havoc/Connector.hpp>
+#include <UserInterface/Widgets/SessionTable.hpp>
+#include <UserInterface/Widgets/TeamserverTabSession.h>
 
 #include <sstream>
 #include <vector>
@@ -610,6 +613,41 @@ auto DemonCommands::DispatchCommand( bool Send, QString TaskID, const QString& c
             CommandInputList[ TaskID ] = commandline;
             SEND( Execute.Checkin( TaskID ) )
         }
+        else if ( InputCommands[ 0 ].compare( "note" ) == 0 )
+        {
+            if ( InputCommands.size() < 2 ) {
+                CONSOLE_ERROR( "Usage: note [text]" );
+                return false;
+            }
+
+            auto noteText = JoinAtIndex( InputCommands, 1 );
+
+            DemonConsole->SessionInfo.Notes = noteText;
+            DemonConsole->Notes->blockSignals( true );
+            DemonConsole->Notes->setPlainText( noteText );
+            DemonConsole->Notes->blockSignals( false );
+
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( DemonID, 10, noteText );
+
+            for ( auto& session : HavocX::Teamserver.Sessions ) {
+                if ( session.Name == DemonID ) {
+                    session.Notes = noteText;
+                    break;
+                }
+            }
+
+            Util::Packager::Package pkg;
+            pkg.Head.Event = Util::Packager::Note::Type;
+            pkg.Head.User  = HavocX::Teamserver.User.toStdString();
+            pkg.Head.Time  = CurrentTime().toStdString();
+            pkg.Body.SubEvent          = Util::Packager::Note::Set;
+            pkg.Body.Info[ "AgentID" ] = DemonID.toStdString();
+            pkg.Body.Info[ "Notes" ]   = noteText.toStdString();
+            HavocX::Connector->SendPackage( &pkg );
+
+            DemonConsole->Console->append( Util::ColorText::Cyan( "[*]" ) + " Note set for agent " + DemonID );
+            return true;
+        }
         else if ( InputCommands[ 0 ].compare( "task" ) == 0 )
         {
             if ( InputCommands.size() == 1 )
@@ -631,6 +669,19 @@ auto DemonCommands::DispatchCommand( bool Send, QString TaskID, const QString& c
                 CommandInputList[ TaskID ] = commandline;
 
                 SEND( Execute.Task( TaskID, "task::clear" ) );
+            }
+            else if ( InputCommands[ 1 ].compare( "cancel" ) == 0 )
+            {
+                if ( InputCommands.size() < 3 )
+                {
+                    CONSOLE_ERROR( "Usage: task cancel <id|all>" )
+                    return false;
+                }
+
+                TaskID = DemonConsole->TaskInfo( Send, nullptr, "Tasked teamserver to cancel task: " + InputCommands[ 2 ] );
+                CommandInputList[ TaskID ] = commandline;
+
+                SEND( Execute.Task( TaskID, "task::cancel::" + InputCommands[ 2 ] ) );
             }
             else
             {

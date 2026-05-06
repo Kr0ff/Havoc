@@ -2,6 +2,7 @@
 #include <random>
 
 #include <Havoc/Connector.hpp>
+#include <Util/ThemeManager.hpp>
 
 #include <QFileDialog>
 
@@ -9,8 +10,8 @@ using namespace std;
 using namespace HavocNamespace;
 using namespace HavocNamespace::HavocSpace;
 
-string HavocNamespace::Version  = "0.7";
-string HavocNamespace::CodeName = "Bites The Dust";
+string HavocNamespace::Version  = "1.6";
+string HavocNamespace::CodeName = "Eclipse Anchor";
 
 // Global Variables in the Havoc Namespace
 HavocSpace::Havoc* HavocNamespace::HavocApplication;
@@ -43,7 +44,7 @@ void Util::SessionItem::Export()
 {
     auto FileDialog = QFileDialog();
     auto Filename   = QUrl();
-    auto Style      = FileRead( ":/stylesheets/Dialogs/FileDialog" ).toStdString();
+    auto Style      = ThemeManager::Instance().Stylesheet( "Dialogs/FileDialog" ).toStdString();
 
     Style.erase( std::remove( Style.begin(), Style.end(), '\n' ), Style.end() );
 
@@ -95,7 +96,7 @@ void Util::SessionItem::Export()
             messageBox.setWindowTitle( "Session Exported" );
             messageBox.setText( "Path: " + Filename.toString() );
             messageBox.setIcon( QMessageBox::Information );
-            messageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+            messageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
             // messageBox.setMaximumSize( QSize( 500, 500 ) );
             messageBox.exec();
         }

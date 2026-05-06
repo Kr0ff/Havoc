@@ -4,6 +4,7 @@ import "C"
 import (
 	"Havoc/pkg/agent"
 	"Havoc/pkg/common/certs"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/db"
 	"Havoc/pkg/service"
 	"Havoc/pkg/webhook"
@@ -539,7 +540,8 @@ func (t *Teamserver) handleRequest(id string) {
 
 	isExist := false
 	t.Clients.Range(func(key, value any) bool {
-		if client.Username == pk.Head.User {
+		existing := value.(*Client)
+		if existing.Username != "" && existing.Username == pk.Head.User {
 			err := t.SendEvent(id, events.UserAlreadyExits())
 			if err != nil {
 				logger.Error("couldn't send event to client "+colors.Yellow(id)+":", err)
@@ -559,10 +561,7 @@ func (t *Teamserver) handleRequest(id string) {
 		if err != nil {
 			logger.Error("client (" + colors.Red(id) + ") error while sending authenticate message: " + colors.Red(err))
 		}
-		err = client.Connection.Close()
-		if err != nil {
-			logger.Error("Failed to close client (" + id + ") socket")
-		}
+		t.RemoveClient(id)
 		return
 	} else {
 
@@ -816,24 +815,47 @@ func (t *Teamserver) EventRemove(EventID int) []packager.Package {
 }
 
 func (t *Teamserver) SendAllPackagesToNewClient(ClientID string) {
+	// Step 1: Send NewDemon events for all active agents FIRST so that sessions
+	// exist on the client before any output events or history arrive.
+	for _, demon := range t.Agents.Agents {
+		if demon.Active == false {
+			continue
+		}
+		pk := t.EventNewDemon(demon)
+		if err := t.SendEvent(ClientID, pk); err != nil {
+			logger.Error("error sending NewDemon to client("+ClientID+"): ", err)
+			return
+		}
+	}
+
+	// Step 2: Send all non-output cached events (listeners, chat, markers, etc.).
+	// Skip Session.Output events – they are replaced by DB-sourced history below.
 	for _, Package := range t.EventsList {
-		err := t.SendEvent(ClientID, Package)
-		if err != nil {
+		if Package.Head.Event == packager.Type.Session.Type &&
+			Package.Body.SubEvent == packager.Type.Session.Output {
+			continue
+		}
+		if err := t.SendEvent(ClientID, Package); err != nil {
 			logger.Error("error while sending info to client("+ClientID+"): ", err)
 			return
 		}
 	}
 
-	// send all the agents that are alive right now to the new client
+	// Step 3: Replay DB-sourced console history for every active agent so
+	// that the operator sees the full console on reconnect even after a
+	// server restart (where EventsList is empty).
 	for _, demon := range t.Agents.Agents {
-		if demon.Active == false {
+		agentIDInt, err := strconv.ParseInt(demon.NameID, 16, 64)
+		if err != nil {
 			continue
 		}
-
-		pk := t.EventNewDemon(demon)
-		err := t.SendEvent(ClientID, pk)
-		if err != nil {
-			logger.Error("error while sending info to client("+ClientID+"): ", err)
+		entries, err := t.DB.AgentGetHistory(int(agentIDInt))
+		if err != nil || len(entries) == 0 {
+			continue
+		}
+		histPk := events.Demons.DemonHistory(demon.NameID, entries)
+		if err := t.SendEvent(ClientID, histPk); err != nil {
+			logger.Error("error sending history to client("+ClientID+"): ", err)
 			return
 		}
 	}
@@ -926,6 +948,44 @@ func (t *Teamserver) FindSystemPackages() bool {
 		colors.Blue(t.Settings.Compiler32),
 		colors.Blue(t.Settings.Nasm),
 	))
+
+	// [HVC-005 2026-03-28] Generate or load the RSA-2048 key pair used to wrap
+	// the Demon session key on registration.  The private key is stored at
+	// data/havoc.rsa; the public key blob is embedded into each payload build.
+	rsaKeyPath := utils.GetTeamserverPath() + "/data/havoc.rsa"
+	var rsaErr error
+	t.RSAPrivateKey, t.RSAPublicKeyBlob, rsaErr = crypt.GenerateOrLoadRSAKeyPair(rsaKeyPath)
+	if rsaErr != nil {
+		logger.Error("HVC-005: failed to initialise RSA key pair: " + rsaErr.Error())
+		return false
+	}
+	logger.Info("HVC-005: RSA-2048 key pair ready (" + rsaKeyPath + ")")
+
+	// [HVC-003 + profile-driven seed] Apply the HeaderMaskSeed override from the
+	// Teamserver profile block, if present. The same value is propagated to the
+	// Demon at compile time via -DHEADER_MASK_SEED=... in builder.go, so wire
+	// format stays consistent. Default value is HeaderMaskSeedDefault (0xA3F1C2B4).
+	if t.Profile.Config.Server != nil && len(t.Profile.Config.Server.HeaderMaskSeed) > 0 {
+		raw := strings.TrimSpace(t.Profile.Config.Server.HeaderMaskSeed)
+		// strconv.ParseUint with base 0 auto-detects "0x..." prefix vs decimal.
+		parsed, parseErr := strconv.ParseUint(raw, 0, 32)
+		if parseErr != nil {
+			logger.Error(fmt.Sprintf("HeaderMaskSeed parse failed (%q): %s — falling back to default 0x%08X",
+				raw, parseErr.Error(), agent.HeaderMaskSeedDefault))
+		} else if parsed == 0 {
+			logger.Error(fmt.Sprintf("HeaderMaskSeed = 0 is invalid (would disable header obfuscation) — falling back to default 0x%08X",
+				agent.HeaderMaskSeedDefault))
+		} else {
+			agent.HeaderMaskSeed = uint32(parsed)
+			logger.Info(fmt.Sprintf("HeaderMaskSeed: profile override applied = 0x%08X", agent.HeaderMaskSeed))
+		}
+	} else {
+		logger.Debug(fmt.Sprintf("HeaderMaskSeed: using default = 0x%08X (no profile override)", agent.HeaderMaskSeed))
+	}
+	// Always emit the active seed at debug level so --debug terminal output
+	// shows the value that the teamserver and every payload built this session
+	// will use on the wire.
+	logger.Debug(fmt.Sprintf("HeaderMaskSeed: active value = 0x%08X (decimal %d)", agent.HeaderMaskSeed, agent.HeaderMaskSeed))
 
 	return true
 }

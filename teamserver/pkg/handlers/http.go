@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	//"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -10,11 +12,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"fmt"
 
 	"Havoc/pkg/colors"
-	"Havoc/pkg/common/certs"
 	"Havoc/pkg/common"
+	"Havoc/pkg/common/certs"
 	"Havoc/pkg/logger"
 	"Havoc/pkg/logr"
 
@@ -86,7 +87,6 @@ func (h *HTTP) fake404(ctx *gin.Context) {
 	}
 	ctx.Header("Server", "nginx")
 	ctx.Header("Content-Type", "text/html")
-	ctx.Header("X-Havoc", "true")
 	ctx.Writer.Write(html)
 }
 
@@ -99,6 +99,15 @@ func (h *HTTP) request(ctx *gin.Context) {
 		logger.Debug("Error while reading request: " + err.Error())
 	}
 
+	// [HVC-002 2026-03-26] Decode base64-encoded body sent by the Demon.
+	// An invalid base64 body is treated as an unrecognised request. See TrafficImprovements.md §2.
+	Body, err = base64.StdEncoding.DecodeString(string(Body))
+	if err != nil {
+		logger.Warn("failed to base64-decode agent request body: " + err.Error())
+		h.fake404(ctx)
+		return
+	}
+
 	if h.Config.BehindRedir {
 		ExternalIP = ctx.Request.Header.Get("X-Forwarded-For")
 	} else {
@@ -106,14 +115,14 @@ func (h *HTTP) request(ctx *gin.Context) {
 	}
 
 	/*
-	logger.Debug("POST " + ctx.Request.RequestURI)
-	logger.Debug("Host: " + ctx.Request.Host)
-	for name, values := range ctx.Request.Header {
-		for _, value := range values {
-			logger.Debug(name + ": " + value)
+		logger.Debug("POST " + ctx.Request.RequestURI)
+		logger.Debug("Host: " + ctx.Request.Host)
+		for name, values := range ctx.Request.Header {
+			for _, value := range values {
+				logger.Debug(name + ": " + value)
+			}
 		}
-	}
-	logger.Debug("\n" + hex.Dump(Body))
+		logger.Debug("\n" + hex.Dump(Body))
 	*/
 
 	// check that the headers defined on the profile are present
@@ -147,7 +156,7 @@ func (h *HTTP) request(ctx *gin.Context) {
 	}
 
 	// check that the URI is defined on the profile
-	if len(h.Config.Uris) > 0 && ! (len(h.Config.Uris) == 1 && h.Config.Uris[0] == "") {
+	if len(h.Config.Uris) > 0 && !(len(h.Config.Uris) == 1 && h.Config.Uris[0] == "") {
 		valid = false
 		for _, Uri := range h.Config.Uris {
 			if ctx.Request.RequestURI == Uri {
@@ -184,7 +193,9 @@ func (h *HTTP) request(ctx *gin.Context) {
 	}
 
 	if Response, Success := parseAgentRequest(h.Teamserver, Body, ExternalIP); Success {
-		_, err := ctx.Writer.Write(Response.Bytes())
+		// [HVC-002 2026-03-26] Base64-encode the response before writing it to the wire.
+		encoded := base64.StdEncoding.EncodeToString(Response.Bytes())
+		_, err := ctx.Writer.Write([]byte(encoded))
 		if err != nil {
 			logger.Debug("Failed to write to request: " + err.Error())
 			h.fake404(ctx)

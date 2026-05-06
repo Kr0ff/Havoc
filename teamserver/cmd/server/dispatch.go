@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +18,43 @@ import (
 	"Havoc/pkg/packager"
 )
 
+// addCommandHistory writes a dispatched command line to the DB history table.
+func (t *Teamserver) addCommandHistory(agentIDHex, cmdLine string) {
+	agentIDInt, err := strconv.ParseInt(agentIDHex, 16, 64)
+	if err != nil {
+		return
+	}
+	_ = t.DB.AgentAddHistory(int(agentIDInt), time.Now().UTC().Format("02/01/2006 15:04:05"), cmdLine, "")
+}
+
 func (t *Teamserver) DispatchEvent(pk packager.Package) {
 	switch pk.Head.Event {
+
+	case packager.Type.Note.Type:
+		switch pk.Body.SubEvent {
+		case packager.Type.Note.Set:
+			agentIDHex, ok := pk.Body.Info["AgentID"].(string)
+			if !ok {
+				return
+			}
+			notes, _ := pk.Body.Info["Notes"].(string)
+
+			agentIDInt, err := strconv.ParseInt(agentIDHex, 16, 64)
+			if err != nil {
+				return
+			}
+			if err := t.DB.AgentSetNotes(int(agentIDInt), notes); err != nil {
+				logger.Error("AgentSetNotes: " + err.Error())
+			}
+			// Update the in-memory agent so newly connecting clients get current notes.
+			for _, a := range t.Agents.Agents {
+				if a.NameID == agentIDHex {
+					a.Notes = notes
+					break
+				}
+			}
+		}
+		return
 
 	case packager.Type.Session.Type:
 
@@ -79,6 +115,11 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 								t.EventAppend(pk)
 								t.EventBroadcast("", pk)
+
+								// Persist task messages for history replay on reconnect.
+								if agentIDInt, err := strconv.ParseInt(AgentID, 16, 64); err == nil {
+									_ = t.DB.AgentAddHistory(int(agentIDInt), time.Now().UTC().Format("02/01/2006 15:04:05"), "", string(out))
+								}
 							}
 						)
 
@@ -88,6 +129,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 								// TODO: move to own function.
 								logr.LogrInstance.AddAgentInput("Demon", pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+								t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 
 								if pk.Head.OneTime == "true" {
 									return
@@ -124,6 +166,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 								// TODO: move to own function.
 								logr.LogrInstance.AddAgentInput("Demon", pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+								t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 
 								var Command = pk.Body.Info["Command"].(string)
 
@@ -200,9 +243,10 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 									if t.Agents.Agents[i].Pivots.Parent != nil {
 										logr.LogrInstance.AddAgentInput("Demon", t.Agents.Agents[i].NameID, pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
-
+										t.addCommandHistory(t.Agents.Agents[i].NameID, pk.Body.Info["CommandLine"].(string))
 									} else {
 										logr.LogrInstance.AddAgentInput("Demon", pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+										t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 									}
 
 									if pk.Head.OneTime == "true" {
@@ -287,6 +331,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 									// log agent input
 									logr.LogrInstance.AddAgentInput(a.Name, pk.Body.Info["DemonID"].(string), pk.Head.User, pk.Body.Info["TaskID"].(string), pk.Body.Info["CommandLine"].(string), time.Now().UTC().Format("02/01/2006 15:04:05"))
+									t.addCommandHistory(pk.Body.Info["DemonID"].(string), pk.Body.Info["CommandLine"].(string))
 								}
 
 							}
@@ -912,10 +957,16 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						PayloadBuilder.SetPatchConfig(t.Profile.Config.Demon.Binary)
 					}
 
+					// [HVC-005 2026-03-28] Embed the RSA public key blob into the payload.
+					if len(t.RSAPublicKeyBlob) > 0 {
+						PayloadBuilder.SetRSAPublicKey(t.RSAPublicKeyBlob)
+					}
+
 					if PayloadBuilder.Build() {
 						pal := PayloadBuilder.GetPayloadBytes()
 						if len(pal) > 0 {
-							err := t.SendEvent(PayloadBuilder.ClientId, events.Gate.SendStageless("demon"+Ext, pal))
+							payloadFileName := buildDemonFileName(ConfigMap, Arch, Format, ListenerName, t.Flags.Server.Profile)
+							err := t.SendEvent(PayloadBuilder.ClientId, events.Gate.SendStageless(payloadFileName, pal))
 							if err != nil {
 								logger.Error("Error while sending event: " + err.Error())
 								return
@@ -950,4 +1001,69 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 			}
 		}
 	}
+}
+
+// buildDemonFileName constructs a descriptive payload filename.
+// Format: demon-<arch>-<sleepobf>-<proxyloading>-<profile>.<arch>.<ext>
+func buildDemonFileName(configMap map[string]any, arch, format, _, profilePath string) string {
+	// Normalise a config value into a short, filesystem-safe token.
+	shortName := func(val string) string {
+		val = strings.ToLower(strings.TrimSpace(val))
+		val = strings.ReplaceAll(val, " ", "-")
+		// strip parenthesised suffixes like "None (LdrLoadDll)" -> "none"
+		if idx := strings.Index(val, "("); idx > 0 {
+			val = strings.TrimRight(val[:idx], "- ")
+		}
+		if val == "" {
+			val = "unknown"
+		}
+		return val
+	}
+
+	// Architecture tag
+	archTag := strings.ToLower(strings.TrimSpace(arch))
+	if archTag == "" {
+		archTag = "x64"
+	}
+
+	// Sleep obfuscation technique
+	sleepObf := "none"
+	if val, ok := configMap["Sleep Technique"].(string); ok && len(val) > 0 {
+		sleepObf = shortName(val)
+	}
+
+	// Proxy loading technique
+	proxyLoad := "none"
+	if val, ok := configMap["Proxy Loading"].(string); ok && len(val) > 0 {
+		proxyLoad = shortName(val)
+	}
+
+	// Profile name: base name without extension
+	profileName := "default"
+	if profilePath != "" {
+		base := filepath.Base(profilePath)
+		ext := filepath.Ext(base)
+		if ext != "" {
+			base = base[:len(base)-len(ext)]
+		}
+		if base != "" {
+			profileName = strings.ToLower(base)
+		}
+	}
+
+	// File extension from format
+	var ext string
+	switch format {
+	case "Windows Exe", "Windows Service Exe":
+		ext = ".exe"
+	case "Windows Dll", "Windows Reflective Dll":
+		ext = ".dll"
+	case "Windows Shellcode":
+		ext = ".bin"
+	default:
+		ext = ".bin"
+	}
+
+	// demon-<arch>-<sleepobf>-<proxyloading>-<profile>.<ext>
+	return fmt.Sprintf("demon-%s-%s-%s-%s%s", archTag, sleepObf, proxyLoad, profileName, ext)
 }

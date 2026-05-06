@@ -79,6 +79,7 @@ type (
 			Output     int
 			Remove     int
 			MarkAsDead int
+			History    int
 		}
 
 		Gate struct {
@@ -114,6 +115,11 @@ type (
 			Type    int
 			Log     int
 			Profile int
+		}
+
+		Note struct {
+			Type int
+			Set  int
 		}
 	}
 )
@@ -199,6 +205,7 @@ var Type = Types{
 		Output     int
 		Remove     int
 		MarkAsDead int
+		History    int
 	}{
 		Type:       0x7,
 		NewSession: 0x1,
@@ -206,6 +213,7 @@ var Type = Types{
 		Input:      0x3,
 		Output:     0x4,
 		MarkAsDead: 0x5,
+		History:    0x6,
 	},
 
 	Gate: struct {
@@ -255,4 +263,9 @@ var Type = Types{
 		Log     int
 		Profile int
 	}{Type: 0x10, Log: 0x1, Profile: 0x2},
+
+	Note: struct {
+		Type int
+		Set  int
+	}{Type: 0x8, Set: 0x1},
 }

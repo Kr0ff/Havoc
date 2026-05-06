@@ -37,7 +37,7 @@ func (db *DB) AgentAdd(agent *agent.Agent) error {
 	}
 
 	/* prepare some arguments to execute for the sqlite db */
-	stmt, err := db.db.Prepare("INSERT INTO TS_Agents ( AgentID, Active, Reason, AESKey, AESIv, Hostname, Username, DomainName, ExternalIP, InternalIP, ProcessName, BaseAddress, ProcessPID, ProcessTID, ProcessPPID, ProcessArch, Elevated, OSVersion, OSArch, SleepDelay, SleepJitter, KillDate, WorkingHours, FirstCallIn, LastCallIn) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+	stmt, err := db.db.Prepare("INSERT INTO TS_Agents ( AgentID, Active, Reason, AESKey, AESIv, Hostname, Username, DomainName, ExternalIP, InternalIP, ProcessName, BaseAddress, ProcessPID, ProcessTID, ProcessPPID, ProcessArch, Elevated, OSVersion, OSArch, SleepDelay, SleepJitter, KillDate, WorkingHours, FirstCallIn, LastCallIn, Notes) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,8 @@ func (db *DB) AgentAdd(agent *agent.Agent) error {
 		agent.Info.KillDate,
 		agent.Info.WorkingHours,
 		agent.Info.FirstCallIn,
-		agent.Info.LastCallIn)
+		agent.Info.LastCallIn,
+		agent.Notes)
 	if err != nil {
 		return err
 	}
@@ -208,11 +209,68 @@ func (db *DB) AgentRemove(AgentID int) error {
 }
 
 
+func (db *DB) AgentSetNotes(AgentID int, notes string) error {
+	stmt, err := db.db.Prepare("UPDATE TS_Agents SET Notes = ? WHERE AgentID = ?")
+	if err != nil {
+		return err
+	}
+	_, err = stmt.Exec(notes, AgentID)
+	stmt.Close()
+	return err
+}
+
+func (db *DB) AgentGetNotes(AgentID int) (string, error) {
+	var notes string
+	row := db.db.QueryRow("SELECT COALESCE(Notes,'') FROM TS_Agents WHERE AgentID = ?", AgentID)
+	err := row.Scan(&notes)
+	return notes, err
+}
+
+func (db *DB) AgentAddHistory(AgentID int, timeStr, cmdLine, output string) error {
+	stmt, err := db.db.Prepare("INSERT INTO TS_AgentHistory (AgentID, Time, CommandLine, Output) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	_, err = stmt.Exec(AgentID, timeStr, cmdLine, output)
+	stmt.Close()
+	return err
+}
+
+// HistoryEntry represents a single console history row for an agent.
+type HistoryEntry struct {
+	ID          int64
+	Time        string
+	CommandLine string
+	Output      string // full JSON string (what MessageOutput expects, not base64)
+}
+
+// AgentGetHistory returns all console history for the given AgentID ordered by insertion.
+func (db *DB) AgentGetHistory(AgentID int) ([]HistoryEntry, error) {
+	rows, err := db.db.Query(
+		"SELECT ID, Time, CommandLine, Output FROM TS_AgentHistory WHERE AgentID = ? ORDER BY ID ASC",
+		AgentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []HistoryEntry
+	for rows.Next() {
+		var e HistoryEntry
+		if err := rows.Scan(&e.ID, &e.Time, &e.CommandLine, &e.Output); err != nil {
+			return entries, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
 func (db *DB) AgentAll() []*agent.Agent {
 
 	var Agents []*agent.Agent
 
-	query, err := db.db.Query("SELECT AgentID, Active, Reason, AESKey, AESIv, Hostname, Username, DomainName, ExternalIP, InternalIP, ProcessName, BaseAddress, ProcessPID, ProcessTID, ProcessPPID, ProcessArch, Elevated, OSVersion, OSArch, SleepDelay, SleepJitter, KillDate, WorkingHours, FirstCallIn, LastCallIn FROM TS_Agents WHERE Active = 1")
+	query, err := db.db.Query("SELECT AgentID, Active, Reason, AESKey, AESIv, Hostname, Username, DomainName, ExternalIP, InternalIP, ProcessName, BaseAddress, ProcessPID, ProcessTID, ProcessPPID, ProcessArch, Elevated, OSVersion, OSArch, SleepDelay, SleepJitter, KillDate, WorkingHours, FirstCallIn, LastCallIn, COALESCE(Notes,'') FROM TS_Agents WHERE Active = 1")
 	if err != nil {
 		return nil
 	}
@@ -246,10 +304,11 @@ func (db *DB) AgentAll() []*agent.Agent {
 			WorkingHours int32
 			FirstCallIn string
 			LastCallIn string
+			Notes string
 		)
 
 		/* read the selected items */
-		err = query.Scan(&AgentID, &Active, &Reason, &AESKey, &AESIv, &Hostname, &Username, &DomainName, &ExternalIP, &InternalIP, &ProcessName, &BaseAddress, &ProcessPID, &ProcessTID, &ProcessPPID, &ProcessArch, &Elevated, &OSVersion, &OSArch, &SleepDelay, &SleepJitter, &KillDate, &WorkingHours, &FirstCallIn, &LastCallIn)
+		err = query.Scan(&AgentID, &Active, &Reason, &AESKey, &AESIv, &Hostname, &Username, &DomainName, &ExternalIP, &InternalIP, &ProcessName, &BaseAddress, &ProcessPID, &ProcessTID, &ProcessPPID, &ProcessArch, &Elevated, &OSVersion, &OSArch, &SleepDelay, &SleepJitter, &KillDate, &WorkingHours, &FirstCallIn, &LastCallIn, &Notes)
 		if err != nil {
 			/* at this point we failed
 			 * just return the collected agents */
@@ -301,6 +360,7 @@ func (db *DB) AgentAll() []*agent.Agent {
 		Agent.Info.WorkingHours = WorkingHours
 		Agent.Info.FirstCallIn  = FirstCallIn
 		Agent.Info.LastCallIn   = LastCallIn
+		Agent.Notes             = Notes
 
 		/* append collected agent to agent array */
 		Agents = append(Agents, Agent)

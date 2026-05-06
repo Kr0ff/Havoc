@@ -7,6 +7,7 @@ import (
 	"Havoc/pkg/profile"
 	"Havoc/pkg/service"
 	"Havoc/pkg/webhook"
+	"crypto/rsa"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -94,4 +95,11 @@ type Teamserver struct {
 		Compiler32 string
 		Nasm       string
 	}
+
+	// [HVC-005 2026-03-28] RSA-2048 key pair used for registration key wrapping.
+	// RSAPrivateKey is used server-side to decrypt the wrapped AES session key.
+	// RSAPublicKeyBlob is the BCRYPT_RSAPUBLIC_BLOB (283 bytes) embedded into
+	// each Demon payload as the SERVER_PUBKEY_BLOB compiler define.
+	RSAPrivateKey    *rsa.PrivateKey
+	RSAPublicKeyBlob []byte
 }

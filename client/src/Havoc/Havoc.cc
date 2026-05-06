@@ -90,6 +90,20 @@ void HavocSpace::Havoc::Start()
     this->HavocMainWindow->show();
 }
 
+void HavocSpace::Havoc::Reconnect()
+{
+    auto Connect = new HavocNamespace::UserInterface::Dialogs::Connect;
+
+    Connect->TeamserverList = dbManager->listTeamservers();
+    Connect->passDB( this->dbManager );
+    Connect->setupUi( new QDialog );
+
+    // fromAction=true so that closing without connecting does not exit.
+    HavocX::Teamserver = Connect->StartDialog( true );
+
+    delete Connect;
+}
+
 void HavocSpace::Havoc::Exit()
 {
     spdlog::critical( "Exit Program" );

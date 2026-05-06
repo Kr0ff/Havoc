@@ -5,6 +5,34 @@
 
 #define DEMON_MAX_REQUEST_LENGTH 0x300000 // 3 MiB
 
+/* [ISSUE-5] SMB fragment header size:
+ * FragID(4) + SeqNum(4) + TotalFrags(4) + OrigCmdID(4) + OrigReqID(4) = 20 bytes.
+ * Max data per fragment chunk so the assembled fragment package stays safely
+ * below the PIPE_BUFFER_MAX when wrapped in PackageTransmitAll's outer frame
+ * (header 20 + IV 16 + cmd+req+size 12 + frag header 20 + HMAC 32 = 100 overhead). */
+#define SMB_FRAG_HEADER_SIZE    ( sizeof( UINT32 ) * 5 )
+#define SMB_FRAG_MAX_DATA       ( PIPE_BUFFER_MAX / 2 )
+
+/* Interlocked spinlock macros for protecting Instance->Packages.
+ * Uses GCC __sync_lock_test_and_set / __sync_lock_release built-ins
+ * which compile to XCHG / MOV+MFENCE on x86 — no headers needed,
+ * no kernel32 dependency, safe on uninitialised threads.
+ *
+ * Usage:
+ *   PACKAGES_LOCK();
+ *   ... manipulate Instance->Packages ...
+ *   PACKAGES_UNLOCK();
+ */
+#define PACKAGES_LOCK()   do { \
+    while ( __sync_lock_test_and_set( &Instance->PackagesLock, 1 ) != 0 ) { \
+        __asm__ volatile ( "pause" ::: "memory" ); \
+    } \
+} while (0)
+
+#define PACKAGES_UNLOCK() do { \
+    __sync_lock_release( &Instance->PackagesLock ); \
+} while (0)
+
 typedef struct _PACKAGE {
     UINT32  RequestID;
     UINT32  CommandID;

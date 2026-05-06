@@ -38,4 +38,12 @@ typedef struct _SLEEP_PARAM
 
 VOID SleepObf( );
 
+#ifdef SLEEPOBF_USE_FOLIAGE
+VOID FoliageObf( IN PSLEEP_PARAM Param );
+#endif
+
+#ifdef SLEEPOBF_USE_TIMER
+BOOL TimerObf( _In_ ULONG TimeOut, _In_ ULONG Method );
+#endif
+
 #endif

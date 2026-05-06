@@ -27,6 +27,7 @@ havoc
 # ignore data directory
 data/
 
+.DS_Store
 # ignore client directories
 client/Build/
 client/Havoc

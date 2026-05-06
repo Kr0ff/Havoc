@@ -1,6 +1,7 @@
 #include <global.hpp>
 
 #include <UserInterface/Dialogs/Listener.hpp>
+#include <Util/ThemeManager.hpp>
 
 #include <QFile>
 #include <QApplication>
@@ -28,7 +29,7 @@ NewListener::NewListener( QDialog* Dialog )
     if ( ListenerDialog->objectName().isEmpty() )
         ListenerDialog->setObjectName( QString::fromUtf8( "ListenerWidget" ) );
 
-    Dialog->setStyleSheet( FileRead( ":/stylesheets/Dialogs/Listener" ) );
+    Dialog->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/Listener" ) );
 
     ListenerDialog->resize( 550, 600 );
 
@@ -269,12 +270,14 @@ NewListener::NewListener( QDialog* Dialog )
     LabelUserName->setEnabled( false );
     LabelPassword->setEnabled( false );
 
-    auto style = QString( "color: #44475a;" );
-    LabelProxyType->setStyleSheet( style );
-    LabelProxyHost->setStyleSheet( style );
-    LabelProxyPort->setStyleSheet( style );
-    LabelUserName->setStyleSheet( style );
-    LabelPassword->setStyleSheet( style );
+    {
+        auto style = QString( "color: " + ThemeManager::Instance().ActiveColors().muted + ";" );
+        LabelProxyType->setStyleSheet( style );
+        LabelProxyHost->setStyleSheet( style );
+        LabelProxyPort->setStyleSheet( style );
+        LabelUserName->setStyleSheet( style );
+        LabelPassword->setStyleSheet( style );
+    }
 
     // Add Pages
     StackWidgetConfigPages->addWidget( PageHTTP );
@@ -950,7 +953,7 @@ void HavocNamespace::UserInterface::Dialogs::NewListener::onProxyEnabled()
     {
         ProxyConfigBox->setEnabled( true );
 
-        auto style = QString( "color: #f8f8f2;" );
+        auto style = QString( "color: " + ThemeManager::Instance().ActiveColors().text + ";" );
         LabelProxyType->setStyleSheet( style );
         LabelProxyHost->setStyleSheet( style );
         LabelProxyPort->setStyleSheet( style );
@@ -971,7 +974,7 @@ void HavocNamespace::UserInterface::Dialogs::NewListener::onProxyEnabled()
     {
         ProxyConfigBox->setEnabled( false );
 
-        auto style = QString( "color: #44475a;" );
+        auto style = QString( "color: " + ThemeManager::Instance().ActiveColors().muted + ";" );
         LabelProxyType->setStyleSheet( style );
         LabelProxyHost->setStyleSheet( style );
         LabelProxyPort->setStyleSheet( style );

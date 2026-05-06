@@ -5,6 +5,7 @@
 #include <Havoc/Packager.hpp>
 #include <Havoc/Connector.hpp>
 #include <Util/ColorText.h>
+#include <Util/ThemeManager.hpp>
 
 #include <QIODevice>
 #include <QFileDialog>
@@ -134,7 +135,7 @@ void Payload::setupUi( QDialog* Dialog )
 
 auto Payload::retranslateUi() -> void
 {
-    PayloadDialog->setStyleSheet( FileRead( ":/stylesheets/Dialogs/BasicDialog" ) );
+    PayloadDialog->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/BasicDialog" ) );
 
     PayloadDialog->setWindowTitle( QCoreApplication::translate( "PayloadDialog", "Payload", nullptr ) );
     OptionsBox->setTitle( QCoreApplication::translate( "PayloadDialog", "Options", nullptr ) );
@@ -183,7 +184,7 @@ auto Payload::retranslateUi() -> void
     LabelAgentType->setText( QCoreApplication::translate( "PayloadDialog", "Agent:", nullptr ) );
     BuildConsoleBox->setTitle( QCoreApplication::translate( "PayloadDialog", "Building Console", nullptr ) );
     BuildConsoleBox->setStyleSheet(
-      "border: 1px solid #282a36;"
+      "border: 1px solid " + ThemeManager::Instance().ActiveColors().panel + ";"
     );
 }
 
@@ -196,7 +197,7 @@ void Payload::buttonGenerate()
         messageBox.setWindowTitle( "Payload Generator Error" );
         messageBox.setText( "No Listener specified/available" );
         messageBox.setIcon( QMessageBox::Critical );
-        messageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+        messageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
         messageBox.setMaximumSize( QSize(500, 500 ) );
         messageBox.exec();
 
@@ -251,7 +252,7 @@ auto Payload::ReceivedImplantAndSave( QString FileName, QByteArray ImplantArray 
 {
     auto FileDialog = QFileDialog();
     auto Filename   = QUrl();
-    auto Style      = FileRead( ":/stylesheets/Dialogs/FileDialog" ).toStdString();
+    auto Style      = ThemeManager::Instance().Stylesheet( "Dialogs/FileDialog" ).toStdString();
 
     Style.erase( std::remove( Style.begin(), Style.end(), '\n' ), Style.end() );
 
@@ -282,7 +283,7 @@ auto Payload::ReceivedImplantAndSave( QString FileName, QByteArray ImplantArray 
             messageBox.setWindowTitle( "Payload Generator" );
             messageBox.setText( "Payload saved under: " + Filename.toString() );
             messageBox.setIcon( QMessageBox::Information );
-            messageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+            messageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
             messageBox.setMaximumSize( QSize(500, 500 ) );
             messageBox.exec();
 
@@ -503,16 +504,16 @@ auto Payload::DefaultConfig() -> void
         Jitter = 0;
     }
 
-    auto SleepObfTechnique       = new QComboBox;
-    auto SleepObfJmpBypass       = new QComboBox;
+    SleepObfTechnique            = new QComboBox;
+    SleepObfJmpBypass            = new QComboBox;
     auto SleepObfSpoofAddress    = new QLineEdit;
     auto ConfigSleepLineEdit     = new QLineEdit( QString::number( DemonConfig[ "Sleep" ].toInt() ) );
     auto ConfigJitterLineEdit    = new QLineEdit( QString::number( Jitter ) );
     auto ConfigIndSyscallCheck   = new QCheckBox;
     auto ConfigInjectAlloc       = new QComboBox;
     auto ConfigInjectExecute     = new QComboBox;
-    auto ConfigStackSpoof        = new QCheckBox;
-    auto ProxyLoading            = new QComboBox;
+    ConfigStackSpoof             = new QCheckBox;
+    ProxyLoading                 = new QComboBox;
     auto AmsiEtwPatch            = new QComboBox;
     auto ConfigSpawn64LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
     auto ConfigSpawn32LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn32" ].toString() );
@@ -521,6 +522,9 @@ auto Payload::DefaultConfig() -> void
     auto DefaultSleepTechnique   = DemonConfig[ "SleepTechnique" ].toString();
     auto DefaultProxyLoading     = DemonConfig[ "ProxyLoading" ].toString();
     auto DefaultAmsiEtwPatching  = DemonConfig[ "AmsiEtwPatching" ].toString();
+    auto DefaultSleepJmpGadget   = DemonConfig[ "SleepJmpGadget" ].toString();
+    auto DefaultInjectAlloc      = DemonConfig[ "ProcessInjection" ].toObject()[ "Alloc" ].toString();
+    auto DefaultInjectExecute    = DemonConfig[ "ProcessInjection" ].toObject()[ "Execute" ].toString();
 
     ConfigSleep->setFlags( Qt::NoItemFlags );
     ConfigJitter->setFlags( Qt::NoItemFlags );
@@ -564,8 +568,21 @@ auto Payload::DefaultConfig() -> void
     ProxyLoading->addItems( QStringList() << "None (LdrLoadDll)" << "RtlRegisterWait" << "RtlCreateTimer" << "RtlQueueWorkItem" );
     AmsiEtwPatch->addItems( QStringList() << "None" << "Hardware breakpoints" );
 
-    ConfigInjectAlloc->setCurrentIndex( 1 );
-    ConfigInjectExecute->setCurrentIndex( 1 );
+    if ( DefaultInjectAlloc == "Win32" )
+        ConfigInjectAlloc->setCurrentIndex( 0 );
+    else
+        ConfigInjectAlloc->setCurrentIndex( 1 );
+
+    if ( DefaultInjectExecute == "Win32" )
+        ConfigInjectExecute->setCurrentIndex( 0 );
+    else
+        ConfigInjectExecute->setCurrentIndex( 1 );
+
+    SleepObfJmpBypass->setCurrentIndex( 0 );
+    if ( DefaultSleepJmpGadget == "jmp rax" )
+        SleepObfJmpBypass->setCurrentIndex( 1 );
+    else if ( DefaultSleepJmpGadget == "jmp rbx" )
+        SleepObfJmpBypass->setCurrentIndex( 2 );
 
     SleepObfTechnique->setCurrentIndex( 0 );
     if ( DefaultSleepTechnique == "WaitForSingleObjectEx" )
@@ -590,7 +607,7 @@ auto Payload::DefaultConfig() -> void
     AmsiEtwPatch->setCurrentIndex( 0 );
     if ( DefaultAmsiEtwPatching == "None" )
         AmsiEtwPatch->setCurrentIndex( 0 );
-    else if ( DefaultAmsiEtwPatching == "Hardware breakpoints" )
+    else if ( DefaultAmsiEtwPatching == "Hardware breakpoints" || DefaultAmsiEtwPatching == "HWBP" )
         AmsiEtwPatch->setCurrentIndex( 1 );
 
     TreeConfig->setItemWidget( ConfigSleep, 1, ConfigSleepLineEdit );
@@ -604,6 +621,22 @@ auto Payload::DefaultConfig() -> void
     TreeConfig->setItemWidget( ConfigSleepStackSpoof,  1, ConfigStackSpoof );
     TreeConfig->setItemWidget( ConfigProxyLoading,     1, ProxyLoading );
     TreeConfig->setItemWidget( ConfigAmsiEtwPatch,     1, AmsiEtwPatch );
+
+    // disable invalid sleep obf option combinations
+    connect( SleepObfTechnique, &QComboBox::currentTextChanged, this, [=, this]( const QString& text ) {
+        bool isTimer = ( text == "Ekko" || text == "Zilean" );
+
+        // JmpGadget: only meaningful for Timer-based (Ekko/Zilean)
+        SleepObfJmpBypass->setEnabled( isTimer );
+        if ( !isTimer ) SleepObfJmpBypass->setCurrentIndex( 0 );
+
+        // Stack Duplication: only meaningful for Timer-based (Ekko/Zilean)
+        ConfigStackSpoof->setEnabled( isTimer );
+        if ( !isTimer ) ConfigStackSpoof->setChecked( false );
+    });
+
+    // emit initial state to set correct disabled state
+    emit SleepObfTechnique->currentTextChanged( SleepObfTechnique->currentText() );
 
     TreeConfig->setItemWidget( ConfigInjectionAlloc,   1, ConfigInjectAlloc );
     TreeConfig->setItemWidget( ConfigInjectionExecute, 1, ConfigInjectExecute );

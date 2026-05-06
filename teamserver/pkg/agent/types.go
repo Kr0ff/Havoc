@@ -4,6 +4,7 @@ import (
 	"sync"
 	"net"
 	"os"
+	"time"
 
 	"Havoc/pkg/common/parser"
 	"Havoc/pkg/packager"
@@ -28,6 +29,10 @@ type Header struct {
 	MagicValue int
 	AgentID    int
 	Data       *parser.Parser
+	// [HVC-007 2026-03-28] Set when the Demon compressed the payload with LZNT1
+	// before AES encryption. Bit 31 of the wire SIZE field carries this flag.
+	// ParseHeader extracts it and strips bit 31 from Size. See TrafficImprovements.md §7.
+	Compressed bool
 }
 
 type ServiceAgentInterface interface {
@@ -66,6 +71,10 @@ type TeamServer interface {
 	ServiceAgentExist(MagicValue int) bool
 
 	GetDotNetPipeTemplate() string
+
+	// [HVC-005 2026-03-28] Decrypt a 256-byte RSA-OAEP-SHA256 ciphertext using
+	// the teamserver's private key, returning the 48-byte AES key material.
+	AgentRSADecrypt(ciphertext []byte) ([]byte, error)
 
 	SendLogs() bool
 }
@@ -135,11 +144,24 @@ type SocksServer struct {
 	Addr   string
 }
 
+// FragmentState holds partially-received fragments for a single fragmented
+// SMB package (COMMAND_PACKAGE_FRAGMENT). Fragments arrive with a shared
+// FragID; once all TotalFrags chunks are collected the original command is
+// reassembled and dispatched.
+type FragmentState struct {
+	TotalFrags uint32
+	OrigCmdID  uint32
+	OrigReqID  uint32
+	Chunks     map[uint32][]byte // SeqNum → chunk data
+	CreatedAt  time.Time
+}
+
 // TODO: maybe change this to type map[string]any instead of struct
 type Agent struct {
 	NameID     string
-	JobQueue   []Job
-	Tasks      []Job
+	JobMtx   sync.Mutex // protects JobQueue and Tasks
+	JobQueue []Job
+	Tasks    []Job
 	SessionDir string
 	Active     bool
 	Reason     string
@@ -160,6 +182,12 @@ type Agent struct {
 	SocksSvr    []*SocksServer
 	SocksSvrMtx sync.Mutex
 
+	// FragmentBuffer collects SMB fragment chunks keyed by FragID.
+	// Protected by FragmentMtx. Entries are cleaned up on reassembly
+	// or after a timeout via FragmentCleanup.
+	FragmentBuffer map[uint32]*FragmentState
+	FragmentMtx    sync.Mutex
+
 	Encryption struct {
 		AESKey []byte
 		AESIv  []byte
@@ -169,6 +197,9 @@ type Agent struct {
 
 	/* general value. leave it... */
 	BackgroundCheck bool
+
+	// Operator-editable notes stored in the DB and sent to clients on connect.
+	Notes string
 }
 
 type AgentInfo struct {

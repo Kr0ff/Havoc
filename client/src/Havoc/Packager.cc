@@ -19,6 +19,7 @@
 #include <QByteArray>
 #include <QJsonArray>
 #include <QDir>
+#include <QTimer>
 
 const int Util::Packager::InitConnection::Type      = 0x1;
 const int Util::Packager::InitConnection::Success   = 0x1;
@@ -49,6 +50,7 @@ const int Util::Packager::Session::Remove           = 0x2;
 const int Util::Packager::Session::SendCommand      = 0x3;
 const int Util::Packager::Session::ReceiveCommand   = 0x4;
 const int Util::Packager::Session::MarkAs           = 0x5;
+const int Util::Packager::Session::History          = 0x6;
 
 const int Util::Packager::Service::Type             = 0x9;
 const int Util::Packager::Service::AgentRegister    = 0x1;
@@ -57,6 +59,9 @@ const int Util::Packager::Service::ListenerRegister = 0x2;
 const int Util::Packager::Teamserver::Type          = 0x10;
 const int Util::Packager::Teamserver::Logger        = 0x1;
 const int Util::Packager::Teamserver::Profile       = 0x2;
+
+const int Util::Packager::Note::Type                = 0x8;
+const int Util::Packager::Note::Set                 = 0x1;
 
 using HavocNamespace::UserInterface::Widgets::ScriptManager;
 
@@ -193,10 +198,16 @@ bool Packager::DispatchInitConnection( Util::Packager::PPackage Package )
 
         case Util::Packager::InitConnection::Error:
         {
-            if ( Package->Body.Info[ "Message" ] == "" ) {
-                MessageBox( "Teamserver Error", QString( "Couldn't connect to Teamserver:" + QString( Package->Body.Info[ "Message" ].c_str() ) ), QMessageBox::Critical );
-            } else {
-                MessageBox( "Teamserver Error", "Couldn't connect to Teamserver", QMessageBox::Critical );
+            auto msg = QString( Package->Body.Info[ "Message" ].c_str() );
+            auto details = msg.isEmpty() ? QString( "Couldn't connect to Teamserver" ) : msg;
+            MessageBox( "Teamserver Error", details, QMessageBox::Critical );
+
+            // If we are still in the initial connection phase, schedule a reconnect
+            // so the operator can retry with correct credentials without restarting.
+            if ( HavocApplication->ClientInitConnect ) {
+                QTimer::singleShot( 0, []() {
+                    HavocApplication->Reconnect();
+                } );
             }
 
             return true;
@@ -611,6 +622,7 @@ bool Packager::DispatchSession( Util::Packager::PPackage Package )
                     .Elevated     = Package->Body.Info[ "Elevated" ].c_str(),
                     .PivotParent  = Package->Body.Info[ "PivotParent" ].c_str(),
                     .Marked       = Package->Body.Info[ "Active" ].c_str(),
+                    .Notes        = Package->Body.Info[ "Notes" ].c_str(),
                     .SleepDelay   = (uint32_t)strtoul(Package->Body.Info[ "SleepDelay" ].c_str(), NULL, 0),
                     .SleepJitter  = (uint32_t)strtoul(Package->Body.Info[ "SleepJitter" ].c_str(), NULL, 0),
                     .KillDate     = (uint64_t)strtoull(Package->Body.Info[ "KillDate" ].c_str(), NULL, 0),
@@ -796,6 +808,64 @@ bool Packager::DispatchSession( Util::Packager::PPackage Package )
 
         case Util::Packager::Session::Remove:
         {
+            break;
+        }
+
+        case Util::Packager::Session::History:
+        {
+            auto DemonID = QString( Package->Body.Info[ "DemonID" ].c_str() );
+
+            for ( auto& Session : HavocX::Teamserver.Sessions )
+            {
+                if ( Session.Name != DemonID )
+                    continue;
+
+                if ( ! Session.InteractedWidget )
+                    break;
+
+                // Decode the outer base64 → JSON array of history entries.
+                auto entriesB64  = QString( Package->Body.Info[ "Entries" ].c_str() );
+                auto entriesJson = QJsonDocument::fromJson( QByteArray::fromBase64( entriesB64.toLocal8Bit() ) );
+
+                if ( ! entriesJson.isArray() )
+                    break;
+
+                Session.InteractedWidget->DemonCommands->OutputDispatch.DemonCommandInstance =
+                    Session.InteractedWidget->DemonCommands;
+
+                for ( const auto& entryVal : entriesJson.array() )
+                {
+                    auto entry   = entryVal.toObject();
+                    auto cmdLine = entry[ "CommandLine" ].toString();
+                    auto outB64  = entry[ "Output" ].toString();
+                    auto entTime = entry[ "Time" ].toString();
+
+                    if ( ! cmdLine.isEmpty() )
+                    {
+                        auto promptLine =
+                            Util::ColorText::Comment( "[" + entTime + "] " ) +
+                            Util::ColorText::UnderlinePink( Session.InteractedWidget->AgentTypeName ) +
+                            Util::ColorText::Cyan( " » " ) +
+                            cmdLine.toHtmlEscaped();
+                        Session.InteractedWidget->AppendRaw( promptLine );
+                    }
+
+                    if ( ! outB64.isEmpty() )
+                    {
+                        // outB64 is base64(full JSON string) — exactly what MessageOutput expects.
+                        Session.InteractedWidget->DemonCommands->OutputDispatch.MessageOutput(
+                            outB64, entTime
+                        );
+                    }
+                }
+
+                Session.InteractedWidget->Console->verticalScrollBar()->setValue(
+                    Session.InteractedWidget->Console->verticalScrollBar()->maximum()
+                );
+
+                break;
+            }
+
             break;
         }
 

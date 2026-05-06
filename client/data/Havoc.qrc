@@ -57,4 +57,89 @@
         <file alias="BasicDialog">../data/stylesheets/Dialogs/BasicDialog.qss</file>
         <file alias="FileDialog">../data/stylesheets/Dialogs/FileDialog.qss</file>
     </qresource>
+
+    <qresource prefix="/themes/Light">
+        <file alias="menubar">../data/themes/Light/menubar.qss</file>
+        <file alias="bottomTab">../data/themes/Light/bottomTab.qss</file>
+        <file alias="MenuStyle">../data/themes/Light/MenuStyle.qss</file>
+        <file alias="teamserverTab">../data/themes/Light/teamserverTab.qss</file>
+        <file alias="Havoc">../data/themes/Light/Havoc.qss</file>
+        <file alias="MessageBox">../data/themes/Light/MessageBox.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/Light/Dialogs">
+        <file alias="Connect">../data/themes/Light/Dialogs/Connect.qss</file>
+        <file alias="Preferences">../data/themes/Light/Dialogs/Preferences.qss</file>
+        <file alias="Listener">../data/themes/Light/Dialogs/Listener.qss</file>
+        <file alias="BasicDialog">../data/themes/Light/Dialogs/BasicDialog.qss</file>
+        <file alias="FileDialog">../data/themes/Light/Dialogs/FileDialog.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/GreenNight">
+        <file alias="menubar">../data/themes/GreenNight/menubar.qss</file>
+        <file alias="bottomTab">../data/themes/GreenNight/bottomTab.qss</file>
+        <file alias="MenuStyle">../data/themes/GreenNight/MenuStyle.qss</file>
+        <file alias="teamserverTab">../data/themes/GreenNight/teamserverTab.qss</file>
+        <file alias="Havoc">../data/themes/GreenNight/Havoc.qss</file>
+        <file alias="MessageBox">../data/themes/GreenNight/MessageBox.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/GreenNight/Dialogs">
+        <file alias="Connect">../data/themes/GreenNight/Dialogs/Connect.qss</file>
+        <file alias="Preferences">../data/themes/GreenNight/Dialogs/Preferences.qss</file>
+        <file alias="Listener">../data/themes/GreenNight/Dialogs/Listener.qss</file>
+        <file alias="BasicDialog">../data/themes/GreenNight/Dialogs/BasicDialog.qss</file>
+        <file alias="FileDialog">../data/themes/GreenNight/Dialogs/FileDialog.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/PinkLady">
+        <file alias="menubar">../data/themes/PinkLady/menubar.qss</file>
+        <file alias="bottomTab">../data/themes/PinkLady/bottomTab.qss</file>
+        <file alias="MenuStyle">../data/themes/PinkLady/MenuStyle.qss</file>
+        <file alias="teamserverTab">../data/themes/PinkLady/teamserverTab.qss</file>
+        <file alias="Havoc">../data/themes/PinkLady/Havoc.qss</file>
+        <file alias="MessageBox">../data/themes/PinkLady/MessageBox.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/PinkLady/Dialogs">
+        <file alias="Connect">../data/themes/PinkLady/Dialogs/Connect.qss</file>
+        <file alias="Preferences">../data/themes/PinkLady/Dialogs/Preferences.qss</file>
+        <file alias="Listener">../data/themes/PinkLady/Dialogs/Listener.qss</file>
+        <file alias="BasicDialog">../data/themes/PinkLady/Dialogs/BasicDialog.qss</file>
+        <file alias="FileDialog">../data/themes/PinkLady/Dialogs/FileDialog.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/Emerald">
+        <file alias="menubar">../data/themes/Emerald/menubar.qss</file>
+        <file alias="bottomTab">../data/themes/Emerald/bottomTab.qss</file>
+        <file alias="MenuStyle">../data/themes/Emerald/MenuStyle.qss</file>
+        <file alias="teamserverTab">../data/themes/Emerald/teamserverTab.qss</file>
+        <file alias="Havoc">../data/themes/Emerald/Havoc.qss</file>
+        <file alias="MessageBox">../data/themes/Emerald/MessageBox.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/Emerald/Dialogs">
+        <file alias="Connect">../data/themes/Emerald/Dialogs/Connect.qss</file>
+        <file alias="Preferences">../data/themes/Emerald/Dialogs/Preferences.qss</file>
+        <file alias="Listener">../data/themes/Emerald/Dialogs/Listener.qss</file>
+        <file alias="BasicDialog">../data/themes/Emerald/Dialogs/BasicDialog.qss</file>
+        <file alias="FileDialog">../data/themes/Emerald/Dialogs/FileDialog.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/DarkBubble">
+        <file alias="menubar">../data/themes/DarkBubble/menubar.qss</file>
+        <file alias="bottomTab">../data/themes/DarkBubble/bottomTab.qss</file>
+        <file alias="MenuStyle">../data/themes/DarkBubble/MenuStyle.qss</file>
+        <file alias="teamserverTab">../data/themes/DarkBubble/teamserverTab.qss</file>
+        <file alias="Havoc">../data/themes/DarkBubble/Havoc.qss</file>
+        <file alias="MessageBox">../data/themes/DarkBubble/MessageBox.qss</file>
+    </qresource>
+
+    <qresource prefix="/themes/DarkBubble/Dialogs">
+        <file alias="Connect">../data/themes/DarkBubble/Dialogs/Connect.qss</file>
+        <file alias="Preferences">../data/themes/DarkBubble/Dialogs/Preferences.qss</file>
+        <file alias="Listener">../data/themes/DarkBubble/Dialogs/Listener.qss</file>
+        <file alias="BasicDialog">../data/themes/DarkBubble/Dialogs/BasicDialog.qss</file>
+        <file alias="FileDialog">../data/themes/DarkBubble/Dialogs/FileDialog.qss</file>
+    </qresource>
 </RCC>

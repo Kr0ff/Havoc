@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/hmac"
 	//"encoding/hex"
 	"fmt"
 	"math/bits"
 
 	"Havoc/pkg/agent"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/common/packer"
 	"Havoc/pkg/common/parser"
 	"Havoc/pkg/logger"
@@ -28,10 +30,73 @@ func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP stri
 		err      error
 	)
 
-	Header, err = agent.ParseHeader(Body)
-	if err != nil {
-		logger.Debug("[Error] Header: " + err.Error())
-		return Response, false
+	// [HVC-006 2026-03-26] For known agents, verify the 32-byte HMAC-SHA256 tag
+	// appended by PackageTransmitAll before processing the packet. Registration
+	// packets (unknown agents) carry no tag and are passed through unchanged.
+	// ParseHeader applies an in-place XOR mask on the provided slice, so a copy
+	// is used for the AgentID probe to keep Body unmodified for the real parse.
+	// See TrafficImprovements.md §6.
+	//
+	// [BUGFIX-004 2026-03-29] Re-registration packets (a known agent sending
+	// DEMON_INIT on reconnect) are transmitted via PackageTransmitNow which does
+	// NOT append an HMAC tag.  Applying the HMAC check to these packets always
+	// fails, blocking reconnects permanently.  Detect DEMON_INIT from the
+	// unmasked CMD field in bodyCopy and skip HMAC verification for those packets.
+	const HmacTagSize = 32
+
+	bodyCopy := make([]byte, len(Body))
+	copy(bodyCopy, Body)
+	scratchHeader, scratchErr := agent.ParseHeader(bodyCopy)
+
+	// Peek at the outer CMD field (bytes 12-15 in bodyCopy, big-endian, already
+	// XOR-unmasked by ParseHeader above).
+	isReRegistration := false
+	if scratchErr == nil && len(bodyCopy) >= 16 {
+		scratchCmd := uint32(bodyCopy[12])<<24 | uint32(bodyCopy[13])<<16 |
+			uint32(bodyCopy[14])<<8 | uint32(bodyCopy[15])
+		isReRegistration = (scratchCmd == uint32(agent.DEMON_INIT))
+	}
+
+	if scratchErr == nil &&
+		scratchHeader.MagicValue == agent.DEMON_MAGIC_VALUE &&
+		Teamserver.AgentExist(scratchHeader.AgentID) &&
+		len(Body) >= HmacTagSize &&
+		!isReRegistration {
+
+		logger.Debug(fmt.Sprintf("parseAgentRequest: known agent %08x, body=%d bytes (payload=%d + tag=%d)",
+			scratchHeader.AgentID, len(Body), len(Body)-HmacTagSize, HmacTagSize))
+
+		payload := Body[:len(Body)-HmacTagSize]
+		tag := Body[len(Body)-HmacTagSize:]
+
+		a := Teamserver.AgentInstance(scratchHeader.AgentID)
+		macKey := crypt.HmacSHA256(a.Encryption.AESKey, []byte("mac"))
+		if !hmac.Equal(crypt.HmacSHA256(macKey, payload), tag) {
+			logger.Warn(fmt.Sprintf("parseAgentRequest: HMAC verification failed for agent %08x — dropping packet", scratchHeader.AgentID))
+			return Response, false
+		}
+
+		logger.Debug(fmt.Sprintf("parseAgentRequest: HMAC verified for agent %08x", scratchHeader.AgentID))
+
+		// Parse header from authenticated payload (without HMAC tag).
+		Header, err = agent.ParseHeader(payload)
+		if err != nil {
+			logger.Debug("[Error] Header: " + err.Error())
+			return Response, false
+		}
+	} else {
+		if scratchErr != nil {
+			logger.Debug(fmt.Sprintf("parseAgentRequest: probe parse failed (%s) — treating as registration, body=%d bytes", scratchErr.Error(), len(Body)))
+		} else {
+			logger.Debug(fmt.Sprintf("parseAgentRequest: unknown agent %08x (magic=%08x) — treating as registration, body=%d bytes",
+				scratchHeader.AgentID, scratchHeader.MagicValue, len(Body)))
+		}
+		// Unknown agent or scratch-parse failure — treat as registration packet.
+		Header, err = agent.ParseHeader(Body)
+		if err != nil {
+			logger.Debug("[Error] Header: " + err.Error())
+			return Response, false
+		}
 	}
 
 	if Header.Data.Length() < 4 {
@@ -72,12 +137,27 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 		Agent = Teamserver.AgentInstance(Header.AgentID)
 		Agent.UpdateLastCallback(Teamserver)
 
+		Agent.JobMtx.Lock()
+		pivotJobCount := 0
+		for _, pj := range Agent.JobQueue {
+			if pj.Command == agent.COMMAND_PIVOT {
+				pivotJobCount++
+			}
+		}
+		queueLen := len(Agent.JobQueue)
+		Agent.JobMtx.Unlock()
+		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x (%s) checkin, data=%d bytes, queue=%d (pivot_jobs=%d)",
+			Header.AgentID, Agent.NameID, Header.Data.Length(), queueLen, pivotJobCount))
+
 		// while we can read a command and request id, parse new packages
 		first_iter := true
 		asked_for_jobs := false
 		for (Header.Data.CanIRead(([]parser.ReadType{parser.ReadInt32, parser.ReadInt32}))) {
 			Command   = uint32(Header.Data.ParseInt32())
 			RequestID = uint32(Header.Data.ParseInt32())
+
+			logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, Command=0x%x RequestID=0x%x (first_iter=%v)",
+				Header.AgentID, Command, RequestID, first_iter))
 
 			/* check if this is a 'reconnect' request */
 			if Command == agent.DEMON_INIT {
@@ -98,21 +178,70 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 
 			if first_iter {
 				first_iter = false
-				// if the message is not a reconnect, decrypt the buffer
-				Header.Data.DecryptBuffer(Agent.Encryption.AESKey, Agent.Encryption.AESIv)
+				// [HVC-004 2026-03-26] Extract the per-request IV (16 bytes) that
+				// Demon prepends between the outer header and the encrypted payload.
+				// See TrafficImprovements.md §4.
+				PacketIV := Header.Data.ParseAtLeastBytes(16)
+				logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, extracted 16-byte IV, decrypting %d bytes",
+					Header.AgentID, Header.Data.Length()))
+				Header.Data.DecryptBuffer(Agent.Encryption.AESKey, PacketIV)
+				logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, decrypted OK, remaining=%d bytes, compressed=%v",
+					Header.AgentID, Header.Data.Length(), Header.Compressed))
+
+				// [HVC-007 2026-03-28] If bit 31 of the wire SIZE was set the Demon
+				// compressed the plaintext payload with LZNT1 before encrypting it.
+				// Decompress now so the rest of the parsing is unchanged.
+				// See TrafficImprovements.md §7.
+				if Header.Compressed {
+					decompressed, err := crypt.DecompressLZNT1(Header.Data.Buffer())
+					if err != nil {
+						// [HVC-007 cascade fix] Decompression failed on an authenticated
+						// packet.  Returning false here causes http.go to send HTTP 404,
+						// which triggers the Demon's transport-error path (PackageTransmitNow
+						// re-registration).  The teamserver then rejects the no-HMAC
+						// registration from a known agent → permanent HMAC loop.
+						// Instead, send an authenticated NOJOB response so the Demon
+						// stays alive and retries on the next sleep interval.
+						logger.Error(fmt.Sprintf("HVC-007: LZNT1 decompression failed for agent %08x: %s — sending NOJOB",
+							Header.AgentID, err.Error()))
+						var NoJob = []agent.Job{{
+							Command: agent.COMMAND_NOJOB,
+							Data:    []interface{}{},
+						}}
+						var Payload = agent.BuildPayloadMessage(NoJob, Agent.Encryption.AESKey, Agent.Encryption.AESIv)
+						_, _ = Response.Write(Payload)
+						return Response, true
+					}
+					Header.Data = parser.NewParser(decompressed)
+					logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, LZNT1 decompressed to %d bytes",
+						Header.AgentID, Header.Data.Length()))
+				}
 			}
 
 			/* The agent is sending us the result of a task */
 			if Command != agent.COMMAND_GET_JOB {
+				logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, dispatching Command=0x%x RequestID=0x%x",
+					Header.AgentID, Command, RequestID))
 				Parser := parser.NewParser(Header.Data.ParseBytes())
 				Agent.TaskDispatch(RequestID, Command, Parser, Teamserver)
 			} else {
+				logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, GET_JOB received", Header.AgentID))
 				asked_for_jobs = true
 			}
 		}
 
-		/* if there is no job then just reply with a COMMAND_NOJOB */
-		if asked_for_jobs == false || len(Agent.JobQueue) == 0 {
+		/* GetQueuedJobs returns nil if the queue is empty.
+		 * In that case, reply with COMMAND_NOJOB. */
+		var job []agent.Job
+		if asked_for_jobs {
+			job = Agent.GetQueuedJobs()
+		}
+
+		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, asked_for_jobs=%v, dequeued=%d",
+			Header.AgentID, asked_for_jobs, len(job)))
+
+		if len(job) == 0 {
+			logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, sending NOJOB", Header.AgentID))
 			var NoJob = []agent.Job{{
 				Command: agent.COMMAND_NOJOB,
 				Data:    []interface{}{},
@@ -127,11 +256,10 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 			}
 
 		} else {
-			/* if there is a job then send the Task Queue */
-			var (
-				job     = Agent.GetQueuedJobs()
-				payload = agent.BuildPayloadMessage(job, Agent.Encryption.AESKey, Agent.Encryption.AESIv)
-			)
+			/* send the single dequeued task (or MEM_FILE group) */
+			var payload = agent.BuildPayloadMessage(job, Agent.Encryption.AESKey, Agent.Encryption.AESIv)
+			logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, sending %d queued job(s), payload=%d bytes",
+				Header.AgentID, len(job), len(payload)))
 
 			// write the response to the buffer
 			_, err = Response.Write(payload)
@@ -259,7 +387,7 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 		}
 
 	} else {
-		logger.Debug("Agent does not exists. hope this is a register request")
+		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x not in registry — treating as registration", Header.AgentID))
 
 		var (
 			Command = Header.Data.ParseInt32()
@@ -267,10 +395,13 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 
 		/* TODO: rework this. */
 		if Command == agent.DEMON_INIT {
+			logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x DEMON_INIT registration request", Header.AgentID))
 			// RequestID, unused on DEMON_INIT
 			Header.Data.ParseInt32()
 
-			Agent = agent.ParseDemonRegisterRequest(Header.AgentID, Header.Data, ExternalIP)
+			// [HVC-005 2026-03-28] Pass the teamserver's RSA decrypt function so
+			// ParseDemonRegisterRequest can unwrap the session key material.
+			Agent = agent.ParseDemonRegisterRequest(Header.AgentID, Header.Data, ExternalIP, Teamserver.AgentRSADecrypt)
 			if Agent == nil {
 				return Response, false
 			}

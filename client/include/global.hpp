@@ -27,6 +27,7 @@
 #include <QTextEdit>
 #include <QTableWidget>
 #include <QTextCodec>
+#include <QTimer>
 
 #include <string>
 #include <map>
@@ -231,6 +232,7 @@ namespace HavocNamespace
             QString PivotParent;
             QString Marked;
             QString Health;
+            QString Notes;
             u32     SleepDelay;
             u32     SleepJitter;
             u64     KillDate;

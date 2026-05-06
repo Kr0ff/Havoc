@@ -34,6 +34,12 @@ type ServerProfile struct {
 	Host  string       `yaotl:"Host"`
 	Port  int          `yaotl:"Port"`
 	Build *BuildConfig `yaotl:"Build,block"`
+
+	// HeaderMaskSeed is the per-packet XOR mask seed (HVC-003). Used by
+	// both the Demon (compile-time -DHEADER_MASK_SEED=...) and the teamserver
+	// (runtime parsing). Optional; defaults to 0xA3F1C2B4 when omitted.
+	// Accepts hex ("0xA3F1C2B4") or decimal ("2750595252"). Must fit in 32 bits.
+	HeaderMaskSeed string `yaotl:"HeaderMaskSeed,optional"`
 	// TODO: add WebSocket server config
 	// Path for Havoc connection
 	// TLS or not
@@ -134,6 +140,8 @@ type Binary struct {
 type ProcessInjectionBlock struct {
 	Spawn64 string `yaotl:"Spawn64,optional"`
 	Spawn32 string `yaotl:"Spawn32,optional"`
+	Alloc   string `yaotl:"Alloc,optional"`
+	Execute string `yaotl:"Execute,optional"`
 }
 
 type Demon struct {
@@ -142,6 +150,7 @@ type Demon struct {
 	IndirectSyscall    bool                   `yaotl:"IndirectSyscall,optional"`
 	StackDuplication   bool                   `yaotl:"StackDuplication,optional"`
 	SleepTechnique     string                 `yaotl:"SleepTechnique,optional"`
+	SleepJmpGadget     string                 `yaotl:"SleepJmpGadget,optional"`
 	ProxyLoading       string                 `yaotl:"ProxyLoading,optional"`
 	AmsiEtwPatching    string                 `yaotl:"AmsiEtwPatching,optional"`
 	ProcessInjection   *ProcessInjectionBlock `yaotl:"Injection,block"`

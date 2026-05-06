@@ -1,6 +1,7 @@
 #include <global.hpp>
 
 #include <Havoc/Havoc.hpp>
+#include <Util/ThemeManager.hpp>
 
 #include <UserInterface/Widgets/SessionGraph.hpp>
 #include <UserInterface/Widgets/DemonInteracted.h>
@@ -90,9 +91,9 @@ void GraphWidget::GraphNodeRemove( SessionItem Session )
             GraphScene->removeItem( NodeList[ i ]->Node->NodeEdge );
             GraphScene->removeItem( NodeList[ i ]->Node );
 
-            NodeList.erase( NodeList.begin() + i );
             MainNode->Node->removeChild( NodeList[ i ]->Node );
-
+            NodeList.erase( NodeList.begin() + i );
+            
             /* delete NodeList[ i ]->Node->NodeEdge;
             delete NodeList[ i ]->Node;
             delete NodeList[ i ]; */
@@ -531,23 +532,7 @@ void Node::contextMenuEvent( QGraphicsSceneContextMenuEvent* event )
     if ( NodeType == NodeItemType::MainNode )
         return;
 
-    auto MenuStyle = QString(
-            "QMenu {"
-            "    background-color: #282a36;"
-            "    color: #f8f8f2;"
-            "    border: 1px solid #44475a;"
-            "}"
-            "QMenu::separator {"
-            "    background: #44475a;"
-            "}"
-            "QMenu::item:selected {"
-            "    background: #44475a;"
-            "}"
-            "QAction {"
-            "    background-color: #282a36;"
-            "    color: #f8f8f2;"
-            "}"
-    );
+    auto MenuStyle = ThemeManager::MenuStyleSheet();
 
     auto Agent     = Util::SessionItem{};
 

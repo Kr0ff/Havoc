@@ -1,9 +1,9 @@
 package parser
 
 import (
-	"encoding/binary"
 	"Havoc/pkg/common"
 	"Havoc/pkg/common/crypt"
+	"encoding/binary"
 )
 
 type ReadType int
@@ -29,35 +29,35 @@ func NewParser(buffer []byte) *Parser {
 }
 
 func (p *Parser) CanIRead(ReadTypes []ReadType) bool {
-	integer   := make([]byte, 4)
-	number    := 0
+	integer := make([]byte, 4)
+	number := 0
 	BytesRead := 0
 	TotalSize := p.Length()
-	
+
 	for _, Type := range ReadTypes {
 		switch Type {
 		case ReadInt32:
-			if TotalSize - BytesRead < 4 {
+			if TotalSize-BytesRead < 4 {
 				return false
 			}
 			BytesRead += 4
 		case ReadInt64:
-			if TotalSize - BytesRead < 8 {
+			if TotalSize-BytesRead < 8 {
 				return false
 			}
 			BytesRead += 8
 		case ReadPointer:
-			if TotalSize - BytesRead < 8 {
+			if TotalSize-BytesRead < 8 {
 				return false
 			}
 			BytesRead += 8
 		case ReadBool:
-			if TotalSize - BytesRead < 4 {
+			if TotalSize-BytesRead < 4 {
 				return false
 			}
 			BytesRead += 4
 		case ReadBytes:
-			if TotalSize - BytesRead < 4 {
+			if TotalSize-BytesRead < 4 {
 				return false
 			}
 			for i := range integer {
@@ -70,7 +70,7 @@ func (p *Parser) CanIRead(ReadTypes []ReadType) bool {
 				number = int(binary.LittleEndian.Uint32(integer))
 			}
 			BytesRead += 4
-			if TotalSize - BytesRead < number {
+			if TotalSize-BytesRead < number {
 				return false
 			}
 			BytesRead += number
@@ -204,4 +204,25 @@ func (p *Parser) Buffer() []byte {
 
 func (p *Parser) DecryptBuffer(AESKey []byte, AESIv []byte) {
 	p.buffer = crypt.XCryptBytesAES256(p.buffer, AESKey, AESIv)
+}
+
+// [HVC-003 2026-03-26] XorMaskNextBytes XORs the next `length` bytes of the
+// buffer in-place with a 4-byte mask applied in big-endian byte order (cycling
+// every 4 bytes). Does not advance the read position — subsequent Parse* calls
+// operate on the unmasked bytes. Used by ParseHeader to reverse the
+// SIZE ^ HEADER_MASK_SEED obfuscation applied by the Demon before transmission.
+// See TrafficImprovements.md §3.
+func (p *Parser) XorMaskNextBytes(mask int, length int) {
+	if length > len(p.buffer) {
+		length = len(p.buffer)
+	}
+	maskBytes := [4]byte{
+		byte(mask >> 24),
+		byte(mask >> 16),
+		byte(mask >> 8),
+		byte(mask),
+	}
+	for i := 0; i < length; i++ {
+		p.buffer[i] ^= maskBytes[i%4]
+	}
 }

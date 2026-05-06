@@ -40,6 +40,11 @@ public:
 
     QTreeWidget*    TreeConfig;
 
+    QComboBox*      SleepObfTechnique = nullptr;
+    QComboBox*      SleepObfJmpBypass = nullptr;
+    QCheckBox*      ConfigStackSpoof  = nullptr;
+    QComboBox*      ProxyLoading      = nullptr;
+
     QLabel*         LabelListener;
     QLabel*         LabelArch;
     QLabel*         LabelFormat;

@@ -43,9 +43,9 @@ client-cleanup:
 	@ rm -rf ./client/cmake-build-debug
 	@ rm -rf ./client/Havoc
 	@ rm -rf ./client/Modules
-
+	
 
 # cleanup target 
 clean: ts-cleanup client-cleanup
-	@ rm -rf ./data/*.db
+	@ rm -rf ./data
 	@ rm -rf payloads/Demon/.idea

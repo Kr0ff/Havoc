@@ -32,6 +32,13 @@ std::vector<DemonCommands::Command_t> DemonCommands::DemonCommandList = {
             NO_SUBCOMMANDS
         },
         {
+            .CommandString  = "note",
+            .Description    = "set operator note for this agent",
+            .Usage          = "[text]",
+            .Example        = "this is a test agent",
+            NO_SUBCOMMANDS
+        },
+        {
             .CommandString  = "job",
             .Description    = "job manager",
             .Module         = true,
@@ -82,6 +89,13 @@ std::vector<DemonCommands::Command_t> DemonCommands::DemonCommandList = {
                     .CommandString  = "clear",
                     .Description    = "clear all commands in task queue",
                     .Behavior       = BEHAVIOR_TEAMSERVER,
+                },
+                {
+                    .CommandString  = "cancel",
+                    .Description    = "cancel a specific task or all tasks",
+                    .Behavior       = BEHAVIOR_TEAMSERVER,
+                    .Usage          = "[id|all]",
+                    .Example        = "all",
                 },
             }
         },

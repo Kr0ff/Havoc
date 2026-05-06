@@ -1,5 +1,6 @@
 #include <global.hpp>
 #include <Havoc/Havoc.hpp>
+#include <Util/ThemeManager.hpp>
 #include <QTimer>
 
 auto main(
@@ -8,6 +9,11 @@ auto main(
 ) -> int {
     auto HavocApp = QApplication( argc, argv );
     auto Status   = 0;
+
+    // Load the selected theme before any widget is constructed, so that
+    // setStyleSheet() calls inside HavocUi::setupUi() and the various
+    // dialogs read from the right source.
+    ThemeManager::Instance().Init();
 
     QGuiApplication::setWindowIcon( QIcon( ":/Havoc.ico" ) );
 

@@ -149,3 +149,13 @@ QTextEdit {
     background: #282a36;
     color: #f8f8f2;
 }
+
+QTreeWidget {
+    background-color: #282a36;
+    color: #f8f8f2;
+    border: 1px solid #44475a;
+}
+
+QTreeWidget::item:selected {
+    background: #44475a;
+}

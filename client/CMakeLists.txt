@@ -33,6 +33,18 @@ include_directories( external/json/include )
 include_directories( external/toml )
 
 ##
+## spdlog bundles fmt 9.1.0 whose consteval guard incorrectly enables
+## FMT_CONSTEVAL=consteval on Apple Clang 15+ (and later) via the
+## __cpp_consteval branch. Apple Clang 15+ applies stricter consteval
+## evaluation rules that fmt 9.x does not satisfy, producing a hard
+## compile error in spdlog/details/fmt_helper.h:91. Defining
+## FMT_CONSTEVAL as empty before the headers are parsed disables
+## compile-time format-string checking (a debug-only feature) while
+## leaving all runtime logging behaviour completely unchanged.
+##
+add_definitions( -DFMT_CONSTEVAL= )
+
+##
 ## find qt packages
 ##
 find_package( Qt${QT_VERSION} COMPONENTS ${REQUIRED_LIBS} REQUIRED )
@@ -112,6 +124,9 @@ set( HAVOC_INCLUDE
         include/UserInterface/Widgets/Store.hpp
 
         include/UserInterface/HavocUI.hpp
+
+        # Util
+        include/Util/ThemeManager.hpp
 )
 
 # src for UI
@@ -152,6 +167,7 @@ set(
         src/Util/ColorText.cpp
         src/Util/Base64.cpp
         src/Util/Base.cpp
+        src/Util/ThemeManager.cpp
 )
 
 # src for Havoc
@@ -197,3 +213,10 @@ target_link_libraries(
     # spdlog::spdlog
     # spdlog::spdlog_header_only
 )
+
+##
+## Unit tests — build with: cmake --build . --target test
+##              or:          ctest --output-on-failure
+##
+enable_testing()
+add_subdirectory( tests )

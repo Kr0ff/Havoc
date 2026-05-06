@@ -69,7 +69,7 @@
    <item row="4" column="1">
     <widget class="QLineEdit" name="lineEdit_PORT">
      <property name="text">
-      <string>5pider</string>
+      <string>kr0ff</string>
      </property>
      <property name="echoMode">
       <enum>QLineEdit::Normal</enum>

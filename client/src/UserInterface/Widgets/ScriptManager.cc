@@ -2,6 +2,7 @@
 #include <UserInterface/Widgets/TeamserverTabSession.h>
 
 #include <Havoc/DBManager/DBManager.hpp>
+#include <Util/ThemeManager.hpp>
 
 #include <QFile>
 #include <QHeaderView>
@@ -12,24 +13,7 @@ using namespace HavocNamespace::UserInterface::Widgets;
 
 void ScriptManager::SetupUi( QWidget *Form )
 {
-    QString MenuStyle = "QMenu {\n"
-                        "    background-color: #282a36;\n"
-                        "    color: #f8f8f2;\n"
-                        "    border: 1px solid #44475a;\n"
-                        "}\n"
-                        "\n"
-                        "QMenu::separator {\n"
-                        "    background: #44475a;\n"
-                        "}\n"
-                        "\n"
-                        "QMenu::item:selected {\n"
-                        "    background: #44475a;\n"
-                        "}\n"
-                        "\n"
-                        "QAction {\n"
-                        "    background-color: #282a36;\n"
-                        "    color: #f8f8f2;\n"
-                        "}";
+    QString MenuStyle = ThemeManager::MenuStyleSheet();
 
 
     this->ScriptManagerWidget = Form;
@@ -156,7 +140,7 @@ void ScriptManager::b_LoadScript()
 {
     auto FileDialog = QFileDialog();
     auto Filename   = QUrl();
-    auto Style      = FileRead( ":/stylesheets/Dialogs/FileDialog" ).toStdString();
+    auto Style      = ThemeManager::Instance().Stylesheet( "Dialogs/FileDialog" ).toStdString();
 
     Style.erase( std::remove( Style.begin(), Style.end(), '\n'), Style.end() );
 
@@ -175,7 +159,7 @@ void ScriptManager::b_LoadScript()
                 messageBox.setWindowTitle( "Failed to import script" );
                 messageBox.setText( "The script " + Filename.toString() + " could not be imported due to an error." );
                 messageBox.setIcon( QMessageBox::Critical );
-                messageBox.setStyleSheet( FileRead( ":/stylesheets/MessageBox" ) );
+                messageBox.setStyleSheet( ThemeManager::Instance().Stylesheet( "MessageBox" ) );
                 // messageBox.setMaximumSize( QSize( 500, 500 ) );
                 messageBox.exec();
             }

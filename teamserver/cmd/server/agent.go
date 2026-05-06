@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"Havoc/pkg/agent"
+	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/events"
 	"Havoc/pkg/packager"
 )
@@ -203,6 +204,13 @@ func (t *Teamserver) AgentConsole(AgentID string, CommandID int, Output map[stri
 
 	t.EventAppend(pk)
 	t.EventBroadcast("", pk)
+
+	// Persist the full JSON payload to history (skip heartbeat callbacks).
+	if CommandID != agent.COMMAND_NOJOB {
+		if agentIDInt, err := strconv.ParseInt(AgentID, 16, 64); err == nil {
+			_ = t.DB.AgentAddHistory(int(agentIDInt), time.Now().UTC().Format("02/01/2006 15:04:05"), "", string(out))
+		}
+	}
 }
 
 func (t *Teamserver) PythonModuleCallback(ClientID string, AgentID string, CommandID int, Output map[string]string) {
@@ -232,6 +240,14 @@ func (t *Teamserver) AgentCallback(DemonID string, Time string) {
 
 func (t *Teamserver) SendLogs() bool {
 	return t.Flags.Server.SendLogs
+}
+
+// AgentRSADecrypt implements agent.TeamServer. It decrypts a 256-byte
+// RSA-OAEP-SHA256 ciphertext using the teamserver's private key and returns
+// the 48-byte AES key material (32-byte key + 16-byte IV).
+// [HVC-005 2026-03-28]
+func (t *Teamserver) AgentRSADecrypt(ciphertext []byte) ([]byte, error) {
+	return crypt.RsaDecryptOAEP(t.RSAPrivateKey, ciphertext)
 }
 
 func (t *Teamserver) GetDotNetPipeTemplate() string {

@@ -2,7 +2,23 @@ package agent
 
 const (
 	DEMON_MAGIC_VALUE = 0xDEADBEEF
+
+	// HeaderMaskSeedDefault is the compile-time default for the per-packet XOR
+	// mask seed. Used when the profile YAOTL does not specify a custom seed.
+	// Must match HEADER_MASK_SEED's default in payloads/Demon/include/common/Defines.h.
+	HeaderMaskSeedDefault uint32 = 0xA3F1C2B4
 )
+
+// [HVC-003 2026-03-26] Runtime seed for the per-packet XOR mask that obfuscates
+// the outer header fields (bytes 4-19: magic, agent ID, command ID, request ID)
+// before wire transmission. The mask is SIZE ^ HeaderMaskSeed so it varies per
+// packet.
+//
+// This is a `var` (not `const`) so it can be overridden at startup from the
+// profile YAOTL `Teamserver { HeaderMaskSeed = "0x..." }` field. The same value
+// is propagated to the Demon at compile time via -DHEADER_MASK_SEED=... in
+// builder.go, so both sides always agree on the wire format.
+var HeaderMaskSeed uint32 = HeaderMaskSeedDefault
 
 const (
 	/*
@@ -51,6 +67,7 @@ const (
 	COMMAND_KERBEROS                = 2550
 	COMMAND_MEM_FILE                = 2560
 	COMMAND_PACKAGE_DROPPED         = 2570
+	COMMAND_PACKAGE_FRAGMENT        = 2580
 
 	DEMON_INFO = 89
 
@@ -151,7 +168,7 @@ const (
 	DEMON_COMMAND_FS_REMOVE   = 5
 	DEMON_COMMAND_FS_MKDIR    = 6
 	DEMON_COMMAND_FS_COPY     = 7
-        DEMON_COMMAND_FS_MOVE     = 8
+	DEMON_COMMAND_FS_MOVE     = 8
 	DEMON_COMMAND_FS_GET_PWD  = 9
 	DEMON_COMMAND_FS_CAT      = 10
 )
@@ -186,11 +203,11 @@ const (
 	SOCKET_COMMAND_SOCKSPROXY_REMOVE = 0x7
 	SOCKET_COMMAND_SOCKSPROXY_CLEAR  = 0x8
 
-	SOCKET_COMMAND_OPEN       = 0x10
-	SOCKET_COMMAND_READ       = 0x11
-	SOCKET_COMMAND_WRITE      = 0x12
-	SOCKET_COMMAND_CLOSE      = 0x13
-	SOCKET_COMMAND_CONNECT    = 0x14
+	SOCKET_COMMAND_OPEN    = 0x10
+	SOCKET_COMMAND_READ    = 0x11
+	SOCKET_COMMAND_WRITE   = 0x12
+	SOCKET_COMMAND_CLOSE   = 0x13
+	SOCKET_COMMAND_CONNECT = 0x14
 
 	SOCKET_TYPE_REVERSE_PORTFWD = 0x1
 	SOCKET_TYPE_REVERSE_PROXY   = 0x2

