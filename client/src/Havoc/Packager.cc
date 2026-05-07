@@ -300,6 +300,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
                     .Endpoint = Package->Body.Info[ "Endpoint" ].c_str(),
                 };
             }
+            else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
+            {
+                ListenerInfo.Info = Listener::DNS {
+                    .ZoneDomain   = Package->Body.Info.count( "ZoneDomain" )   ? Package->Body.Info[ "ZoneDomain" ].c_str()   : "",
+                    .Hosts        = Package->Body.Info.count( "Hosts" )        ? Package->Body.Info[ "Hosts" ].c_str()        : "",
+                    .HostBind     = Package->Body.Info.count( "HostBind" )     ? Package->Body.Info[ "HostBind" ].c_str()     : "",
+                    .Port         = Package->Body.Info.count( "Port" )         ? Package->Body.Info[ "Port" ].c_str()         : "",
+                    .QueryTimeout = Package->Body.Info.count( "QueryTimeout" ) ? Package->Body.Info[ "QueryTimeout" ].c_str() : "",
+                    .ChunkDelayMs = Package->Body.Info.count( "ChunkDelayMs" ) ? Package->Body.Info[ "ChunkDelayMs" ].c_str() : "",
+                };
+            }
             else
             {
                 // We assume it's a service listener.
@@ -435,6 +446,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             {
                 ListenerInfo.Info = Listener::External {
                         .Endpoint = Package->Body.Info[ "Endpoint" ].c_str(),
+                };
+            }
+            else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
+            {
+                ListenerInfo.Info = Listener::DNS {
+                    .ZoneDomain   = Package->Body.Info.count( "ZoneDomain" )   ? Package->Body.Info[ "ZoneDomain" ].c_str()   : "",
+                    .Hosts        = Package->Body.Info.count( "Hosts" )        ? Package->Body.Info[ "Hosts" ].c_str()        : "",
+                    .HostBind     = Package->Body.Info.count( "HostBind" )     ? Package->Body.Info[ "HostBind" ].c_str()     : "",
+                    .Port         = Package->Body.Info.count( "Port" )         ? Package->Body.Info[ "Port" ].c_str()         : "",
+                    .QueryTimeout = Package->Body.Info.count( "QueryTimeout" ) ? Package->Body.Info[ "QueryTimeout" ].c_str() : "",
+                    .ChunkDelayMs = Package->Body.Info.count( "ChunkDelayMs" ) ? Package->Body.Info[ "ChunkDelayMs" ].c_str() : "",
                 };
             }
 

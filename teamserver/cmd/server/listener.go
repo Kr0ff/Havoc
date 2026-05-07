@@ -38,6 +38,10 @@ func (t *Teamserver) ListenerStart(ListenerType int, info any) error {
 		case handlers.LISTENER_EXTERNAL:
 			Name = info.(handlers.ExternalConfig).Name
 			break
+
+		case handlers.LISTENER_DNS:
+			Name = info.(handlers.DNSConfig).Name
+			break
 		}
 
 		if Name == listener.Name {
@@ -97,6 +101,21 @@ func (t *Teamserver) ListenerStart(ListenerType int, info any) error {
 
 		ListenerConfig = ExtConfig
 		ListenerName = info.(handlers.ExternalConfig).Name
+
+		break
+
+	case handlers.LISTENER_DNS:
+		var DNSConfig = handlers.DNS{
+			Config:     info.(handlers.DNSConfig),
+			Teamserver: t,
+		}
+
+		if err := DNSConfig.Start(); err != nil {
+			return err
+		}
+
+		ListenerConfig = &DNSConfig
+		ListenerName = info.(handlers.DNSConfig).Name
 
 		break
 	}
@@ -308,6 +327,22 @@ func (t *Teamserver) ListenerAdd(FromUser string, Type int, Config any) packager
 		Info := structs.Map(Config.(*handlers.External).Config)
 
 		Protocol = handlers.AGENT_EXTERNAL
+		Name = Info["Name"].(string)
+
+		Info["Status"] = "Online"
+
+		delete(Info, "Name")
+
+		/* we get an error just do nothing */
+		ConfigJson, _ = json.Marshal(Info)
+
+		break
+
+	case handlers.LISTENER_DNS:
+
+		Info := structs.Map(Config.(*handlers.DNS).Config)
+
+		Protocol = handlers.AGENT_DNS
 		Name = Info["Name"].(string)
 
 		Info["Status"] = "Online"

@@ -325,6 +325,24 @@ func (t *Teamserver) Start() {
 			}
 		}
 
+		/* Start all DNS listeners */
+		for _, listener := range t.Profile.Config.Listener.ListenerDNS {
+			var HandlerData = handlers.DNSConfig{
+				Name:         listener.Name,
+				Hosts:        listener.Hosts,
+				HostBind:     listener.HostBind,
+				Port:         listener.Port,
+				ZoneDomain:   listener.ZoneDomain,
+				QueryTimeout: listener.QueryTimeout,
+				ChunkDelayMs: listener.ChunkDelayMs,
+			}
+
+			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil {
+				logger.Error("Failed to start DNS listener from profile: " + err.Error())
+				return
+			}
+		}
+
 	}
 
 	if ListenerCount > 0 {

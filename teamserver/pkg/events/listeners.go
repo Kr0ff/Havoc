@@ -89,6 +89,16 @@ func (listeners) ListenerAdd(FromUser string, Type int, Config any) packager.Pac
 		Package.Body.Info["Status"] = "Online"
 
 		break
+
+	case handlers.LISTENER_DNS:
+
+		Package.Body.Info = make(map[string]interface{})
+		Package.Body.Info = structs.Map(Config.(*handlers.DNS).Config)
+
+		Package.Body.Info["Protocol"] = handlers.AGENT_DNS
+		Package.Body.Info["Status"] = "Online"
+
+		break
 	}
 
 	return Package

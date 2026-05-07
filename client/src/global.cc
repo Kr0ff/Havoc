@@ -28,6 +28,7 @@ QString HavocSpace::Listener::PayloadHTTPS    = "Https";
 QString HavocSpace::Listener::PayloadHTTP     = "Http";
 QString HavocSpace::Listener::PayloadSMB      = "Smb";
 QString HavocSpace::Listener::PayloadExternal = "External";
+QString HavocSpace::Listener::PayloadDNS      = "Dns";
 
 std::string Util::gen_random( const int len )
 {

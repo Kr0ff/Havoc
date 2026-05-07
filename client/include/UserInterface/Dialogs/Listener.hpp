@@ -139,6 +139,22 @@ public:
     QLabel*         LabelEndpoint;
     QLineEdit*      InputEndpoint;
 
+    // Page DNS
+    QWidget*        PageDNS;
+    QLabel*         LabelDnsZone;
+    QLineEdit*      InputDnsZone;
+    QLabel*         LabelDnsHosts;
+    QLineEdit*      InputDnsHosts;
+    QLabel*         LabelDnsHostBind;
+    QLineEdit*      InputDnsHostBind;
+    QLabel*         LabelDnsPort;
+    QLineEdit*      InputDnsPort;
+    QLabel*         LabelDnsQueryTimeout;
+    QLineEdit*      InputDnsQueryTimeout;
+    QLabel*         LabelDnsChunkDelay;
+    QLineEdit*      InputDnsChunkDelay;
+    QFormLayout*    formLayout_DNS;
+
 public:
     QDialog* ListenerDialog;
 

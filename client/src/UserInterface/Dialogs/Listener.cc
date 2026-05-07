@@ -279,10 +279,59 @@ NewListener::NewListener( QDialog* Dialog )
         LabelPassword->setStyleSheet( style );
     }
 
+    // =============
+    // ==== DNS ====
+    // =============
+    PageDNS = new QWidget();
+    PageDNS->setObjectName( QString::fromUtf8( "PageDNS" ) );
+    formLayout_DNS = new QFormLayout( PageDNS );
+    formLayout_DNS->setObjectName( QString::fromUtf8( "formLayout_DNS" ) );
+
+    LabelDnsZone         = new QLabel( PageDNS );
+    InputDnsZone         = new QLineEdit( PageDNS );
+    LabelDnsHosts        = new QLabel( PageDNS );
+    InputDnsHosts        = new QLineEdit( PageDNS );
+    LabelDnsHostBind     = new QLabel( PageDNS );
+    InputDnsHostBind     = new QLineEdit( PageDNS );
+    LabelDnsPort         = new QLabel( PageDNS );
+    InputDnsPort         = new QLineEdit( PageDNS );
+    LabelDnsQueryTimeout = new QLabel( PageDNS );
+    InputDnsQueryTimeout = new QLineEdit( PageDNS );
+    LabelDnsChunkDelay   = new QLabel( PageDNS );
+    InputDnsChunkDelay   = new QLineEdit( PageDNS );
+
+    formLayout_DNS->setWidget( 0, QFormLayout::LabelRole, LabelDnsZone );
+    formLayout_DNS->setWidget( 0, QFormLayout::FieldRole, InputDnsZone );
+    formLayout_DNS->setWidget( 1, QFormLayout::LabelRole, LabelDnsHosts );
+    formLayout_DNS->setWidget( 1, QFormLayout::FieldRole, InputDnsHosts );
+    formLayout_DNS->setWidget( 2, QFormLayout::LabelRole, LabelDnsHostBind );
+    formLayout_DNS->setWidget( 2, QFormLayout::FieldRole, InputDnsHostBind );
+    formLayout_DNS->setWidget( 3, QFormLayout::LabelRole, LabelDnsPort );
+    formLayout_DNS->setWidget( 3, QFormLayout::FieldRole, InputDnsPort );
+    formLayout_DNS->setWidget( 4, QFormLayout::LabelRole, LabelDnsQueryTimeout );
+    formLayout_DNS->setWidget( 4, QFormLayout::FieldRole, InputDnsQueryTimeout );
+    formLayout_DNS->setWidget( 5, QFormLayout::LabelRole, LabelDnsChunkDelay );
+    formLayout_DNS->setWidget( 5, QFormLayout::FieldRole, InputDnsChunkDelay );
+
+    LabelDnsZone->setText( "Zone Domain:" );
+    LabelDnsHosts->setText( "Hosts (comma separated):" );
+    LabelDnsHostBind->setText( "Host Bind:" );
+    LabelDnsPort->setText( "Port:" );
+    LabelDnsQueryTimeout->setText( "Query Timeout (ms):" );
+    LabelDnsChunkDelay->setText( "Chunk Delay (ms):" );
+
+    InputDnsZone->setPlaceholderText( "updates.company-cdn.net" );
+    InputDnsHosts->setPlaceholderText( "10.0.0.1" );
+    InputDnsHostBind->setText( "0.0.0.0" );
+    InputDnsPort->setText( "53" );
+    InputDnsQueryTimeout->setText( "4000" );
+    InputDnsChunkDelay->setText( "50" );
+
     // Add Pages
     StackWidgetConfigPages->addWidget( PageHTTP );
     StackWidgetConfigPages->addWidget( PageSMB );
     StackWidgetConfigPages->addWidget( PageExternal );
+    StackWidgetConfigPages->addWidget( PageDNS );
 
     ListenerDialog->setWindowTitle( "Create Listener" );
     LabelPayload->setText(QCoreApplication::translate("ListenerWidget", "Payload: ", nullptr));
@@ -323,6 +372,7 @@ NewListener::NewListener( QDialog* Dialog )
     ComboPayload->addItem( "Http" );
     ComboPayload->addItem( "Smb" );
     ComboPayload->addItem( "External" );
+    ComboPayload->addItem( "Dns" );
 
     ComboProxyType->addItem( "http" );
     ComboProxyType->addItem( "https" );
@@ -429,6 +479,10 @@ NewListener::NewListener( QDialog* Dialog )
         else if ( text.compare( HavocSpace::Listener::PayloadExternal ) == 0 )
         {
             StackWidgetConfigPages->setCurrentIndex( 2 );
+        }
+        else if ( text.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+        {
+            StackWidgetConfigPages->setCurrentIndex( 3 );
         }
         else
         {
@@ -718,6 +772,15 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
         }
 
         ListenerInfo.insert( { "Endpoint", InputEndpoint->text().toStdString() } );
+    }
+    else if ( Payload.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+    {
+        ListenerInfo.insert( { "ZoneDomain",   InputDnsZone->text().toStdString() } );
+        ListenerInfo.insert( { "Hosts",        InputDnsHosts->text().toStdString() } );
+        ListenerInfo.insert( { "HostBind",     InputDnsHostBind->text().toStdString() } );
+        ListenerInfo.insert( { "Port",         InputDnsPort->text().toStdString() } );
+        ListenerInfo.insert( { "QueryTimeout", InputDnsQueryTimeout->text().toStdString() } );
+        ListenerInfo.insert( { "ChunkDelayMs", InputDnsChunkDelay->text().toStdString() } );
     }
     else
     {

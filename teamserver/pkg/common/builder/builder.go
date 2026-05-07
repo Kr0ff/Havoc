@@ -1237,6 +1237,21 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		DemonConfig.AddInt32(WorkingHours)
 
 		break
+
+	case handlers.LISTENER_DNS:
+		var Config = b.config.ListenerConfig.(*handlers.DNS)
+
+		// Pack: ZoneDomain (WString), ResolverCount (Int32), Resolvers[]..., Port (Int32), QueryTimeout (Int32), ChunkDelayMs (Int32)
+		DemonConfig.AddWString(Config.Config.ZoneDomain)
+		DemonConfig.AddInt32(int32(len(Config.Config.Hosts)))
+		for _, host := range Config.Config.Hosts {
+			DemonConfig.AddWString(host)
+		}
+		DemonConfig.AddInt32(int32(Config.Config.Port))
+		DemonConfig.AddInt32(int32(Config.Config.QueryTimeout))
+		DemonConfig.AddInt32(int32(Config.Config.ChunkDelayMs))
+
+		break
 	}
 
 	//logger.Debug("DemonConfig:\n" + hex.Dump(DemonConfig.Buffer()))
@@ -1348,6 +1363,11 @@ func (b *Builder) GetListenerDefines() []string {
 	case handlers.LISTENER_PIVOT_SMB:
 
 		defines = append(defines, "TRANSPORT_SMB")
+		break
+
+	case handlers.LISTENER_DNS:
+
+		defines = append(defines, "TRANSPORT_DNS")
 		break
 
 	}

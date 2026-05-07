@@ -149,6 +149,7 @@ namespace HavocNamespace
             static QString PayloadHTTP;
             static QString PayloadSMB;
             static QString PayloadExternal;
+            static QString PayloadDNS;
 
             typedef struct
             {
@@ -179,6 +180,16 @@ namespace HavocNamespace
             {
                 QString Endpoint;
             } External;
+
+            typedef struct
+            {
+                QString ZoneDomain;
+                QString Hosts;
+                QString HostBind;
+                QString Port;
+                QString QueryTimeout;
+                QString ChunkDelayMs;
+            } DNS;
 
             typedef MapStrStr Service;
         };

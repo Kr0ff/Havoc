@@ -57,4 +57,10 @@ BOOL RtWinHttp(
 );
 #endif
 
+#ifdef TRANSPORT_DNS
+BOOL RtDnsApi(
+    VOID
+);
+#endif
+
 #endif
