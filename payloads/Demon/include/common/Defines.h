@@ -149,6 +149,10 @@
 #define H_FUNC_LOGONUSEREXW                          0x6ba383b7
 #define H_FUNC_VSNPRINTF                             0xe212f2ef
 #define H_FUNC_GETADAPTERSINFO                       0x37cada45
+/* [DNS transport] dnsapi.dll function hashes (DJB2 on null-terminated ASCII names) */
+#define H_FUNC_DNSQUERY_W                            0x8641aed6
+#define H_FUNC_DNSRECORDLISTFREE                     0x92fdf287
+
 #define H_FUNC_WINHTTPOPEN                           0x613eace5
 #define H_FUNC_WINHTTPCONNECT                        0x81e0c81d
 #define H_FUNC_WINHTTPOPENREQUEST                    0xb06d900e

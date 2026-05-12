@@ -249,17 +249,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             if ( ListenerInfo.Protocol == Listener::PayloadHTTP.toStdString() )
             {
                 auto Headers = QStringList();
-                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( ", " ) ) {
+                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( "\n" ) ) {
                     Headers << header;
                 }
 
                 auto Uris = QStringList();
-                for ( auto& uri : QString( Package->Body.Info[ "Uris" ].c_str() ).split( ", " ) ) {
+                for ( auto& uri : QString( Package->Body.Info[ "Uris" ].c_str() ).split( "\n" ) ) {
                     Uris << uri;
                 }
 
                 auto Hosts = QStringList();
-                for ( auto& host : QString( Package->Body.Info[ "Hosts" ].c_str() ).split( ", " ) ) {
+                for ( auto& host : QString( Package->Body.Info[ "Hosts" ].c_str() ).split( "\n" ) ) {
                     Hosts << host;
                 }
 
@@ -298,6 +298,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             {
                 ListenerInfo.Info = Listener::External {
                     .Endpoint = Package->Body.Info[ "Endpoint" ].c_str(),
+                };
+            }
+            else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
+            {
+                ListenerInfo.Info = Listener::DNS {
+                    .ZoneDomain   = Package->Body.Info.count( "ZoneDomain" )   ? Package->Body.Info[ "ZoneDomain" ].c_str()   : "",
+                    .Hosts        = Package->Body.Info.count( "Hosts" )        ? Package->Body.Info[ "Hosts" ].c_str()        : "",
+                    .HostBind     = Package->Body.Info.count( "HostBind" )     ? Package->Body.Info[ "HostBind" ].c_str()     : "",
+                    .Port         = Package->Body.Info.count( "Port" )         ? Package->Body.Info[ "Port" ].c_str()         : "",
+                    .QueryTimeout = Package->Body.Info.count( "QueryTimeout" ) ? Package->Body.Info[ "QueryTimeout" ].c_str() : "",
+                    .ChunkDelayMs = Package->Body.Info.count( "ChunkDelayMs" ) ? Package->Body.Info[ "ChunkDelayMs" ].c_str() : "",
                 };
             }
             else
@@ -387,15 +398,15 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             if ( ListenerInfo.Protocol == Listener::PayloadHTTP.toStdString() )
             {
                 auto Headers = QStringList();
-                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( ", " ) )
+                for ( auto& header : QString( Package->Body.Info[ "Headers" ].c_str() ).split( "\n" ) )
                     Headers << header;
 
                 auto Uris = QStringList();
-                for ( auto& uri : QString( Package->Body.Info[ "Uris" ].c_str() ).split( ", " ) )
+                for ( auto& uri : QString( Package->Body.Info[ "Uris" ].c_str() ).split( "\n" ) )
                     Uris << uri;
 
                 auto Hosts = QStringList();
-                for ( auto& host : QString( Package->Body.Info[ "Hosts" ].c_str() ).split( ", " ) )
+                for ( auto& host : QString( Package->Body.Info[ "Hosts" ].c_str() ).split( "\n" ) )
                     Hosts << host;
 
 
@@ -435,6 +446,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             {
                 ListenerInfo.Info = Listener::External {
                         .Endpoint = Package->Body.Info[ "Endpoint" ].c_str(),
+                };
+            }
+            else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
+            {
+                ListenerInfo.Info = Listener::DNS {
+                    .ZoneDomain   = Package->Body.Info.count( "ZoneDomain" )   ? Package->Body.Info[ "ZoneDomain" ].c_str()   : "",
+                    .Hosts        = Package->Body.Info.count( "Hosts" )        ? Package->Body.Info[ "Hosts" ].c_str()        : "",
+                    .HostBind     = Package->Body.Info.count( "HostBind" )     ? Package->Body.Info[ "HostBind" ].c_str()     : "",
+                    .Port         = Package->Body.Info.count( "Port" )         ? Package->Body.Info[ "Port" ].c_str()         : "",
+                    .QueryTimeout = Package->Body.Info.count( "QueryTimeout" ) ? Package->Body.Info[ "QueryTimeout" ].c_str() : "",
+                    .ChunkDelayMs = Package->Body.Info.count( "ChunkDelayMs" ) ? Package->Body.Info[ "ChunkDelayMs" ].c_str() : "",
                 };
             }
 
@@ -630,6 +652,7 @@ bool Packager::DispatchSession( Util::Packager::PPackage Package )
             };
 
             Agent.LastUTC = QDateTime::fromString(Agent.Last, "dd-MM-yyyy HH:mm:ss");
+            Agent.LastUTC.setTimeSpec( Qt::UTC );
 
             if ( Agent.Marked == "true" )
             {
@@ -786,7 +809,9 @@ bool Packager::DispatchSession( Util::Packager::PPackage Package )
                             auto LastTimeJson = QJsonDocument::fromJson( LastTime.toLocal8Bit() );
 
                             Session.Last         = LastTimeJson["Last"].toString();
-                            Session.LastUTC      = QDateTime::fromString(Session.Last, "dd-MM-yyyy HH:mm:ss");
+                            /* Use client-local time at callback receipt so CDN transit
+                             * latency (Demon→CDN→server) does not inflate the display. */
+                            Session.LastUTC      = QDateTime::currentDateTimeUtc();
                             Session.SleepDelay   = (uint32_t)strtoul(LastTimeJson["Sleep"].toString().toStdString().c_str(), NULL, 0);
                             Session.SleepJitter  = (uint32_t)strtoul(LastTimeJson["Jitter"].toString().toStdString().c_str(), NULL, 0);
                             Session.KillDate     = (uint64_t)strtoull(LastTimeJson["KillDate"].toString().toStdString().c_str(), NULL, 0);

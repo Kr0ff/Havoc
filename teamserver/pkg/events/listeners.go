@@ -1,6 +1,7 @@
 package events
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -28,8 +29,9 @@ func (listeners) ListenerAdd(FromUser string, Type int, Config any) packager.Pac
 		Package.Body.Info = structs.Map(Config.(*handlers.HTTP).Config)
 
 		Package.Body.Info["Protocol"] = handlers.AGENT_HTTP
-		Package.Body.Info["Headers"] = strings.Join(Config.(*handlers.HTTP).Config.Headers, ", ")
-		Package.Body.Info["Uris"] = strings.Join(Config.(*handlers.HTTP).Config.Uris, ", ")
+		Package.Body.Info["Headers"] = strings.Join(Config.(*handlers.HTTP).Config.Headers, "\n")
+		Package.Body.Info["Uris"] = strings.Join(Config.(*handlers.HTTP).Config.Uris, "\n")
+		Package.Body.Info["IgnoreHeaders"] = strings.Join(Config.(*handlers.HTTP).Config.IgnoreHeaders, "\n")
 
 		/* proxy settings */
 		Package.Body.Info["Proxy Enabled"] = "false"
@@ -63,7 +65,7 @@ func (listeners) ListenerAdd(FromUser string, Type int, Config any) packager.Pac
 			if len(Hosts) == 0 {
 				Hosts = host
 			} else {
-				Hosts += ", " + host
+				Hosts += "\n" + host
 			}
 		}
 		Package.Body.Info["Hosts"] = Hosts
@@ -89,6 +91,23 @@ func (listeners) ListenerAdd(FromUser string, Type int, Config any) packager.Pac
 		Package.Body.Info["Status"] = "Online"
 
 		break
+
+	case handlers.LISTENER_DNS:
+
+		Package.Body.Info = make(map[string]interface{})
+		Package.Body.Info = structs.Map(Config.(*handlers.DNS).Config)
+
+		Package.Body.Info["Protocol"] = handlers.AGENT_DNS
+		Package.Body.Info["Status"] = "Online"
+
+		// Convert slice/int fields to strings so the Qt client can deserialize
+		// them from QJsonValue::toString() without getting empty strings.
+		Package.Body.Info["Hosts"] = strings.Join(Config.(*handlers.DNS).Config.Hosts, "\n")
+		Package.Body.Info["Port"] = fmt.Sprintf("%d", Config.(*handlers.DNS).Config.Port)
+		Package.Body.Info["QueryTimeout"] = fmt.Sprintf("%d", Config.(*handlers.DNS).Config.QueryTimeout)
+		Package.Body.Info["ChunkDelayMs"] = fmt.Sprintf("%d", Config.(*handlers.DNS).Config.ChunkDelayMs)
+
+		break
 	}
 
 	return Package
@@ -109,8 +128,9 @@ func (listeners) ListenerEdit(Type int, Config any) packager.Package {
 		Package.Body.Info = structs.Map(Config.(*handlers.HTTPConfig))
 
 		Package.Body.Info["Protocol"] = handlers.AGENT_HTTP
-		Package.Body.Info["Headers"] = strings.Join(Config.(*handlers.HTTPConfig).Headers, ", ")
-		Package.Body.Info["Uris"] = strings.Join(Config.(*handlers.HTTPConfig).Uris, ", ")
+		Package.Body.Info["Headers"] = strings.Join(Config.(*handlers.HTTPConfig).Headers, "\n")
+		Package.Body.Info["Uris"] = strings.Join(Config.(*handlers.HTTPConfig).Uris, "\n")
+		Package.Body.Info["IgnoreHeaders"] = strings.Join(Config.(*handlers.HTTPConfig).IgnoreHeaders, "\n")
 
 		// Proxy settings
 		Package.Body.Info["Proxy Enabled"] = "false"
@@ -129,7 +149,7 @@ func (listeners) ListenerEdit(Type int, Config any) packager.Package {
 		}
 
 		/* response */
-		Package.Body.Info["Response Headers"] = strings.Join(Config.(*handlers.HTTPConfig).Response.Headers, ", ")
+		Package.Body.Info["Response Headers"] = strings.Join(Config.(*handlers.HTTPConfig).Response.Headers, "\n")
 
 		delete(Package.Body.Info, "Proxy")
 		delete(Package.Body.Info, "Response")
@@ -140,7 +160,7 @@ func (listeners) ListenerEdit(Type int, Config any) packager.Package {
 			if len(Hosts) == 0 {
 				Hosts = host
 			} else {
-				Hosts += ", " + host
+				Hosts += "\n" + host
 			}
 		}
 		Package.Body.Info["Hosts"] = Hosts

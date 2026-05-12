@@ -8,13 +8,15 @@ all: ts-build client-build
 # teamserver building target
 ts-build:
 	@ echo "[*] building teamserver"
-	@ ./teamserver/Install.sh
+	# @ ./teamserver/Install.sh
 	@ cd teamserver; GO111MODULE="on" go build -ldflags="-s -w -X cmd.VersionCommit=$(git rev-parse HEAD)" -o ../havoc main.go
 	@ sudo setcap 'cap_net_bind_service=+ep' havoc # this allows you to run the server as a regular user
+	@ echo "[*] compiled teamserver"
 
 dev-ts-compile:
-	@ echo "[*] compile teamserver"
+	@ echo "[*] compile teamserver dev"
 	@ cd teamserver; GO111MODULE="on" go build -ldflags="-s -w -X cmd.VersionCommit=$(git rev-parse HEAD)" -o ../havoc main.go 
+	@ echo "[*] compiled teamserver dev"
 
 ts-cleanup: 
 	@ echo "[*] teamserver cleanup"
@@ -25,6 +27,7 @@ ts-cleanup:
 	@ rm -rf ./data/server.*
 	@ rm -rf ./teamserver/.idea
 	@ rm -rf ./havoc
+	@ echo "[*] cleaned up teamserver"
 
 # client building and cleanup targets 
 client-build: 
@@ -33,6 +36,7 @@ client-build:
 	@ mkdir client/Build; cd client/Build; cmake ..
 	@ if [ -d "client/Modules" ]; then echo "Modules installed"; else git clone https://github.com/HavocFramework/Modules client/Modules --single-branch --branch `git rev-parse --abbrev-ref HEAD`; fi
 	@ cmake --build client/Build -- -j 4
+	@ echo "[*] compiled client"
 
 client-cleanup:
 	@ echo "[*] client cleanup"
@@ -43,9 +47,11 @@ client-cleanup:
 	@ rm -rf ./client/cmake-build-debug
 	@ rm -rf ./client/Havoc
 	@ rm -rf ./client/Modules
+	@ echo "[*] cleaned up client"
 	
 
 # cleanup target 
 clean: ts-cleanup client-cleanup
 	@ rm -rf ./data
 	@ rm -rf payloads/Demon/.idea
+	

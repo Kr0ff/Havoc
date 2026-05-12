@@ -43,6 +43,7 @@ Field reference (from teamserver/pkg/profile/config.go):
                    Method, Response.Headers, Cert.Cert/Key, Proxy.*
   Listeners.Smb:   Name, PipeName, KillDate, WorkingHours
   Listeners.Ext:   Name, Endpoint
+  Listeners.Dns:   Name, Hosts, HostBind, Port, ZoneDomain, QueryTimeout, ChunkDelayMs
   Demon:           Sleep, Jitter, IndirectSyscall, StackDuplication,
                    SleepTechnique, ProxyLoading, AmsiEtwPatching,
                    TrustXForwardedFor, DotNetNamePipe,
@@ -187,7 +188,7 @@ def build_profile(args: argparse.Namespace) -> str:
     e.block_open("Listeners")
 
     # HTTP listeners
-    for i in range(max(1, len(args.http_name))):
+    for i in range(len(args.http_name)):
         def _get(lst, idx, default=None):
             return lst[idx] if idx < len(lst) else (lst[0] if lst else default)
 
@@ -295,6 +296,34 @@ def build_profile(args: argparse.Namespace) -> str:
         e.block_open("External", indent=1)
         e.attr("Name", name, indent=2)
         e.attr("Endpoint", endpoint, indent=2)
+        e.blank()
+        e.block_close(indent=1)
+
+    # DNS listeners
+    for i in range(len(args.dns_name)):
+        def _get(lst, idx, default=None):
+            return lst[idx] if idx < len(lst) else (lst[0] if lst else default)
+
+        name        = args.dns_name[i]
+        zone        = _get(args.dns_zone, i, "c2.example.com")
+        hosts       = args.dns_host if args.dns_host else []
+        host_bind   = _get(args.dns_bind, i, "0.0.0.0")
+        port        = _get(args.dns_port, i, 53)
+        timeout     = _get(args.dns_timeout, i, None)
+        chunk_delay = _get(args.dns_chunk_delay, i, None)
+
+        e.blank()
+        e.block_open("Dns", indent=1)
+        e.attr("Name", name, indent=2)
+        if hosts:
+            e.attr_list("Hosts", hosts, indent=2)
+        e.attr("HostBind", host_bind, indent=2)
+        e.attr("Port", int(port), indent=2)
+        e.attr("ZoneDomain", zone, indent=2)
+        if timeout is not None:
+            e.attr("QueryTimeout", int(timeout), indent=2)
+        if chunk_delay is not None:
+            e.attr("ChunkDelayMs", int(chunk_delay), indent=2)
         e.blank()
         e.block_close(indent=1)
 
@@ -506,6 +535,23 @@ def make_arg_parser() -> argparse.ArgumentParser:
     g.add_argument("--ext-endpoint", action="append", default=[], metavar="EP",
                    help="External listener endpoint")
 
+    # DNS listener
+    g = p.add_argument_group("DNS Listener (repeatable via multiple --dns-name values)")
+    g.add_argument("--dns-name", action="append", default=[], metavar="NAME",
+                   help="DNS listener name (repeatable)")
+    g.add_argument("--dns-zone", action="append", default=[], metavar="ZONE",
+                   help="Authoritative DNS zone domain (e.g. updates.company-cdn.net)")
+    g.add_argument("--dns-host", action="append", default=[], metavar="IP",
+                   help="NS IP address(es) shown in listener table (repeatable)")
+    g.add_argument("--dns-bind", action="append", default=[], metavar="IP",
+                   help="Bind address for DNS server (default: 0.0.0.0)")
+    g.add_argument("--dns-port", action="append", type=int, default=[], metavar="PORT",
+                   help="UDP/TCP port (default: 53; use 5353 for unprivileged testing)")
+    g.add_argument("--dns-timeout", action="append", type=int, default=[], metavar="MS",
+                   help="Per-query timeout in milliseconds (default: 4000)")
+    g.add_argument("--dns-chunk-delay", action="append", type=int, default=[], metavar="MS",
+                   help="Inter-chunk jitter delay in milliseconds (default: 50)")
+
     # Demon
     g = p.add_argument_group("Demon defaults")
     g.add_argument("--demon-sleep", type=int, metavar="SECS",
@@ -577,8 +623,8 @@ def validate_args(args, p) -> list[str]:
     if not args.operator:
         errs.append("at least one --operator USER:PASS is required")
 
-    if not args.http_name and not args.smb_name and not args.ext_name:
-        errs.append("at least one listener is required (--http-name, --smb-name, or --ext-name)")
+    if not args.http_name and not args.smb_name and not args.ext_name and not args.dns_name:
+        errs.append("at least one listener is required (--http-name, --smb-name, --ext-name, or --dns-name)")
 
     if not (1 <= args.ts_port <= 65535):
         errs.append(f"--ts-port must be 1-65535, got {args.ts_port}")
@@ -586,6 +632,10 @@ def validate_args(args, p) -> list[str]:
     for port in args.http_port + args.http_port_conn:
         if not (1 <= port <= 65535):
             errs.append(f"--http-port / --http-port-conn must be 1-65535, got {port}")
+
+    for port in args.dns_port:
+        if not (1 <= port <= 65535):
+            errs.append(f"--dns-port must be 1-65535, got {port}")
 
     for op in args.operator:
         if ":" not in op:
@@ -630,7 +680,7 @@ def main():
         args.operator = ["operator:changeme"]
         sys.stderr.write("Warning: no --operator given; using placeholder 'operator:changeme'\n")
 
-    if not args.http_name and not args.smb_name and not args.ext_name:
+    if not args.http_name and not args.smb_name and not args.ext_name and not args.dns_name:
         # Provide a minimal HTTP listener as a placeholder
         args.http_name = ["HTTP Agent"]
         args.http_host = ["127.0.0.1"]

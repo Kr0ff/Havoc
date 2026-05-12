@@ -58,6 +58,17 @@ type Listeners struct {
 	ListenerHTTP     []*ListenerHTTP     `yaotl:"Http,block"`
 	ListenerSMB      []*ListenerSMB      `yaotl:"Smb,block"`
 	ListenerExternal []*ListenerExternal `yaotl:"External,block"`
+	ListenerDNS      []*ListenerDNS      `yaotl:"Dns,block"`
+}
+
+type ListenerDNS struct {
+	Name         string `yaotl:"Name"`
+	Hosts        []string `yaotl:"Hosts,optional"`
+	HostBind     string   `yaotl:"HostBind"`
+	Port         int      `yaotl:"Port"`
+	ZoneDomain   string   `yaotl:"ZoneDomain"`
+	QueryTimeout int      `yaotl:"QueryTimeout,optional"`
+	ChunkDelayMs int      `yaotl:"ChunkDelayMs,optional"`
 }
 
 type ListenerHTTP struct {
@@ -79,10 +90,11 @@ type ListenerHTTP struct {
 	Methode  string `yaotl:"Method,optional"`
 
 	/* optional fields */
-	UserAgent string   `yaotl:"UserAgent,optional"`
-	Headers   []string `yaotl:"Headers,optional"`
-	Uris      []string `yaotl:"Uris,optional"`
-	Secure    bool     `yaotl:"Secure,optional"`
+	UserAgent     string   `yaotl:"UserAgent,optional"`
+	Headers       []string `yaotl:"Headers,optional"`
+	Uris          []string `yaotl:"Uris,optional"`
+	Secure        bool     `yaotl:"Secure,optional"`
+	IgnoreHeaders []string `yaotl:"IgnoreHeaders,optional"`
 
 	/* optional sub blocks */
 	Cert     *ListenerHttpCerts    `yaotl:"Cert,block"`

@@ -332,9 +332,9 @@ func RegisterInfoToInstance(Header Header, RegisterInfo map[string]any) *Agent {
 		}
 	}
 
-	agent.Info.FirstCallIn = time.Now().Format("02/01/2006 15:04:05")
+	agent.Info.FirstCallIn = time.Now().UTC().Format("02/01/2006 15:04:05")
 
-	agent.Info.LastCallIn = time.Now().Format("02-01-2006 15:04:05")
+	agent.Info.LastCallIn = time.Now().UTC().Format("02-01-2006 15:04:05")
 
 	agent.BackgroundCheck = false
 	agent.Active = true
@@ -496,8 +496,8 @@ func ParseDemonRegisterRequest(AgentID int, Parser *parser.Parser, ExternalIP st
 
 			Session.NameID = fmt.Sprintf("%08x", DemonID)
 			Session.Info.MagicValue = MagicValue
-			Session.Info.FirstCallIn = time.Now().Format("02/01/2006 15:04:05")
-			Session.Info.LastCallIn = time.Now().Format("02-01-2006 15:04:05")
+			Session.Info.FirstCallIn = time.Now().UTC().Format("02/01/2006 15:04:05")
+			Session.Info.LastCallIn = time.Now().UTC().Format("02-01-2006 15:04:05")
 			Session.Info.Hostname = Hostname
 			Session.Info.DomainName = DomainName
 			Session.Info.Username = Username
@@ -719,8 +719,30 @@ func (a *Agent) GetQueuedJobs() []Job {
 	return Jobs
 }
 
+// GetQueuedJobsN dequeues at most n jobs from the front of the queue.
+// The remaining jobs stay queued and will be delivered on subsequent checkins.
+func (a *Agent) GetQueuedJobsN(n int) []Job {
+	a.JobMtx.Lock()
+	defer a.JobMtx.Unlock()
+
+	if len(a.JobQueue) == 0 {
+		return nil
+	}
+
+	take := n
+	if take > len(a.JobQueue) {
+		take = len(a.JobQueue)
+	}
+
+	Jobs := make([]Job, take)
+	copy(Jobs, a.JobQueue[:take])
+	a.JobQueue = a.JobQueue[take:]
+
+	return Jobs
+}
+
 func (a *Agent) UpdateLastCallback(Teamserver TeamServer) {
-	a.Info.LastCallIn = time.Now().Format("02-01-2006 15:04:05")
+	a.Info.LastCallIn = time.Now().UTC().Format("02-01-2006 15:04:05")
 	Teamserver.AgentUpdate(a)
 
 	Teamserver.AgentLastTimeCalled(a.NameID, a.Info.LastCallIn, a.Info.SleepDelay, a.Info.SleepJitter, a.Info.KillDate, a.Info.WorkingHours)
@@ -1238,14 +1260,20 @@ func (agents *Agents) AgentsAppend(demon *Agent) []*Agent {
 func getWindowsVersionString(OsVersion []int) string {
 	var WinVersion = "Unknown"
 
-	if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 && OsVersion[4] == 20348 {
-		WinVersion = "Windows 2022 Server 22H2"
+	if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 && OsVersion[4] == 26100 {
+		WinVersion = "Windows Server 2025"
+	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 && OsVersion[4] == 25398 {
+		WinVersion = "Windows Server 2022 23H2"
+	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 && OsVersion[4] == 20348 {
+		WinVersion = "Windows Server 2022"
 	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 && OsVersion[4] == 17763 {
-		WinVersion = "Windows 2019 Server"
-	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] == 0x0000001 && (OsVersion[4] >= 22000 && OsVersion[4] <= 22621) {
-		WinVersion = "Windows 11"
+		WinVersion = "Windows Server 2019"
+	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 && OsVersion[4] == 14393 {
+		WinVersion = "Windows Server 2016"
 	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] != 0x0000001 {
-		WinVersion = "Windows 2016 Server"
+		WinVersion = "Windows Server"
+	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] == 0x0000001 && OsVersion[4] >= 22000 {
+		WinVersion = "Windows 11"
 	} else if OsVersion[0] == 10 && OsVersion[1] == 0 && OsVersion[2] == 0x0000001 {
 		WinVersion = "Windows 10"
 	} else if OsVersion[0] == 6 && OsVersion[1] == 3 && OsVersion[2] != 0x0000001 {

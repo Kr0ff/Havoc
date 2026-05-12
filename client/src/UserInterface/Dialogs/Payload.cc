@@ -393,7 +393,8 @@ auto Payload::AddConfigFromJson( QJsonDocument Config ) -> void
             ( ( QCheckBox* ) ObjectItem )->setChecked( KeyValue.toBool() );
 
             auto p = ObjectItem->palette();
-            p.setColor( QPalette::Window, Qt::gray );
+            p.setColor( QPalette::Window, QColor( ThemeManager::Instance().ActiveColors().panel ) );
+            p.setColor( QPalette::WindowText, QColor( ThemeManager::Instance().ActiveColors().text ) );
             ObjectItem->setPalette( p );
 
             TreeConfig->setItemWidget( TreeItem, 1, ObjectItem );
@@ -438,7 +439,8 @@ auto Payload::AddConfigFromJson( QJsonDocument Config ) -> void
                     ( ( QCheckBox* ) ObjectItem )->setChecked( SubKeyValue.toBool() );
 
                     auto p = ObjectItem->palette();
-                    p.setColor( QPalette::Window, Qt::gray );
+                    p.setColor( QPalette::Window, QColor( ThemeManager::Instance().ActiveColors().panel ) );
+                    p.setColor( QPalette::WindowText, QColor( ThemeManager::Instance().ActiveColors().text ) );
                     ObjectItem->setPalette( p );
 
                     TreeConfig->setItemWidget( TreeChildItem, 1, ObjectItem );

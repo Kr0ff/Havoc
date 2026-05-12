@@ -125,39 +125,61 @@ func (h *HTTP) request(ctx *gin.Context) {
 		logger.Debug("\n" + hex.Dump(Body))
 	*/
 
-	// check that the headers defined on the profile are present
-	valid := true
-	IgnoreHeaders := [2]string{"Connection", "Accept-Encoding"}
-	for _, Header := range h.Config.Headers {
-		NameValue := strings.Split(Header, ": ")
-		if len(NameValue) > 1 {
-			ignore := false
-			for _, IgnoreHeader := range IgnoreHeaders {
-				if strings.ToLower(NameValue[0]) == strings.ToLower(IgnoreHeader) {
-					ignore = true
-					break
+	// Header and User-Agent validation is only meaningful for direct connections.
+	// When the listener is behind a redirector or CDN (BehindRedir = true in the
+	// profile via TrustXForwardedFor), CDN infrastructure strips, rewrites, or
+	// replaces headers before forwarding to the origin — making exact-match
+	// validation against profile values unreliable for any header.
+	// The URI is preserved by CDNs and is always checked below.
+	if !h.Config.BehindRedir {
+
+		// check that the headers defined on the profile are present
+		valid := true
+		// Always skip Connection and Accept-Encoding (hop-by-hop / set by the HTTP stack).
+		// Operators can extend this list via IgnoreHeaders in the listener profile to
+		// exclude headers that their CDN or redirector strips before forwarding.
+		ignoreHeaders := append([]string{"Connection", "Accept-Encoding"}, h.Config.IgnoreHeaders...)
+		for _, Header := range h.Config.Headers {
+			NameValue := strings.Split(Header, ": ")
+			if len(NameValue) > 1 {
+				ignore := false
+				for _, IgnoreHeader := range ignoreHeaders {
+					if strings.ToLower(NameValue[0]) == strings.ToLower(IgnoreHeader) {
+						ignore = true
+						break
+					}
 				}
-			}
-			if ignore == false {
-				// NOTE: the header value comparison is case insensitive
-				if strings.ToLower(ctx.Request.Header.Get(NameValue[0])) != strings.ToLower(NameValue[1]) {
-					MissingHdr = NameValue[0] + ": " + ctx.Request.Header.Get(NameValue[0])
-					valid = false
-					break
+				if ignore == false {
+					// NOTE: the header value comparison is case insensitive
+					if strings.ToLower(ctx.Request.Header.Get(NameValue[0])) != strings.ToLower(NameValue[1]) {
+						MissingHdr = NameValue[0] + ": " + ctx.Request.Header.Get(NameValue[0])
+						valid = false
+						break
+					}
 				}
 			}
 		}
-	}
 
-	if valid == false {
-		logger.Warn(fmt.Sprintf("got a request with an invalid header: %s", MissingHdr))
-		h.fake404(ctx)
-		return
+		if valid == false {
+			logger.Warn(fmt.Sprintf("got a request with an invalid header: %s", MissingHdr))
+			h.fake404(ctx)
+			return
+		}
+
+		// check that the User-Agent is valid
+		if h.Config.UserAgent != "" {
+			if h.Config.UserAgent != ctx.Request.UserAgent() {
+				logger.Warn(fmt.Sprintf("got a request with an invalid user agent: %s", ctx.Request.UserAgent()))
+				h.fake404(ctx)
+				return
+			}
+		}
+
 	}
 
 	// check that the URI is defined on the profile
-	if len(h.Config.Uris) > 0 && !(len(h.Config.Uris) == 1 && h.Config.Uris[0] == "") {
-		valid = false
+	if len(h.Config.Uris) > 0 && ! (len(h.Config.Uris) == 1 && h.Config.Uris[0] == "") {
+		valid := false
 		for _, Uri := range h.Config.Uris {
 			if ctx.Request.RequestURI == Uri {
 				valid = true
@@ -167,15 +189,6 @@ func (h *HTTP) request(ctx *gin.Context) {
 
 		if valid == false {
 			logger.Warn(fmt.Sprintf("got a request with an invalid request path: %s", ctx.Request.RequestURI))
-			h.fake404(ctx)
-			return
-		}
-	}
-
-	// check that the User-Agent is valid
-	if h.Config.UserAgent != "" {
-		if h.Config.UserAgent != ctx.Request.UserAgent() {
-			logger.Warn(fmt.Sprintf("got a request with an invalid user agent: %s", ctx.Request.UserAgent()))
 			h.fake404(ctx)
 			return
 		}
@@ -192,7 +205,7 @@ func (h *HTTP) request(ctx *gin.Context) {
 		}
 	}
 
-	if Response, Success := parseAgentRequest(h.Teamserver, Body, ExternalIP); Success {
+	if Response, Success := parseAgentRequest(h.Teamserver, Body, ExternalIP, false, h.Config.Name); Success {
 		// [HVC-002 2026-03-26] Base64-encode the response before writing it to the wire.
 		encoded := base64.StdEncoding.EncodeToString(Response.Bytes())
 		_, err := ctx.Writer.Write([]byte(encoded))
