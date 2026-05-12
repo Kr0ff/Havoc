@@ -10,8 +10,10 @@
 #define DNS_CHUNK_BYTES      30
 #define DNS_LABEL_MAX        63
 #define DNS_SEQ_INIT         0x0001
-/* Max downlink TXT poll iterations per send cycle before timeout */
-#define DNS_POLL_MAX_ITER    64
+/* Max downlink TXT poll iterations per send cycle before timeout.
+ * Each iteration retrieves 189 bytes; 65535 iterations = ~12 MB max,
+ * enough for any realistic command response. */
+#define DNS_POLL_MAX_ITER    65535
 #define DNS_RETRY_MAX        3
 
 /* Downlink TXT query prefix that distinguishes polls from uplink A queries */

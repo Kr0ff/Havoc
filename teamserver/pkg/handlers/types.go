@@ -21,10 +21,11 @@ type (
 		PortConn     string
 		BehindRedir  bool
 		UserAgent    string
-		Headers      []string
-		Uris         []string
-		HostHeader   string
-		Secure       bool
+		Headers       []string
+		Uris          []string
+		HostHeader    string
+		Secure        bool
+		IgnoreHeaders []string
 
 		Cert struct {
 			Cert string

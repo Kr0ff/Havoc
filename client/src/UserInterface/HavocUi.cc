@@ -316,30 +316,30 @@ void HavocNamespace::UserInterface::HavocUi::UpdateSessionsHealth()
         auto Now  = QDateTime::currentDateTimeUtc();
         auto diff = session.LastUTC.secsTo( Now );
 
-        auto seconds = QDateTime::fromTime_t( diff ).toUTC().toString("s");
-        auto minutes = QDateTime::fromTime_t( diff ).toUTC().toString("m");
-        auto hours   = QDateTime::fromTime_t( diff ).toUTC().toString("h");
-        auto days    = QDateTime::fromTime_t( diff ).toUTC().toString("d");
+        auto seconds = static_cast<int>( diff % 60 );
+        auto minutes = static_cast<int>( ( diff % 3600 ) / 60 );
+        auto hours   = static_cast<int>( ( diff % 86400 ) / 3600 );
+        auto days    = static_cast<int>( diff / 86400 );
 
         if ( diff < 60 )
         {
             session.Last = QString("%1s").arg(seconds);
-            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 8, session.Last.toStdString().c_str());
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 9, session.Last.toStdString().c_str());
         }
         else if ( diff < 60 * 60 )
         {
-            session.Last = QString("%1m %2s").arg(minutes, seconds);
-            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 8, session.Last.toStdString().c_str());
+            session.Last = QString("%1m %2s").arg(minutes).arg(seconds);
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 9, session.Last.toStdString().c_str());
         }
         else if ( diff < 24 * 60 * 60 )
         {
-            session.Last = QString("%1h %2m").arg(hours, minutes);
-            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 8, session.Last.toStdString().c_str());
+            session.Last = QString("%1h %2m").arg(hours).arg(minutes);
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 9, session.Last.toStdString().c_str());
         }
         else
         {
-            session.Last = QString("%1d %2h").arg(days, hours);
-            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 8, session.Last.toStdString().c_str());
+            session.Last = QString("%1d %2h").arg(days).arg(hours);
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 9, session.Last.toStdString().c_str());
         }
 
         // it is very normal for agents to delay three second due to network latency
@@ -356,7 +356,7 @@ void HavocNamespace::UserInterface::HavocUi::UpdateSessionsHealth()
                 // agent reached its killdate
                 session.Health = "killdate";
                 session.Marked = "Dead";
-                HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( session.Name, 9, session.Health );
+                HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( session.Name, 10, session.Health );
                 MarkSessionAs( session, QString( "Dead") );
                 continue;
             }
@@ -385,7 +385,7 @@ void HavocNamespace::UserInterface::HavocUi::UpdateSessionsHealth()
             if ( isOffHours ) {
                 // agent is offhours
                 session.Health = "offhours";
-                HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 9, session.Health);
+                HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue(session.Name, 10, session.Health);
                 continue;
             }
         }
@@ -393,12 +393,12 @@ void HavocNamespace::UserInterface::HavocUi::UpdateSessionsHealth()
         if ( diff - AllowedDiff < session.SleepDelay + ( session.SleepDelay * 0.01 * session.SleepJitter ) ) {
             // agent has ping back in time
             session.Health = "healthy";
-            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( session.Name, 9, session.Health );
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( session.Name, 10, session.Health );
             continue;
         } else {
             // agent has not pinged back in time
             session.Health = "unresponsive";
-            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( session.Name, 9, session.Health );
+            HavocX::Teamserver.TabSession->SessionTableWidget->ChangeSessionValue( session.Name, 10, session.Health );
             continue;
         }
     }

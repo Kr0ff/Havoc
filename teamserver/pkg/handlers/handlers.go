@@ -22,7 +22,7 @@ import (
 //
 //	Response byte.Buffer
 //	Success	 bool
-func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP string) (bytes.Buffer, bool) {
+func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP string, chunked bool, listenerName string) (bytes.Buffer, bool) {
 
 	var (
 		Header   agent.Header
@@ -105,7 +105,7 @@ func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP stri
 
 	// handle this demon connection if the magic value matches
 	if Header.MagicValue == agent.DEMON_MAGIC_VALUE {
-		return handleDemonAgent(Teamserver, Header, ExternalIP)
+		return handleDemonAgent(Teamserver, Header, ExternalIP, chunked, listenerName)
 	}
 
 	// If it's not a Demon request then try to see if it's a 3rd party agent.
@@ -118,7 +118,7 @@ func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP stri
 //
 //	Response bytes.Buffer
 //	Success  bool
-func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, ExternalIP string) (bytes.Buffer, bool) {
+func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, ExternalIP string, chunked bool, listenerName string) (bytes.Buffer, bool) {
 
 	var (
 		Agent     *agent.Agent
@@ -230,11 +230,15 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 			}
 		}
 
-		/* GetQueuedJobs returns nil if the queue is empty.
-		 * In that case, reply with COMMAND_NOJOB. */
+		/* DNS transport: dequeue one job per checkin — TXT responses are size-limited.
+		 * HTTP/SMB: drain all queued jobs at once; the transport can handle large payloads. */
 		var job []agent.Job
 		if asked_for_jobs {
-			job = Agent.GetQueuedJobs()
+			if chunked {
+				job = Agent.GetQueuedJobsN(1)
+			} else {
+				job = Agent.GetQueuedJobs()
+			}
 		}
 
 		logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, asked_for_jobs=%v, dequeued=%d",
@@ -407,7 +411,7 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 			}
 
 			Agent.Info.MagicValue = Header.MagicValue
-			Agent.Info.Listener = nil /* TODO: pass here the listener instance/name */
+			Agent.Info.Listener = listenerName
 
 			Teamserver.AgentAdd(Agent)
 			Teamserver.AgentSendNotify(Agent)

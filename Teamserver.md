@@ -262,8 +262,11 @@ const (
 1. Decrypt `Header.Data` buffer with agent's AES key/IV
 2. Loop: read `Command(4-LE) + RequestID(4-LE)` pairs until buffer exhausted
 3. For each pair: dispatch to `Agent.TaskDispatch(Command, RequestID, Parser)` or set `asked_for_jobs = true` when `Command == COMMAND_GET_JOB`
-4. Update `Agent.Info.LastCallIn`; broadcast `AgentLastTimeCalled` event
-5. Response: if `asked_for_jobs` and queue non-empty → `BuildPayloadMessage(GetQueuedJobs(), key, iv)`; else → `BuildPayloadMessage([]Job{{Command: COMMAND_NOJOB}}, key, iv)`
+4. Update `Agent.Info.LastCallIn` (UTC wall clock); broadcast `AgentLastTimeCalled` event
+5. Response: if `asked_for_jobs` and queue non-empty → dequeue jobs and build payload; else → `BuildPayloadMessage([]Job{{Command: COMMAND_NOJOB}}, key, iv)`
+   - **HTTP / External C2**: `GetQueuedJobs()` — drain all queued jobs (no size constraint)
+   - **DNS**: `GetQueuedJobsN(1)` — one job per checkin (TXT-record size limit)
+   - Transport is selected via the `chunked bool` parameter on `parseAgentRequest` / `handleDemonAgent`
 
 **Unknown agent** + `Command == DEMON_INIT (99)`:
 1. `agent.ParseDemonRegisterRequest(parser)` → `map[string]any` of session metadata
@@ -398,11 +401,28 @@ type AgentInfo struct {
     ProcessPPID  int
     ProcessArch  string
     Elevated     string
-    OSVersion    string
+    OSVersion    string   // human-readable string from getWindowsVersionString()
     OSArch       string
     BaseAddress  int64
 }
 ```
+
+`OSVersion` is produced by `getWindowsVersionString()` (`pkg/agent/agent.go`) from the
+five integers the Demon sends at registration: `[dwMajorVersion, dwMinorVersion,
+wProductType, wServicePackMajor, dwBuildNumber]`. Recognised build numbers:
+
+| String | Build | ProductType |
+|---|---|---|
+| Windows Server 2025 | 26100 | server |
+| Windows Server 2022 23H2 | 25398 | server |
+| Windows Server 2022 | 20348 | server |
+| Windows Server 2019 | 17763 | server |
+| Windows Server 2016 | 14393 | server |
+| Windows Server | (other) | server |
+| Windows 11 | ≥ 22000 | workstation |
+| Windows 10 | < 22000 | workstation |
+
+`LastCallIn` is always formatted in **UTC** (`time.Now().UTC().Format("02-01-2006 15:04:05")`).
 
 ### Key Agent Methods (`cmd/server/agent.go`)
 
@@ -413,7 +433,7 @@ AgentAdd(agent *agent.Agent)
 // Construct EventNewDemon package, EventAppend + EventBroadcast
 AgentSendNotify(agent *agent.Agent)
 
-// Broadcast COMMAND_NOJOB event with Last/Sleep/Jitter/KillDate/WorkingHours
+// Broadcast COMMAND_NOJOB event with Last (UTC string)/Sleep/Jitter/KillDate/WorkingHours
 AgentLastTimeCalled(agent *agent.Agent)
 
 // Broadcast DemonOutput event (command output) to all clients

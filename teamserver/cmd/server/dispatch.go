@@ -410,19 +410,19 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 				HostBind = pk.Body.Info["HostBind"].(string)
 
-				for _, s := range strings.Split(pk.Body.Info["Hosts"].(string), ", ") {
+				for _, s := range strings.Split(pk.Body.Info["Hosts"].(string), "\n") {
 					if len(s) > 0 {
 						Hosts = append(Hosts, s)
 					}
 				}
 
-				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), ", ") {
+				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), "\n") {
 					if len(s) > 0 {
 						Headers = append(Headers, s)
 					}
 				}
 
-				for _, s := range strings.Split(pk.Body.Info["Uris"].(string), ", ") {
+				for _, s := range strings.Split(pk.Body.Info["Uris"].(string), "\n") {
 					if len(s) > 0 {
 						Uris = append(Uris, s)
 					}
@@ -440,6 +440,14 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					HostHeader:   pk.Body.Info["HostHeader"].(string),
 					UserAgent:    pk.Body.Info["UserAgent"].(string),
 					BehindRedir:  t.Profile.Config.Demon.TrustXForwardedFor,
+				}
+
+				if v, ok := pk.Body.Info["IgnoreHeaders"].(string); ok && v != "" {
+					for _, h := range strings.Split(v, "\n") {
+						if len(h) > 0 {
+							Config.IgnoreHeaders = append(Config.IgnoreHeaders, h)
+						}
+					}
 				}
 
 				if val, ok := pk.Body.Info["Proxy Enabled"].(string); ok {
@@ -626,6 +634,47 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 				break
 
+			case handlers.AGENT_DNS:
+				var DNSConfig handlers.DNSConfig
+
+				DNSConfig.Name, _ = pk.Body.Info["Name"].(string)
+				DNSConfig.ZoneDomain, _ = pk.Body.Info["ZoneDomain"].(string)
+				DNSConfig.HostBind, _ = pk.Body.Info["HostBind"].(string)
+
+				if portStr, ok := pk.Body.Info["Port"].(string); ok {
+					DNSConfig.Port, _ = strconv.Atoi(portStr)
+				}
+				if timeoutStr, ok := pk.Body.Info["QueryTimeout"].(string); ok {
+					DNSConfig.QueryTimeout, _ = strconv.Atoi(timeoutStr)
+				}
+				if delayStr, ok := pk.Body.Info["ChunkDelayMs"].(string); ok {
+					DNSConfig.ChunkDelayMs, _ = strconv.Atoi(delayStr)
+				}
+				if hostsStr, ok := pk.Body.Info["Hosts"].(string); ok {
+					for _, h := range strings.Split(hostsStr, "\n") {
+						if len(h) > 0 {
+							DNSConfig.Hosts = append(DNSConfig.Hosts, h)
+						}
+					}
+				}
+
+				if err := t.ListenerStart(handlers.LISTENER_DNS, DNSConfig); err != nil {
+					t.Clients.Range(func(key, value any) bool {
+						id := key.(string)
+						client := value.(*Client)
+						if client.Username == pk.Head.User {
+							err := t.SendEvent(id, events.Listener.ListenerError(pk.Head.User, pk.Body.Info["Name"].(string), err))
+							if err != nil {
+								logger.Error("Failed to send Event: " + err.Error())
+							}
+							return false
+						}
+						return true
+					})
+				}
+
+				break
+
 			default:
 
 				// check if the service endpoint is up and available
@@ -704,19 +753,19 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 				HostBind = pk.Body.Info["HostBind"].(string)
 
-				for _, s := range strings.Split(pk.Body.Info["Hosts"].(string), ", ") {
+				for _, s := range strings.Split(pk.Body.Info["Hosts"].(string), "\n") {
 					if len(s) > 0 {
 						Hosts = append(Hosts, s)
 					}
 				}
 
-				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), ", ") {
+				for _, s := range strings.Split(pk.Body.Info["Headers"].(string), "\n") {
 					if len(s) > 0 {
 						Headers = append(Headers, s)
 					}
 				}
 
-				for _, s := range strings.Split(pk.Body.Info["Uris"].(string), ", ") {
+				for _, s := range strings.Split(pk.Body.Info["Uris"].(string), "\n") {
 					if len(s) > 0 {
 						Uris = append(Uris, s)
 					}
@@ -733,6 +782,14 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					Uris:         Uris,
 					HostHeader:   pk.Body.Info["HostHeader"].(string),
 					UserAgent:    pk.Body.Info["UserAgent"].(string),
+				}
+
+				if v, ok := pk.Body.Info["IgnoreHeaders"].(string); ok && v != "" {
+					for _, h := range strings.Split(v, "\n") {
+						if len(h) > 0 {
+							Config.IgnoreHeaders = append(Config.IgnoreHeaders, h)
+						}
+					}
 				}
 
 				if val, ok := pk.Body.Info["Proxy Enabled"].(string); ok {

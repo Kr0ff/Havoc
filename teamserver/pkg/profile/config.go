@@ -90,10 +90,11 @@ type ListenerHTTP struct {
 	Methode  string `yaotl:"Method,optional"`
 
 	/* optional fields */
-	UserAgent string   `yaotl:"UserAgent,optional"`
-	Headers   []string `yaotl:"Headers,optional"`
-	Uris      []string `yaotl:"Uris,optional"`
-	Secure    bool     `yaotl:"Secure,optional"`
+	UserAgent     string   `yaotl:"UserAgent,optional"`
+	Headers       []string `yaotl:"Headers,optional"`
+	Uris          []string `yaotl:"Uris,optional"`
+	Secure        bool     `yaotl:"Secure,optional"`
+	IgnoreHeaders []string `yaotl:"IgnoreHeaders,optional"`
 
 	/* optional sub blocks */
 	Cert     *ListenerHttpCerts    `yaotl:"Cert,block"`

@@ -130,7 +130,8 @@ typedef struct
                 WORD    Port;
                 DWORD   QueryTimeout;
                 DWORD   ChunkDelayMs;
-                UINT16  SeqNum;   /* rolling sequence counter */
+                UINT16  SeqNum;        /* rolling sequence counter */
+                UINT32  SessionToken;  /* random per-session id, not the agent ID */
             } DnsCtx;
 #endif
         } Transport;

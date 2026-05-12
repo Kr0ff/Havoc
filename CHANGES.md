@@ -17,6 +17,290 @@ Description and rationale.
 
 ---
 
+## HVC-023 — 2026-05-12 — Last-Checkin Time: Timezone, CDN Latency, Days Display
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/agent/agent.go          UpdateLastCallback, ParseDemonRegisterRequest, agent init — time.Now() → time.Now().UTC()
+  client/src/Havoc/Packager.cc           initial session load: setTimeSpec(Qt::UTC); live CALLBACK: currentDateTimeUtc()
+  client/src/UserInterface/HavocUi.cc    UpdateSessionsHealth: fromTime_t arithmetic → direct integer arithmetic
+```
+
+### Problem
+
+Three independent bugs caused the "last checkin" counter in the session table to display
+incorrect elapsed times, most visibly when the teamserver sits behind a CDN.
+
+### Bug 1 — Timezone mismatch
+
+`UpdateLastCallback` (and the registration path) formatted `LastCallIn` using
+`time.Now().Format(...)`. Go's `time.Now()` returns the server's **local** wall time;
+the formatted string carried no timezone indicator.
+
+The client parsed it with `QDateTime::fromString(str, "dd-MM-yyyy HH:mm:ss")` which
+produces a `Qt::LocalTime` QDateTime — one whose UTC offset is interpreted as the
+**client's** local timezone. `UpdateSessionsHealth` then compared it against
+`QDateTime::currentDateTimeUtc()` (explicit UTC). Qt's `secsTo` internally converts
+`Qt::LocalTime` to UTC by subtracting the client's UTC offset, not the server's. Any
+difference between the two timezones appeared as a permanent additive offset on the
+displayed counter (e.g. a UTC+1 client always showed 3600 s extra).
+
+**Fix:** All three `time.Now().Format(...)` calls in `agent.go` now call
+`.UTC()` first, so the string always represents UTC wall time. On the client, the
+initial session parse (`Packager.cc:654`) calls `.setTimeSpec(Qt::UTC)` on the parsed
+`QDateTime` so Qt never applies a local-timezone adjustment.
+
+### Bug 2 — CDN transit latency absorbed into the timestamp
+
+`UpdateLastCallback` is called at line 138 of `handleDemonAgent` — the first thing
+that runs on every HTTP request from a known agent — before the command loop executes.
+`time.Now()` is therefore the moment the request **arrives at the server**, not the
+moment the Demon sent it. Behind a CDN the two can differ by several seconds (CDN
+connection-establishment on the first request in particular can spike to 10–30 s).
+
+The server has no visibility into when the Demon actually sent the packet (no
+Demon-side timestamp in the wire format), so the server-side timestamp cannot be
+corrected.
+
+**Fix (client-side):** The `Commands::CALLBACK` (= `COMMAND_NOJOB` = 10) handler in
+`Packager.cc` now sets `Session.LastUTC = QDateTime::currentDateTimeUtc()` — the
+client's own clock at the moment the WebSocket message arrives. The server→client
+WebSocket path is direct (not through the CDN), so its latency is negligible
+(< 1 ms LAN, < 100 ms remote). CDN latency on the Demon→CDN→server path no longer
+inflates the displayed counter.
+
+The initial session load path (DB restore on reconnect, `Packager.cc:654`) still
+parses the server-sent timestamp, which is now correctly UTC-tagged (Bug 1 fix), so
+sessions restored from history continue to show the correct "N hours ago" value.
+
+### Bug 3 — `QDateTime::fromTime_t` gives wrong day count
+
+`UpdateSessionsHealth` computed display components via:
+
+```cpp
+QDateTime::fromTime_t(diff).toUTC().toString("d")   // "d" = day-of-month, not elapsed days
+```
+
+`fromTime_t(86400)` produces `1970-01-02 00:00:00 UTC`; `.toString("d")` returns `"2"`
+(day-of-month), not `"1"` (elapsed days). For any session idle longer than 24 hours the
+days figure was wrong. `fromTime_t` is also deprecated since Qt 5.8 and removed in Qt 6.
+
+**Fix:** Replaced with direct integer arithmetic:
+
+```cpp
+auto days    = static_cast<int>( diff / 86400 );
+auto hours   = static_cast<int>( ( diff % 86400 ) / 3600 );
+auto minutes = static_cast<int>( ( diff % 3600 ) / 60 );
+auto seconds = static_cast<int>( diff % 60 );
+```
+
+---
+
+## HVC-022 — 2026-05-12 — Windows OS Version Detection: Server 2025, 2022 23H2, Win 11
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/agent/agent.go    getWindowsVersionString() — rewritten if/else chain
+```
+
+### Problem
+
+`getWindowsVersionString()` misidentified several Windows releases:
+
+| OS | Build | ProductType | Was shown | Correct |
+|---|---|---|---|---|
+| Windows 11 23H2 | 22631 | workstation | "Windows 10" | "Windows 11" |
+| Windows 11 24H2 | 26100 | workstation | "Windows 10" | "Windows 11" |
+| Windows Server 2022 23H2 | 25398 | server | "Windows 2016 Server" | "Windows Server 2022 23H2" |
+| Windows Server 2025 | 26100 | server | "Windows 2016 Server" | "Windows Server 2025" |
+
+Root cause: the Windows 11 branch had a hardcoded upper bound (`OsVersion[4] <= 22621`)
+that excluded every build after 22H2. Server entries only checked two specific build
+numbers (17763, 20348); any other server build fell through to the generic "Windows 2016
+Server" catch-all.
+
+The Demon already sends the correct build number via `RtlGetVersion()` — no Demon
+changes are required.
+
+### Fix
+
+Rewrote the `major=10, minor=0` section of `getWindowsVersionString()`:
+
+- **Servers** are checked first (productType != 1), in build-number order descending:
+  26100 → Server 2025, 25398 → Server 2022 23H2, 20348 → Server 2022,
+  17763 → Server 2019, 14393 → Server 2016 (now explicit), unknown → "Windows Server".
+- **Workstations** (productType == 1): `build >= 22000` → "Windows 11" (no upper
+  bound), catch-all → "Windows 10".
+- Server display names normalised to "Windows Server 20xx" for consistency
+  ("Windows 2022 Server 22H2" → "Windows Server 2022", "Windows 2019 Server" →
+  "Windows Server 2019").
+
+---
+
+## HVC-021 — 2026-05-11 — Payload Dialog Config Section: Theme-Aware Colors
+
+```
+Status         : Applied
+Files          :
+  client/src/UserInterface/Dialogs/Payload.cc    AddConfigFromJson() — two QCheckBox palette blocks
+```
+
+### Problem
+
+The "Config" QTreeWidget in the Payload Generator dialog had hardcoded
+`QPalette::Window = Qt::gray` on every `QCheckBox` item widget (top-level and nested).
+`Qt::gray` is a fixed RGB(128,128,128) constant; it did not change when the operator
+switched themes. Under Light, Pink Lady, or any other non-Dracula theme the checkbox
+backgrounds remained Dracula-grey.
+
+### Fix
+
+Both `QPalette::Window` and `QPalette::WindowText` are now sourced from
+`ThemeManager::Instance().ActiveColors()`:
+
+```cpp
+auto p = ObjectItem->palette();
+p.setColor( QPalette::Window,     QColor( ThemeManager::Instance().ActiveColors().panel ) );
+p.setColor( QPalette::WindowText, QColor( ThemeManager::Instance().ActiveColors().text  ) );
+ObjectItem->setPalette( p );
+```
+
+`panel` matches the dialog/table background for every built-in theme; `text` ensures
+the checkbox label and indicator contrast correctly (critical for the Light theme where
+dark text is required). `QLineEdit` and `QComboBox` items in the same tree inherit
+colors from the application-wide palette set by `ThemeManager` and required no change.
+
+---
+
+## HVC-020 — 2026-05-11 — DNS-Only Chunked Job Delivery
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/handlers/handlers.go    parseAgentRequest, handleDemonAgent — new chunked bool parameter
+  teamserver/pkg/handlers/http.go        parseAgentRequest caller — passes chunked=false
+  teamserver/pkg/handlers/dns.go         parseAgentRequest caller — passes chunked=true
+  teamserver/pkg/handlers/external.go    parseAgentRequest caller — passes chunked=false
+```
+
+### Problem
+
+`GetQueuedJobsN(1)` (one job per checkin) was applied globally to all transports via
+the single `handleDemonAgent` code path. HTTP and SMB transports have no payload-size
+constraint; limiting them to one job per checkin unnecessarily increased the number of
+round-trips for operators with multiple queued tasks.
+
+DNS transport does have a hard constraint: the entire teamserver response must fit in
+a TXT record chunk (base64-encoded, 255-byte DNS label limit). Delivering multiple
+jobs per checkin risks producing a response the Demon cannot parse.
+
+### Fix
+
+Added a `chunked bool` parameter to `parseAgentRequest` and `handleDemonAgent`. The
+job-dequeue branch now reads:
+
+```go
+if chunked {
+    job = Agent.GetQueuedJobsN(1)   // DNS: one job per checkin
+} else {
+    job = Agent.GetQueuedJobs()      // HTTP/SMB/External: drain all
+}
+```
+
+Callers:
+- `http.go` → `parseAgentRequest(..., false)`
+- `external.go` → `parseAgentRequest(..., false)`
+- `dns.go` → `parseAgentRequest(..., true)`
+
+The SMB path (`service.go`) calls `GetQueuedJobs()` directly and was unaffected.
+
+---
+
+## HVC-019 — 2026-05-09 — Header Delimiter Fix + Configurable IgnoreHeaders — v0.9.2 "Eclipse Anchor"
+
+```
+Status         : Applied
+Version bump   : teamserver 0.9.1 → 0.9.2 "Eclipse Anchor"
+                 client     1.6   → 1.7   "Eclipse Anchor"
+Files          :
+  teamserver/pkg/profile/config.go             ListenerHTTP: added IgnoreHeaders []string (optional)
+  teamserver/pkg/handlers/types.go             HTTPConfig: added IgnoreHeaders []string
+  teamserver/pkg/handlers/http.go              header validation: merge default + profile IgnoreHeaders
+  teamserver/pkg/events/listeners.go           ListenerAdd/ListenerEdit: "\n" delimiter + IgnoreHeaders broadcast
+  teamserver/cmd/server/teamserver.go          DB restore: splitListenerField() helper; IgnoreHeaders restore
+  teamserver/cmd/server/dispatch.go            Listener.Add/Edit: "\n" split + IgnoreHeaders parse
+  teamserver/cmd/server/listener.go            ListenerAdd DB write: "\n" join + IgnoreHeaders; ListenerEdit: update IgnoreHeaders live
+  teamserver/pkg/handlers/handlers.go          GetQueuedJobsN(1): Demon receives one job per checkin (HTTP)
+  client/src/Havoc/Packager.cc                 Listener.Add/Edit: "\n" split for Headers/Uris/Hosts
+  teamserver/cmd/cmd.go                        version bump 0.9.1 → 0.9.2
+  client/src/global.cc                         version bump 1.6 → 1.7
+  teamserver/pkg/events/listeners_test.go      NEW — TestListenerHeaderRoundTrip, TestOldDelimiterWouldCorrupt
+  teamserver/pkg/handlers/http_headerfilter_test.go  NEW — TestIgnoreHeadersMerge, TestIgnoreHeadersFilter
+  teamserver/cmd/server/listener_field_test.go        NEW — TestSplitListenerFieldNewFormat, TestSplitListenerFieldLegacyFormat
+```
+
+### Fix A — Header Delimiter (", " → "\n")
+
+HTTP listener slice fields (`Headers`, `Uris`, `Hosts`, `Response.Headers`,
+`IgnoreHeaders`) are serialised as delimited strings for DB storage and WebSocket
+events. The old delimiter `", "` silently corrupted values containing `, ` (e.g.
+`Accept-Encoding: gzip, deflate, br`). Changed to `"\n"` — a character that cannot
+appear in HTTP header names or values.
+
+Backward compatibility: `splitListenerField()` in `teamserver.go` detects the format
+by the presence of `"\n"` and falls back to `", "` split for legacy DB entries.
+
+### Fix B — Configurable IgnoreHeaders
+
+HTTP header validation in `http.go` previously hardcoded `["Connection",
+"Accept-Encoding"]` as the only ignorable headers. CDNs strip additional headers
+(e.g. `Accept-Language`, `Sec-Fetch-*`), causing false-positive "invalid header"
+rejections.
+
+New profile field:
+
+```yaotl
+Http {
+    IgnoreHeaders = ["Accept-Language", "Sec-Fetch-Dest", "Sec-Fetch-Mode"]
+}
+```
+
+The field is optional; the two hardcoded defaults are always present. The list is
+threaded through profile init, DB write/restore, WebSocket broadcast (ListenerAdd and
+ListenerEdit events), dispatch parsing, and live `ListenerEdit` update.
+
+---
+
+## HVC-018 — 2026-05-07 — DNS_TRANSPORT.md Protocol Field Name Corrections
+
+```
+Status         : Applied
+Files          :
+  DNS_TRANSPORT.md    documentation only — seven stale field-name references corrected
+```
+
+### Problem
+
+`DNS_TRANSPORT.md` still referenced the original placeholder field names from the
+initial design draft. The implementation used different names (wider fields to match
+the actual wire layout), so the doc was misleading when cross-referencing source code.
+
+### Corrections
+
+| Location | Was | Correct |
+|---|---|---|
+| Uplink FQDN format | `<seq4><cid2><tot2>.<aid8>` | `<seq4><cid4><tot4>.<tok8>` |
+| cid field | `cid2 \| 2 hex chars` | `cid4 \| 4 hex chars` |
+| tot field | `tot2 \| 2 hex chars` | `tot4 \| 4 hex chars` |
+| aid8 field | `32-bit agent ID` | `tok8 \| per-session token (DWORD, derived from AES key)` |
+| Downlink FQDN format | `p.<seq4>.<off4>.<aid8>` | `p.<seq4>.<off8>.<tok8>` |
+| off field | `off4 \| 4 hex chars` | `off8 \| 8 hex chars (DWORD, supports up to 4 GB)` |
+| aid8 (downlink) | `agent ID` | `tok8 \| per-session token` |
+
+---
+
 ## HVC-017 — 2026-05-01 — Extension-Kit Havoc Python API Port
 
 ```

