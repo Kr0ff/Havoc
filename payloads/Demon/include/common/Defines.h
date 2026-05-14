@@ -391,6 +391,11 @@
 #define H_COFFAPI_NTSETINFORMATIONVIRTUALMEMORY   0xe7aea539
 #define H_COFFAPI_NTGETNEXTTHREAD                 0x8f8000fe
 
+/* [HVC-026] Advapi32 — Registry (auto proxy detection) */
+#define H_FUNC_REGOPENKEYW                        0x83e34e72   /* RegOpenKeyExW    */
+#define H_FUNC_REGQUERYVALUEEXW                   0xd37cffca   /* RegQueryValueExW */
+#define H_FUNC_REGCLOSEKEY                        0x7649a602   /* RegCloseKey      */
+
 #define H_MODULE_KERNEL32                         0xadd31df0
 #define H_MODULE_NTDLL                            0x70e61753
 

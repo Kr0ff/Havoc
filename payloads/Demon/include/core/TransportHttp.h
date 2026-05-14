@@ -70,6 +70,9 @@ BOOL HostCheckup();
 
 DWORD HttpQueryStatus( HANDLE hRequest );
 
+/* [HVC-026] Read Windows system proxy settings from registry at agent startup. */
+VOID HttpAutoProxyDetect( VOID );
+
 BOOL HttpSend(
     _In_      PBUFFER Send,
     _Out_opt_ PBUFFER Resp

@@ -22,6 +22,36 @@ See the [Installation](https://havocframework.com/docs/installation) docs for in
 
 ---
 
+### What's New in 0.9 "Warden's Eye"
+
+A collection of operator experience and agent capability improvements. Full details and revert instructions are in [`CHANGES.md`](CHANGES.md).
+
+#### WPAD Full URL Fix (HVC-027)
+
+- Fixed a pre-existing bug where `WinHttpGetProxyForUrl` received a bare URI path (e.g. `/beacon`) instead of a full URL (e.g. `https://c2.example.com:443/beacon`).
+- The function requires a fully-qualified URL so WPAD/PAC scripts can evaluate the request destination; passing a path caused both DHCP/DNS auto-detect and PAC file fallback to silently fail on every beacon.
+- The fix assembles the correct URL from `Config.Transport.Secure`, `Host->Host`, `Host->Port`, and `HttpEndpoint` using only `MemCopy` and integer arithmetic — no stdlib dependency.
+
+#### Auto Proxy Detection (HVC-026)
+
+- Demon agents now detect and use the Windows system proxy at startup rather than lazily on the first beacon send.
+- A new "Auto Proxy Detection" checkbox (on by default) in the payload builder lets operators enable or disable the feature per payload.
+- When enabled, the agent reads `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` directly via Advapi32 (no WinHTTP dependency) to extract `ProxyServer`, strips the `http=` protocol prefix from multi-protocol strings, and sets `Proxy.Url` before the first beacon. If no registry proxy is found, the WinHTTP WPAD/IE fallback still fires on the first connect — and with HVC-027 applied, that WPAD lookup now works correctly.
+
+#### Listener Column in Session Table (HVC-025)
+
+- The agent session table now includes a "Listener" column showing which listener each agent is using, making it easier to manage deployments with multiple active listeners.
+
+#### Listener Dialog Theming (HVC-024)
+
+- The Listener configuration dialog now fully adapts to dark and light theme switches, using `ThemeManager` colours for background, text, accent borders, and scroll areas.
+
+#### Last-Checkin Time Fixes (HVC-023)
+
+- Fixed three bugs that caused the "last checkin" column to display incorrect elapsed times: timezone mismatch between server (Go `time.Now()`) and client (Qt local time), CDN transit latency absorbed into the server-side timestamp, and a deprecated `QDateTime::fromTime_t` day-count calculation.
+
+---
+
 ### What's New in 0.8 "Silent Storm"
 
 This release focuses on hardening the HTTP(S) transport layer against network-level detection and packet analysis. All changes are applied to the Demon agent and the teamserver; the client and SMB transport are unaffected. Full details and revert instructions are in [`CHANGES.md`](CHANGES.md).
@@ -82,13 +112,14 @@ base64(
 
 > Cross-platform UI written in C++ and Qt5
 
-- Modern, dark theme based on [Dracula](https://draculatheme.com/)
-- Multi-operator session graph and session table views with live agent state
-- Payload builder dialog with profile-driven defaults
+- Multi-theme UI (dark/light) using `ThemeManager` — all dialogs, widgets, and the Listener dialog adapt automatically
+- Multi-operator session graph and session table views with live agent state; "Listener" column shows which listener each agent uses
+- Payload builder dialog with profile-driven defaults; per-payload options for sleep obfuscation, proxy loading, AMSI/ETW patch technique, indirect syscalls, auto proxy detection, and more
 - Sleep obfuscation option selectability — invalid combinations (e.g. JmpGadget or Stack Duplication with non-timer techniques) are automatically disabled in the builder
 - Task queue management commands: `task list`, `task clear`, `task cancel <id|all>`
 - TaskID injected into all console output messages so operators can correlate output to specific queued tasks
 - File browser, process list, loot vault, and credential manager widgets
+- Event viewer, session notes (editable per-agent, synced to the interacted console)
 - Script manager with Python API integration
 - Connect dialog with saved profile support
 
@@ -131,16 +162,18 @@ base64(
 - Sleep jump gadget bypass: `jmp rax` and `jmp [rbx]` ROP-chain dispatch (Ekko/Zilean)
 - x64 return address spoofing during indirect syscalls
 - Indirect syscalls for `Nt*` APIs with dynamically resolved SSNs
-- SMB transport for child agents over named pipes
+- SMB transport for child agents over named pipes; DNS transport with configurable resolver and chunked query sequence
 - Token vault and impersonation primitives
 - Kerberos authentication support
 - Hardware-breakpoint-based AMSI / ETW patching (HwBpEngine)
+- Memory-patch AMSI/ETW bypass as an alternative to the HWBP technique
 - Proxy library loading via `RtlRegisterWait` / `RtlCreateTimer` / `RtlQueueWorkItem`
 - Stack duplication / call-stack spoofing during sleep
 - BOF (Beacon Object File) loader and inline .NET assembly execution
 - Per-process AES-256-CTR session encryption with embedded key material
 - Pure-C SHA-256 + HMAC-SHA-256 implementation (no CRT, no BCrypt dependency)
 - LZNT1 compression of large response payloads via `RtlCompressBuffer`
+- Auto proxy detection at startup: reads `HKCU\...\Internet Settings` via Advapi32 registry API (no WinHTTP); falls back to WinHTTP WPAD/IE detection on first connect (HVC-026); WPAD detection now passes the full `scheme://host:port/path` URL to `WinHttpGetProxyForUrl` so DHCP/DNS and PAC file evaluation work correctly (HVC-027)
 - Spinlock-protected `Instance->Packages` linked list (data-race fix, ISSUE-2)
 - mingw-w64 v15 / GCC 14+ compilation compatibility (MINGW-COMPAT)
 - Hardware breakpoint engine fixes: thread handle leaks, NULL guards, parameter handling (HVC-009)

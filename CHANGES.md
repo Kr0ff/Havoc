@@ -17,6 +17,158 @@ Description and rationale.
 
 ---
 
+## HVC-027 — 2026-05-14 — Fix WPAD Full URL Passed to WinHttpGetProxyForUrl
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/TransportHttp.c   HttpSend(): build full URL (scheme://host:port/path) for both WinHttpGetProxyForUrl calls
+```
+
+### Problem
+
+`WinHttpGetProxyForUrl` requires a fully-qualified URL so WPAD/PAC scripts can
+evaluate the request destination. Both calls inside the `HttpSend()` auto-detect
+block passed `HttpEndpoint` — a bare URI path such as `/beacon` — instead of a
+full URL like `https://c2.example.com:443/beacon`.
+
+MSDN states: *"A pointer to a null-terminated Unicode string that contains the
+URL of the HTTP request that the application is preparing to send."* Passing
+a path-only string causes the function to fail silently (returns `FALSE`
+without setting `GetLastError`), so DHCP/DNS WPAD auto-detection and PAC file
+evaluation were both completely non-functional at runtime despite the code
+appearing correct.
+
+The bug was pre-existing in the original Demon codebase and not introduced by
+HVC-026. It was identified during the HVC-026 review.
+
+### Fix
+
+At the start of the `else if (!LookedForProxy && AutoDetect)` block in
+`HttpSend()`, a 512-char `WCHAR WpadUrl` buffer is assembled from instance
+data before either `WinHttpGetProxyForUrl` call:
+
+```
+scheme ("https"/"http") + "://" + Host->Host + ":" + Port + HttpEndpoint
+```
+
+Port is converted from `WORD` to wide decimal with an inline arithmetic loop —
+no stdlib, no `_itow`. Both the DHCP/DNS call (line ~342) and the PAC file
+fallback call (line ~376) now receive the full URL. `HttpEndpoint` is unchanged
+in `WinHttpOpenRequest` (which correctly takes a path).
+
+---
+
+## HVC-026 — 2026-05-14 — Auto Proxy Detection at Agent Startup
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/Demon.h                             Proxy struct: +AutoDetect BOOL; Win32 struct: +RegOpenKeyExW, RegQueryValueExW, RegCloseKey
+  payloads/Demon/include/common/Defines.h                    +H_FUNC_REGOPENKEYW, H_FUNC_REGQUERYVALUEEXW, H_FUNC_REGCLOSEKEY (DJB2 hashes)
+  payloads/Demon/src/core/Runtime.c                          RtAdvapi32(): resolve 3 new registry function pointers from Advapi32
+  payloads/Demon/include/core/TransportHttp.h                +HttpAutoProxyDetect() declaration
+  payloads/Demon/src/core/TransportHttp.c                    +HttpAutoProxyDetect(); HttpSend() lazy WPAD detection guarded by AutoDetect flag
+  payloads/Demon/src/Demon.c                                 DemonConfig(): parse AutoDetect int32; DemonInit(): call HttpAutoProxyDetect() after module-loading loop
+  teamserver/pkg/common/builder/builder.go                   PatchConfig(): parse "Auto Proxy Detection" config key, pack ConfigAutoProxy int32 after manual proxy block
+  client/src/UserInterface/Dialogs/Payload.cc                DefaultConfig(): add "Auto Proxy Detection" QCheckBox (checked by default)
+  teamserver/pkg/common/builder/builder_autoproxy_test.go    New: 4 Go unit tests verifying ConfigAutoProxy packing
+  payloads/Demon/test/test_proxy_detect.c                    New: 8 C host-compiled tests for the proxy string parser logic
+```
+
+### Problem
+
+The Demon agent unconditionally ran WinHTTP WPAD/IE proxy auto-detection on
+the first `HttpSend()` call (inside `HttpSend()`, guarded only by
+`!LookedForProxy`). There was no way to disable it from the payload builder, and
+no registry-based detection at startup.
+
+### Fix
+
+**Agent (C):** Added `Proxy.AutoDetect BOOL` to the config struct (Demon.h).
+`HttpAutoProxyDetect()` runs at agent startup (after the module-loading loop in
+`DemonInit()`), using direct Advapi32 registry reads — no WinHTTP dependency:
+
+1. Opens `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+2. If `ProxyEnable` is set, reads `ProxyServer`, extracts the `http=` entry
+   (with bounds-safe scanner), prepends `http://` if no `://` scheme is
+   present, sets `Proxy.Url` / `Proxy.Enabled` / `LookedForProxy`
+3. If no manual proxy is found, logs any `AutoConfigURL` (PAC file); the
+   existing WinHTTP WPAD path in `HttpSend()` then resolves it on first connect
+
+The existing WinHTTP block in `HttpSend()` is now guarded by
+`&& Instance->Config.Transport.Proxy.AutoDetect` so it only runs when
+auto-detection is enabled.
+
+**Builder (Go):** `PatchConfig()` reads `b.config.Config["Auto Proxy Detection"]`
+(bool) and packs a `ConfigAutoProxy` int32 immediately after the manual proxy
+block in the HTTP listener config section. Default is `win32.TRUE` (preserving
+existing always-on behaviour).
+
+**Client (C++):** `DefaultConfig()` adds an "Auto Proxy Detection" `QCheckBox`
+(checked by default) between "Amsi/Etw Patch" and "Injection" in the payload
+tree.
+
+### Bug fix — init-time crash when Auto Proxy Detection enabled
+
+The original implementation placed the `HttpAutoProxyDetect()` call in
+`DemonInit()` immediately after `DemonConfig()`, before the module-loading loop.
+At that point `RtAdvapi32()` had not yet run, so `Instance->Win32.RegOpenKeyExW`
+was `NULL`. The first line of `HttpAutoProxyDetect()` called that pointer,
+producing an immediate null-pointer crash with no output. Agents compiled with
+Auto Proxy Detection disabled were unaffected.
+
+**Fix:** moved the `#ifdef TRANSPORT_HTTP / HttpAutoProxyDetect()` block to
+immediately after the `for (int i …) RtModules[i]()` loop so all three registry
+function pointers are valid before the call executes.
+
+---
+
+## HVC-025 — 2026-05-13 — Listener Column in Session Table
+
+```
+Status         : Applied
+Files          :
+  client/src/UserInterface/Widgets/SessionTable.cc     Add TitleListener column; populate item_Listener in NewSessionItem()
+  client/include/UserInterface/Widgets/SessionTable.hpp +TitleListener QTableWidgetItem* member
+```
+
+### Problem
+
+The agent session table had no column showing which listener an agent used,
+making it difficult to distinguish agents when multiple listeners were running.
+
+### Fix
+
+Added a "Listener" column (index 1) to `SessionTableWidget`. The column is
+populated from `SessionItem.Listener` in `NewSessionItem()`. All column index
+references for External, Internal, User, Computer, OS, Process, PID, Last,
+Health, and Note were shifted by one.
+
+---
+
+## HVC-024 — 2026-05-13 — Listener Dialog Theming
+
+```
+Status         : Applied
+Files          :
+  client/src/UserInterface/Dialogs/Listener.cc    Theme-aware styling via ThemeManager::Instance().ActiveColors() (panel, text, accent, selection, bgMain, muted)
+  client/data/stylesheets/Dialogs/Listener.qss    Updated QSS to use ThemeManager color variables
+```
+
+### Problem
+
+The Listener dialog used hardcoded colours that did not adapt to dark/light
+theme switches, making it visually inconsistent with the rest of the UI.
+
+### Fix
+
+Replaced hardcoded colour literals with `ThemeManager::Instance().ActiveColors()`
+calls throughout `Listener.cc`. Dialog background, text, accent borders, and
+scroll areas now update automatically when the operator switches themes.
+
+---
+
 ## HVC-023 — 2026-05-12 — Last-Checkin Time: Timezone, CDN Latency, Days Display
 
 ```

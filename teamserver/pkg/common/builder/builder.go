@@ -785,11 +785,12 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		ConfigSpawn32      string
 		ConfigObfTechnique int
 		ConfigObfBypass    int
-		ConfigProxyLoading = PROXYLOADING_NONE
-		ConfigStackSpoof   = win32.FALSE
-		ConfigSyscall      = win32.FALSE
-		ConfigAmsiPatch    = AMSIETW_PATCH_NONE
-		err                error
+		ConfigProxyLoading  = PROXYLOADING_NONE
+		ConfigStackSpoof    = win32.FALSE
+		ConfigSyscall       = win32.FALSE
+		ConfigAmsiPatch     = AMSIETW_PATCH_NONE
+		ConfigAutoProxy     = win32.TRUE  /* [HVC-026] default ON — preserves existing always-on behavior */
+		err                 error
 	)
 
 	logger.Debug(b.config.Config)
@@ -826,6 +827,15 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			if !b.silent {
 				b.SendConsoleMessage("Info", "Indirect Syscalls: Enabled")
 			}
+		}
+	}
+
+	// [HVC-026] Auto Proxy Detection — default TRUE (preserves existing behavior)
+	if val, ok := b.config.Config["Auto Proxy Detection"].(bool); ok {
+		if val {
+			ConfigAutoProxy = win32.TRUE
+		} else {
+			ConfigAutoProxy = win32.FALSE
 		}
 	}
 
@@ -1219,6 +1229,9 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		} else {
 			DemonConfig.AddInt(win32.FALSE)
 		}
+
+		// [HVC-026] Auto proxy detection flag — always packed after manual proxy block
+		DemonConfig.AddInt(ConfigAutoProxy)
 
 		break
 
