@@ -3,8 +3,8 @@
   <h1>Havoc</h1>
   <br/>
 
-  <p><i>Havoc is a modern and malleable post-exploitation command and control framework, originally created by <a href="https://twitter.com/C5pider">@C5pider</a> and co-developed by <a href="https://x.com/CptXRat">@Kr0ff</a>.</i></p>
-  <p><i>The free upstream version of Havoc is no longer maintained. This is a private fork actively maintained by <a href="https://x.com/CptXRat">@Kr0ff</a> with substantial protocol hardening, agent stability fixes, and operator UX improvements.</i></p>
+  <p><i>Havoc is a modern and malleable post-exploitation command and control framework, originally created by <a href="https://twitter.com/C5pider">@C5pider</a></i></p>
+  <p><i>The free upstream version of Havoc is no longer maintained. This is a private fork actively maintained by @Kr0ff with substantial protocol hardening, agent stability fixes, and operator UX improvements.</i></p>
   <br />
 
   <img src="assets/Screenshots/FullSessionGraph.jpeg" width="90%" /><br />
@@ -149,11 +149,6 @@ base64(
 - SMB pivot stability fixes for package leaks, error masking, NULL allocation, and PIPE_BUFFER_MAX overflow (BUGFIX-003)
 
 #### Demon
-
-> [!CAUTION]
->  **Compiling with `--debug-dev` payloads**: 
-> 
-> Debug builds fail to run for extensive time. They crash randomly at the moment. Use only for short debug sessions.
 
 > Havoc's flagship agent written in C and x86/x64 ASM
 
