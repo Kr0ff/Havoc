@@ -114,6 +114,7 @@ typedef struct
                 LPWSTR Url;      /* TODO: Instead of using LPWSTR use BUFFER (to have the size of the string too) */
                 LPWSTR Username; /* TODO: Instead of using LPWSTR use BUFFER (to have the size of the string too) */
                 LPWSTR Password; /* TODO: Instead of using LPWSTR use BUFFER (to have the size of the string too) */
+                BOOL   AutoDetect; /* [HVC-026] detect system proxy via registry at init */
             } Proxy;
 #endif
 
@@ -356,6 +357,11 @@ typedef struct
         WIN_FUNC( ConvertSidToStringSidW )
         WIN_FUNC( GetSidSubAuthorityCount )
         WIN_FUNC( GetSidSubAuthority)
+
+        /* [HVC-026] Registry — for HttpAutoProxyDetect() */
+        WIN_FUNC( RegOpenKeyExW )
+        WIN_FUNC( RegQueryValueExW )
+        WIN_FUNC( RegCloseKey )
 
 #ifdef SLEEPOBF_USE_FOLIAGE
         WIN_FUNC( ConvertThreadToFiberEx )

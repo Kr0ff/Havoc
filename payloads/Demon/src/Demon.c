@@ -544,6 +544,15 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         }
     }
 
+#ifdef TRANSPORT_HTTP
+    /* [HVC-026] Registry proxy detection — runs after RtAdvapi32() has loaded
+     * RegOpenKeyExW / RegQueryValueExW / RegCloseKey. Calling this earlier
+     * crashes because those pointers are NULL until the module-load loop above. */
+    if ( Instance->Config.Transport.Proxy.AutoDetect ) {
+        HttpAutoProxyDetect();
+    }
+#endif
+
     if ( KArgs )
     {
 #if SHELLCODE
@@ -844,6 +853,10 @@ VOID DemonConfig()
     {
         PUTS( "[CONFIG] [PROXY] Disabled" );
     }
+
+    /* [HVC-026] Auto proxy detection flag — always packed after the manual proxy block */
+    Instance->Config.Transport.Proxy.AutoDetect = (BOOL) ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [AUTO PROXY] %s\n", Instance->Config.Transport.Proxy.AutoDetect ? "Enabled" : "Disabled" )
 #endif
 
 #ifdef TRANSPORT_SMB
