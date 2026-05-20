@@ -1,0 +1,175 @@
+/*
+ * Havoc Client Theme -- Dark Bubble
+ * ------------------------------------
+ * Palette (from darkbubble.Xresource.txt):
+ *   Background (main):     #050606
+ *   Panel:                 #090b0b
+ *   Selection:             #252929
+ *   Accent:                #ee5285
+ *   Text:                  #cddeda
+ *   Tab highlight:         #cd9f45
+ *   OK accent:             #518880
+ *   Muted:                 #5a6160
+ *   Disabled bg:           #151717
+ */
+
+QMainWindow {
+    background: #050606;
+    color: #cddeda;
+}
+
+QWidget {
+    background: #050606;
+    color: #cddeda;
+}
+
+QToolButton {
+    border: 1px solid #ee5285;
+    background-color: #090b0b;
+    color: #cddeda;
+    padding: 3px;
+}
+
+QDialog {
+    background-color: #090b0b;
+    color: #cddeda;
+}
+
+QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #ee5285;
+    border-radius: 2px;
+    background-color: #ee5285;
+    color: #090b0b;
+    margin-bottom: 2px;
+    padding-left:   15px;
+    padding-right:  15px;
+}
+
+QPushButton:pressed {
+    border: 1px solid #ee5285;
+    background-color: #090b0b;
+    color: #cddeda;
+}
+
+QListWidget {
+    margin-top: 2px;
+    background-color: #252929;
+    color: #cddeda;
+}
+
+QLabel {
+    color: #cddeda;
+}
+
+QLineEdit {
+    background-color: #090b0b;
+    color: #cddeda;
+    margin-bottom: 3px;
+    margin-right: 3px;
+    border-radius: 100%;
+    padding: 2px;
+}
+
+QPlainTextEdit {
+    background-color: #252929;
+    color: #cddeda;
+}
+
+QTabWidget {
+    background-color: #090b0b;
+    color: #cddeda;
+}
+
+QMessageBox {
+    background: #090b0b;
+}
+
+QMessageBox QLabel {
+    color: #cddeda;
+}
+
+QMessageBox QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #518880;
+    background-color: #090b0b;
+    color: #cddeda;
+    margin-bottom: 2px;
+}
+
+QTabBar::tab {
+    margin-left: 2px;
+    background: #090b0b;
+    color: #cddeda;
+    padding-left: 20px;
+    padding-right: 20px;
+    border: 1px solid #252929;
+    border-bottom-color: transparent;
+}
+
+QTabBar::tab:selected {
+        background: #252929;
+        color: #cddeda;
+    border: 1px solid #cd9f45;
+    border-bottom-color: transparent;
+}
+
+QTabBar::close-button {
+    image: url(:/icons/tab-close-button);
+    subcontrol-position: right;
+}
+
+QTabBar::close-button:hover {
+    background: #090b0b;
+}
+
+QTableWidget {
+    background-color: #090b0b;
+    color: #cddeda;
+}
+
+QTableWidget::item:selected {
+    selection-background-color: #5a6160;
+    color: #5a6160;
+}
+
+QHeaderView::section {
+    background-color: #252929;
+    color: #cddeda;
+}
+
+QMenu {
+    background-color: #090b0b;
+    color: #cddeda;
+    border: 1px solid #252929;
+}
+
+QMenu::separator {
+    background: #252929;
+}
+
+QMenu::item:selected {
+    background: #252929;
+}
+
+QAction {
+    background-color: #090b0b;
+    color: #cddeda;
+}
+
+QTextEdit {
+    background: #090b0b;
+    color: #cddeda;
+}
+
+QTreeWidget {
+    background-color: #090b0b;
+    color: #cddeda;
+    border: 1px solid #252929;
+}
+
+QTreeWidget::item:selected {
+    background: #252929;
+}

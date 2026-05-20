@@ -1,0 +1,190 @@
+/*
+ * Havoc Client Theme -- Light
+ * ---------------------------
+ * Palette:
+ *   Background (main):     #f5f5f5   main window + chrome
+ *   Panel:                 #ffffff   dialogs, tabs, cards
+ *   Selection:             #e8e8f0   list/tab/selected row
+ *   Accent (purple):       #5a4fcf   buttons, borders, focus
+ *   Text:                  #1e1e2e   primary foreground
+ *   Tab highlight (pink):  #c94f7c   active tab border
+ *   OK accent (green):     #1e8449   message-box OK
+ *   Muted:                 #4a4e6a   disabled text / comments
+ *   Disabled bg:           #d8d8d8   disabled widgets
+ *
+ * To create your own custom theme:
+ *   1. Copy the entire client/data/themes/Template/ directory
+ *      (or this Light/ directory) into  ~/.havoc/themes/MyTheme/
+ *   2. Edit theme.json and set "name", "displayName", "author", "description"
+ *   3. Replace the palette hex codes above with your own colors
+ *   4. Restart Havoc and your theme will appear under Havoc > Theme
+ *
+ * Validation rules (enforced on user themes at load time):
+ *   - each .qss file is at most 64 KB
+ *   - at most 32 files in the theme directory (recursive)
+ *   - printable ASCII and whitespace only (no smart quotes, no NUL)
+ *   - balanced { and } counts per file
+ *   - no @import statements
+ *   - url(...) must be relative and resolve inside the theme dir
+ */
+
+QMainWindow {
+    background: #f5f5f5;
+    color: #1e1e2e;
+}
+
+QWidget {
+    background: #f5f5f5;
+    color: #1e1e2e;
+}
+
+QToolButton {
+    border: 1px solid #5a4fcf;
+    background-color: #ffffff;
+    color: #1e1e2e;
+    padding: 3px;
+}
+
+QDialog {
+    background-color: #ffffff;
+    color: #1e1e2e;
+}
+
+QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #5a4fcf;
+    border-radius: 2px;
+    background-color: #5a4fcf;
+    color: #ffffff;
+    margin-bottom: 2px;
+    padding-left:   15px;
+    padding-right:  15px;
+}
+
+QPushButton:pressed {
+    border: 1px solid #5a4fcf;
+    background-color: #ffffff;
+    color: #1e1e2e;
+}
+
+QListWidget {
+    margin-top: 2px;
+    background-color: #e8e8f0;
+    color: #1e1e2e;
+}
+
+QLabel {
+    color: #1e1e2e;
+}
+
+QLineEdit {
+    background-color: #ffffff;
+    color: #1e1e2e;
+    margin-bottom: 3px;
+    margin-right: 3px;
+    border-radius: 100%;
+    padding: 2px;
+}
+
+QPlainTextEdit {
+    background-color: #e8e8f0;
+    color: #1e1e2e;
+}
+
+QTabWidget {
+    background-color: #ffffff;
+    color: #1e1e2e;
+}
+
+QMessageBox {
+    background: #ffffff;
+}
+
+QMessageBox QLabel {
+    color: #1e1e2e;
+}
+
+QMessageBox QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #1e8449;
+    background-color: #ffffff;
+    color: #1e1e2e;
+    margin-bottom: 2px;
+}
+
+QTabBar::tab {
+    margin-left: 2px;
+    background: #ffffff;
+    color: #1e1e2e;
+    padding-left: 20px;
+    padding-right: 20px;
+    border: 1px solid #e8e8f0;
+    border-bottom-color: transparent;
+}
+
+QTabBar::tab:selected {
+        background: #e8e8f0;
+        color: #1e1e2e;
+    border: 1px solid #c94f7c;
+    border-bottom-color: transparent;
+}
+
+QTabBar::close-button {
+    image: url(:/icons/tab-close-button);
+    subcontrol-position: right;
+}
+
+QTabBar::close-button:hover {
+    background: #ffffff;
+}
+
+QTableWidget {
+    background-color: #ffffff;
+    color: #1e1e2e;
+}
+
+QTableWidget::item:selected {
+    selection-background-color: #4a4e6a;
+    color: #4a4e6a;
+}
+
+QHeaderView::section {
+    background-color: #e8e8f0;
+    color: #1e1e2e;
+}
+
+QMenu {
+    background-color: #ffffff;
+    color: #1e1e2e;
+    border: 1px solid #e8e8f0;
+}
+
+QMenu::separator {
+    background: #e8e8f0;
+}
+
+QMenu::item:selected {
+    background: #e8e8f0;
+}
+
+QAction {
+    background-color: #ffffff;
+    color: #1e1e2e;
+}
+
+QTextEdit {
+    background: #ffffff;
+    color: #1e1e2e;
+}
+
+QTreeWidget {
+    background-color: #ffffff;
+    color: #1e1e2e;
+    border: 1px solid #e8e8f0;
+}
+
+QTreeWidget::item:selected {
+    background: #e8e8f0;
+}

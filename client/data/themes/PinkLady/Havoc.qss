@@ -1,0 +1,175 @@
+/*
+ * Havoc Client Theme -- Pink Lady
+ * ---------------------------------
+ * Palette (from pinklady.Xresource.txt):
+ *   Background (main):     #190d16
+ *   Panel:                 #261623
+ *   Selection:             #472d42
+ *   Accent:                #d479c3
+ *   Text:                  #dabed4
+ *   Tab highlight:         #6687e6
+ *   OK accent:             #53a36d
+ *   Muted:                 #885b7f
+ *   Disabled bg:           #311e2d
+ */
+
+QMainWindow {
+    background: #190d16;
+    color: #dabed4;
+}
+
+QWidget {
+    background: #190d16;
+    color: #dabed4;
+}
+
+QToolButton {
+    border: 1px solid #d479c3;
+    background-color: #261623;
+    color: #dabed4;
+    padding: 3px;
+}
+
+QDialog {
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #d479c3;
+    border-radius: 2px;
+    background-color: #d479c3;
+    color: #261623;
+    margin-bottom: 2px;
+    padding-left:   15px;
+    padding-right:  15px;
+}
+
+QPushButton:pressed {
+    border: 1px solid #d479c3;
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QListWidget {
+    margin-top: 2px;
+    background-color: #472d42;
+    color: #dabed4;
+}
+
+QLabel {
+    color: #dabed4;
+}
+
+QLineEdit {
+    background-color: #261623;
+    color: #dabed4;
+    margin-bottom: 3px;
+    margin-right: 3px;
+    border-radius: 100%;
+    padding: 2px;
+}
+
+QPlainTextEdit {
+    background-color: #472d42;
+    color: #dabed4;
+}
+
+QTabWidget {
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QMessageBox {
+    background: #261623;
+}
+
+QMessageBox QLabel {
+    color: #dabed4;
+}
+
+QMessageBox QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #53a36d;
+    background-color: #261623;
+    color: #dabed4;
+    margin-bottom: 2px;
+}
+
+QTabBar::tab {
+    margin-left: 2px;
+    background: #261623;
+    color: #dabed4;
+    padding-left: 20px;
+    padding-right: 20px;
+    border: 1px solid #472d42;
+    border-bottom-color: transparent;
+}
+
+QTabBar::tab:selected {
+        background: #472d42;
+        color: #dabed4;
+    border: 1px solid #6687e6;
+    border-bottom-color: transparent;
+}
+
+QTabBar::close-button {
+    image: url(:/icons/tab-close-button);
+    subcontrol-position: right;
+}
+
+QTabBar::close-button:hover {
+    background: #261623;
+}
+
+QTableWidget {
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QTableWidget::item:selected {
+    selection-background-color: #885b7f;
+    color: #885b7f;
+}
+
+QHeaderView::section {
+    background-color: #472d42;
+    color: #dabed4;
+}
+
+QMenu {
+    background-color: #261623;
+    color: #dabed4;
+    border: 1px solid #472d42;
+}
+
+QMenu::separator {
+    background: #472d42;
+}
+
+QMenu::item:selected {
+    background: #472d42;
+}
+
+QAction {
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QTextEdit {
+    background: #261623;
+    color: #dabed4;
+}
+
+QTreeWidget {
+    background-color: #261623;
+    color: #dabed4;
+    border: 1px solid #472d42;
+}
+
+QTreeWidget::item:selected {
+    background: #472d42;
+}
