@@ -1,0 +1,70 @@
+QDialog {
+    background-color: #090b0b;
+    color: #cddeda;
+}
+
+QPushButton {
+    padding: 5px 20px;
+    font-size: 13px;
+    border: 1px solid #518880;
+    background-color: #090b0b;
+    color: #cddeda;
+    margin-bottom: 2px;
+}
+
+QLabel {
+    color: #cddeda;
+}
+
+QLineEdit {
+    background-color: #252929;
+    color: #cddeda;
+}
+
+QListView {
+    background-color: #252929;
+    color: #cddeda;
+}
+
+QListView::item {
+    height: 25px;
+    margin: 2px;
+}
+
+QListView::item:selected {
+    border: 1px solid #ee5285;
+}
+
+QListView::item:selected:active {
+    background: #090b0b;
+}
+
+QComboBox {
+    background: #252929;
+    color: #cddeda;
+    border-radius: 100%;
+    padding-left: 5px;
+}
+
+QCheckBox  {
+    background: #090b0b;
+    color: #cddeda;
+}
+
+QCheckBox::indicator  {
+    border: 1px solid #cd9f45;
+}
+
+QCheckBox::indicator:checked  {
+    background: #cd9f45;
+}
+
+QGroupBox {
+    padding: 10px;
+    border: 1px solid #252929;
+}
+
+QGroupBox::title {
+    background: transparent;
+    color: #cddeda;
+}

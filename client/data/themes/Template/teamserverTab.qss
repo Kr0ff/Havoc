@@ -1,0 +1,12 @@
+QTabBar::close-button {
+    image: url(:/icons/tab-close-button);
+    subcontrol-position: right;
+}
+
+QTabBar {
+    border-top-color: #c94f7c;
+}
+
+QTabBar::tab {
+    height: 26px;
+}

@@ -1,0 +1,96 @@
+QDialog {
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QWidget {
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QPushButton {
+    border: 1px solid #d479c3;
+    border-radius: 2px;
+    background-color: #d479c3;
+    color: #261623;
+    padding-top: 3px;
+    padding-bottom: 3px;
+}
+
+QProgressBar {
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background-color: #885b7f;
+    color: #261623;
+}
+
+QTextEdit {
+    background-color: #472d42;
+    color: #dabed4;
+}
+
+QComboBox {
+    background-color: #472d42;
+    color: #dabed4;
+}
+
+QComboBox:!enabled {
+    background-color: #261623;
+    color: #885b7f;
+}
+
+QComboBox::item {
+    background: #472d42;
+    color: #dabed4;
+}
+
+QComboBox::item:selected {
+    background: #885b7f;
+    color: #dabed4;
+}
+
+QGroupBox::title {
+    color: #dabed4;
+}
+
+QPushButton:pressed {
+    border: 1px solid #d479c3;
+    border-radius: 2px;
+    background-color: #261623;
+    color: #dabed4;
+}
+
+QListWidget {
+    margin-top: 2px;
+    background-color: #472d42;
+    border-radius: 2px;
+    color: #dabed4;
+    border: 1px solid #472d42;
+}
+
+QLabel {
+    color: #dabed4;
+}
+
+QLineEdit {
+    background-color: #472d42;
+    color: #dabed4;
+    border-radius: 2px;
+}
+
+QLineEdit:read-only {
+    background-color: #190d16;
+    color: #dabed4;
+}
+
+#ConfigItem, #list, #text, #bool {
+    background-color: #261623;
+    color: #53a36d;
+}
+
+QPlainTextEdit {
+    background-color: #472d42;
+    color: #dabed4;
+}

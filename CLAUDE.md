@@ -140,3 +140,12 @@ To run the teamserver:
 
 - Branch off `main`, submit PRs back to `main`
 - Separate PRs for separate features/fixes (no monolithic PRs)
+
+## Improvement Documentation
+
+All improvement proposals, feature specifications, and enhancement plans for new capabilities must be written to the **`improvement-docs/`** directory at the repository root. This is the canonical location for:
+- New feature specs (transport additions, evasion techniques, new commands)
+- Refactoring proposals (module extraction, architecture changes)
+- Traffic encoding / protocol improvement designs
+
+See `improvement-docs/00-index.md` for the master index and item status. Each file follows the standard template (Status, Problem, Scope, Design, File Map, Tests, Notes). Do **not** place improvement specs in root-level markdown files or in memory files — `improvement-docs/` is the only correct location.
