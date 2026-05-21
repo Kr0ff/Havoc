@@ -136,18 +136,6 @@ To run the teamserver:
 ./havoc server --profile profiles/havoc.yaotl
 ```
 
-## Code Constraints
-
-### AMSI / ETW Patching
-
-**Never use memory byte patching for AMSI or ETW evasion.** The only permitted technique is the hardware breakpoint (HWBP) engine already implemented in `src/core/HwBpEngine.c`.
-
-- Do not write `0xC3`, `0xB8 0x57 0x00 0x07 0x80 0xC3`, or any other byte sequence directly over `AmsiScanBuffer`, `NtTraceEvent`, or any other AMSI/ETW function entry point.
-- Do not call `NtProtectVirtualMemory` + `memcpy`/`MemCopy` to patch function prologues for evasion purposes.
-- All AMSI/ETW suppression must go through `HwBpEngine` — add a breakpoint via `HwBpEngineAdd()`, handle it in the VEH, and return cleanly. This applies to any new evasion code, any refactoring of existing evasion code, and any improvement spec that touches AMSI or ETW.
-
-This rule overrides any improvement spec (including HVC-031) that proposes a memory-patch approach. If an improvement doc conflicts with this rule, follow this rule and note the deviation in the PR description.
-
 ## Contributing
 
 - Branch off `main`, submit PRs back to `main`
