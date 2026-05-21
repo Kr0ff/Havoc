@@ -2,34 +2,33 @@
 */.idea/
 
 # ignore cmake generated stuff
-./Client/Build
+Client/Build
 **/cmake-build-debug/
 
 # dont commit your loot
-./Teamserver/data/loot/
+Teamserver/data/loot/
 
 # dont commit your secrets
-./Client/Data/database.db
-./Client/Data/client.db
+Client/Data/database.db
 
 # ignore go stuff
-./Teamserver/go.sum
+Teamserver/go.sum
 
 # ignore compiled binaries
-./Client/Havoc
-./Teamserver/teamserver
+Client/Havoc
+Teamserver/teamserver
 
 # ignore MUSL C Compiler stuff
-./Teamserver/data/x86_64-w64-mingw32-cross/
+Teamserver/data/x86_64-w64-mingw32-cross/
 
 # ignore havoc binary
-./havoc
+havoc
 
 # ignore data directory
-./data/
+data/
 
 .DS_Store
 # ignore client directories
-./client/Build/
-./client/Havoc
-./client/Modules/
+client/Build/
+client/Havoc
+client/Modules/
