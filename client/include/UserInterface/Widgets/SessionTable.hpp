@@ -11,6 +11,7 @@ private:
     QString             TeamserverName   = nullptr;
 
     QTableWidgetItem*   TitleAgentID     = nullptr;
+    QTableWidgetItem*   TitleListener    = nullptr;
     QTableWidgetItem*   TitleInternal    = nullptr;
     QTableWidgetItem*   TitleExternal    = nullptr;
     QTableWidgetItem*   TitleUser        = nullptr;

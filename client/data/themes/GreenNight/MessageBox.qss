@@ -1,0 +1,25 @@
+QMessageBox {
+    background: #141915;
+}
+
+QMessageBox QLabel {
+    color: #b7d3bd;
+}
+
+QPushButton {
+    padding: 3px;
+    font-size: 13px;
+    border: 1px solid #6ab67c;
+    border-radius: 2px;
+    background-color: #6ab67c;
+    color: #141915;
+    margin-bottom: 2px;
+    padding-left:   15px;
+    padding-right:  15px;
+}
+
+QPushButton:pressed {
+    border: 1px solid #6ab67c;
+    background-color: #141915;
+    color: #b7d3bd;
+}

@@ -38,6 +38,10 @@ func (t *Teamserver) ListenerStart(ListenerType int, info any) error {
 		case handlers.LISTENER_EXTERNAL:
 			Name = info.(handlers.ExternalConfig).Name
 			break
+
+		case handlers.LISTENER_DNS:
+			Name = info.(handlers.DNSConfig).Name
+			break
 		}
 
 		if Name == listener.Name {
@@ -97,6 +101,21 @@ func (t *Teamserver) ListenerStart(ListenerType int, info any) error {
 
 		ListenerConfig = ExtConfig
 		ListenerName = info.(handlers.ExternalConfig).Name
+
+		break
+
+	case handlers.LISTENER_DNS:
+		var DNSConfig = handlers.DNS{
+			Config:     info.(handlers.DNSConfig),
+			Teamserver: t,
+		}
+
+		if err := DNSConfig.Start(); err != nil {
+			return err
+		}
+
+		ListenerConfig = &DNSConfig
+		ListenerName = info.(handlers.DNSConfig).Name
 
 		break
 	}
@@ -202,6 +221,7 @@ func (t *Teamserver) ListenerEdit(Type int, Config any) {
 				t.Listeners[i].Config.(*handlers.HTTP).Config.Headers = Config.(handlers.HTTPConfig).Headers
 				t.Listeners[i].Config.(*handlers.HTTP).Config.Uris = Config.(handlers.HTTPConfig).Uris
 				t.Listeners[i].Config.(*handlers.HTTP).Config.Proxy = Config.(handlers.HTTPConfig).Proxy
+				t.Listeners[i].Config.(*handlers.HTTP).Config.IgnoreHeaders = Config.(handlers.HTTPConfig).IgnoreHeaders
 				t.Listeners[i].Config.(*handlers.HTTP).Config.BehindRedir = t.Profile.Config.Demon.TrustXForwardedFor
 			}
 
@@ -238,9 +258,10 @@ func (t *Teamserver) ListenerAdd(FromUser string, Type int, Config any) packager
 		Name = Info["Name"].(string)
 
 		/* Now set the config/info */
-		Info["Hosts"] = strings.Join(Config.(*handlers.HTTP).Config.Hosts, ", ")
-		Info["Headers"] = strings.Join(Config.(*handlers.HTTP).Config.Headers, ", ")
-		Info["Uris"] = strings.Join(Config.(*handlers.HTTP).Config.Uris, ", ")
+		Info["Hosts"] = strings.Join(Config.(*handlers.HTTP).Config.Hosts, "\n")
+		Info["Headers"] = strings.Join(Config.(*handlers.HTTP).Config.Headers, "\n")
+		Info["Uris"] = strings.Join(Config.(*handlers.HTTP).Config.Uris, "\n")
+		Info["IgnoreHeaders"] = strings.Join(Config.(*handlers.HTTP).Config.IgnoreHeaders, "\n")
 
 		/* proxy settings */
 		Info["Proxy Enabled"] = Config.(*handlers.HTTP).Config.Proxy.Enabled
@@ -253,7 +274,7 @@ func (t *Teamserver) ListenerAdd(FromUser string, Type int, Config any) packager
 		Info["Secure"] = Config.(*handlers.HTTP).Config.Secure
 		Info["Status"] = Config.(*handlers.HTTP).Active
 
-		Info["Response Headers"] = strings.Join(Config.(*handlers.HTTP).Config.Response.Headers, ", ")
+		Info["Response Headers"] = strings.Join(Config.(*handlers.HTTP).Config.Response.Headers, "\n")
 
 		Info["Secure"] = "false"
 		if Config.(*handlers.HTTP).Config.Secure {
@@ -277,7 +298,7 @@ func (t *Teamserver) ListenerAdd(FromUser string, Type int, Config any) packager
 			if len(Host) == 0 {
 				Host = host
 			} else {
-				Host += ", " + host
+				Host += "\n" + host
 			}
 		}
 		Info["Hosts"] = Host
@@ -308,6 +329,22 @@ func (t *Teamserver) ListenerAdd(FromUser string, Type int, Config any) packager
 		Info := structs.Map(Config.(*handlers.External).Config)
 
 		Protocol = handlers.AGENT_EXTERNAL
+		Name = Info["Name"].(string)
+
+		Info["Status"] = "Online"
+
+		delete(Info, "Name")
+
+		/* we get an error just do nothing */
+		ConfigJson, _ = json.Marshal(Info)
+
+		break
+
+	case handlers.LISTENER_DNS:
+
+		Info := structs.Map(Config.(*handlers.DNS).Config)
+
+		Protocol = handlers.AGENT_DNS
 		Name = Info["Name"].(string)
 
 		Info["Status"] = "Online"

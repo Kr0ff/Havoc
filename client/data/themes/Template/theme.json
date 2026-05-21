@@ -1,0 +1,7 @@
+{
+    "name": "MyTheme",
+    "displayName": "My Custom Theme",
+    "author": "Your Name",
+    "version": "1.0",
+    "description": "COPY THIS DIRECTORY TO ~/.havoc/themes/MyTheme/ AND EDIT. Rename the 'name' field to match the directory name you choose."
+}

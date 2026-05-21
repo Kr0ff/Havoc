@@ -1,0 +1,18 @@
+QMenu {
+    background-color: #ffffff;
+    color: #1e1e2e;
+    border: 1px solid #e8e8f0;
+}
+
+QMenu::separator {
+    background: #e8e8f0;
+}
+
+QMenu::item:selected {
+    background: #e8e8f0;
+}
+
+QAction {
+    background-color: #ffffff;
+    color: #1e1e2e;
+}

@@ -124,8 +124,11 @@ typedef struct {
     QString OS, OSBuild, OSArch;
     QString Process, PID;
     QString Arch;
-    QString First, Last;    // first/last check-in timestamp strings
-    QDateTime LastUTC;      // parsed from Last
+    QString First, Last;    // first/last check-in timestamp strings (server UTC, "dd-MM-yyyy HH:mm:ss")
+    QDateTime LastUTC;      // Qt::UTC QDateTime used by UpdateSessionsHealth for elapsed-time display.
+                            // Initial load (DB restore): parsed from Last with setTimeSpec(Qt::UTC).
+                            // Live CALLBACK event: set to QDateTime::currentDateTimeUtc() at receipt,
+                            // bypassing CDN transit latency on the Demon→server path.
     QString Elevated;       // "true"/"false"
     QString PivotParent;    // parent AgentID if SMB pivot
     QString Marked;         // "Alive" | "Dead"
@@ -469,7 +472,7 @@ Arguments may be double-base64 encoded (first `base64_encode(Args)`, then the wh
 - `ComboArch`: "x64", "x86"
 - `ComboFormat`: "Windows Exe", "Windows Dll", "Windows Shellcode"
 - `ComboListener`: populated from `HavocX::Teamserver.Listeners` (online only)
-- `TreeConfig`: per-format Demon config tree (populated by `DefaultConfig()`)
+- `TreeConfig`: per-format Demon config tree (populated by `DefaultConfig()` and `AddConfigFromJson()`)
 - `ConsoleText`: build log output
 
 ### `buttonGenerate()`
@@ -489,6 +492,24 @@ Body.Info = {
 HavocX::GateGUI = true;
 HavocX::Connector->SendPackage(Package);
 ```
+
+### `AddConfigFromJson(QJsonDocument)`
+
+Populates `TreeConfig` from a JSON document received when a module/format is selected.
+For each JSON key:
+- **bool** → `QCheckBox` widget
+- **string** → `QLineEdit` widget
+- **array** → `QComboBox` widget
+- **object** → nested `QTreeWidgetItem` children with the same type rules
+
+`QCheckBox` items have their palette explicitly set so they match the active theme:
+
+```cpp
+p.setColor( QPalette::Window,     QColor( ThemeManager::Instance().ActiveColors().panel ) );
+p.setColor( QPalette::WindowText, QColor( ThemeManager::Instance().ActiveColors().text  ) );
+```
+
+`QLineEdit` and `QComboBox` items inherit colors from the application-wide palette.
 
 ### `ReceivedImplantAndSave(FileName, bytes)`
 
@@ -527,6 +548,20 @@ The per-agent interaction console:
 | 9 | Health |
 
 Row icons use Windows version icons; elevated sessions show a different icon variant. Dead sessions are greyed out with a skull icon.
+
+**Column 8 — Last (elapsed time):** Updated every second by `UpdateSessionsHealth()` (`HavocUi.cc`), which fires on a 1-second `QTimer`. The elapsed value is computed as:
+
+```cpp
+qint64 diff = session.LastUTC.secsTo( QDateTime::currentDateTimeUtc() );
+auto days    = static_cast<int>( diff / 86400 );
+auto hours   = static_cast<int>( ( diff % 86400 ) / 3600 );
+auto minutes = static_cast<int>( ( diff % 3600 ) / 60 );
+auto seconds = static_cast<int>( diff % 60 );
+```
+
+Display format: `Xs` / `Xm Xs` / `Xh Xm` / `Xd Xh`. `LastUTC` is always `Qt::UTC`
+(no local-timezone adjustment), set either from the server's UTC-formatted timestamp
+(initial load) or from `currentDateTimeUtc()` at live CALLBACK receipt.
 
 ### `TeamserverTabSession` (`include/UserInterface/Widgets/TeamserverTabSession.h`)
 

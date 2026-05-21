@@ -10,7 +10,7 @@ using namespace std;
 using namespace HavocNamespace;
 using namespace HavocNamespace::HavocSpace;
 
-string HavocNamespace::Version  = "1.6";
+string HavocNamespace::Version  = "1.7";
 string HavocNamespace::CodeName = "Eclipse Anchor";
 
 // Global Variables in the Havoc Namespace
@@ -28,6 +28,7 @@ QString HavocSpace::Listener::PayloadHTTPS    = "Https";
 QString HavocSpace::Listener::PayloadHTTP     = "Http";
 QString HavocSpace::Listener::PayloadSMB      = "Smb";
 QString HavocSpace::Listener::PayloadExternal = "External";
+QString HavocSpace::Listener::PayloadDNS      = "Dns";
 
 std::string Util::gen_random( const int len )
 {

@@ -149,6 +149,10 @@
 #define H_FUNC_LOGONUSEREXW                          0x6ba383b7
 #define H_FUNC_VSNPRINTF                             0xe212f2ef
 #define H_FUNC_GETADAPTERSINFO                       0x37cada45
+/* [DNS transport] dnsapi.dll function hashes (DJB2 on null-terminated ASCII names) */
+#define H_FUNC_DNSQUERY_W                            0x8641aed6
+#define H_FUNC_DNSRECORDLISTFREE                     0x92fdf287
+
 #define H_FUNC_WINHTTPOPEN                           0x613eace5
 #define H_FUNC_WINHTTPCONNECT                        0x81e0c81d
 #define H_FUNC_WINHTTPOPENREQUEST                    0xb06d900e
@@ -386,6 +390,11 @@
 #define H_COFFAPI_NTSETINFORMATIONTHREAD          0x54212e31
 #define H_COFFAPI_NTSETINFORMATIONVIRTUALMEMORY   0xe7aea539
 #define H_COFFAPI_NTGETNEXTTHREAD                 0x8f8000fe
+
+/* [HVC-026] Advapi32 — Registry (auto proxy detection) */
+#define H_FUNC_REGOPENKEYW                        0x83e34e72   /* RegOpenKeyExW    */
+#define H_FUNC_REGQUERYVALUEEXW                   0xd37cffca   /* RegQueryValueExW */
+#define H_FUNC_REGCLOSEKEY                        0x7649a602   /* RegCloseKey      */
 
 #define H_MODULE_KERNEL32                         0xadd31df0
 #define H_MODULE_NTDLL                            0x70e61753

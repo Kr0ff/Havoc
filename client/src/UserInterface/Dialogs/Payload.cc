@@ -124,8 +124,8 @@ void Payload::setupUi( QDialog* Dialog )
     connect( ComboAgentType, &QComboBox::currentTextChanged, this, &Payload::CtxAgentPayloadChange );
     connect( ComboFormat, &QComboBox::currentTextChanged, this, [&]( const QString& text ){
 
-        // only add config if our agent type is the default one (demon)
-        if ( ComboAgentType->currentText().compare( "Demon" ) == 0 )
+        auto agent = ComboAgentType->currentText();
+        if ( agent.compare( "Demon" ) == 0 )
             DefaultConfig();
 
     } );
@@ -343,7 +343,6 @@ auto Payload::CtxAgentPayloadChange( const QString& AgentType ) -> void
 
         if ( AgentType.compare( "Demon" ) == 0 )
         {
-            // If agent not found means it's the default Demon
             DefaultConfig();
 
             ComboFormat->clear();
@@ -393,7 +392,8 @@ auto Payload::AddConfigFromJson( QJsonDocument Config ) -> void
             ( ( QCheckBox* ) ObjectItem )->setChecked( KeyValue.toBool() );
 
             auto p = ObjectItem->palette();
-            p.setColor( QPalette::Window, Qt::gray );
+            p.setColor( QPalette::Window, QColor( ThemeManager::Instance().ActiveColors().panel ) );
+            p.setColor( QPalette::WindowText, QColor( ThemeManager::Instance().ActiveColors().text ) );
             ObjectItem->setPalette( p );
 
             TreeConfig->setItemWidget( TreeItem, 1, ObjectItem );
@@ -438,7 +438,8 @@ auto Payload::AddConfigFromJson( QJsonDocument Config ) -> void
                     ( ( QCheckBox* ) ObjectItem )->setChecked( SubKeyValue.toBool() );
 
                     auto p = ObjectItem->palette();
-                    p.setColor( QPalette::Window, Qt::gray );
+                    p.setColor( QPalette::Window, QColor( ThemeManager::Instance().ActiveColors().panel ) );
+                    p.setColor( QPalette::WindowText, QColor( ThemeManager::Instance().ActiveColors().text ) );
                     ObjectItem->setPalette( p );
 
                     TreeConfig->setItemWidget( TreeChildItem, 1, ObjectItem );
@@ -493,6 +494,7 @@ auto Payload::DefaultConfig() -> void
     auto ConfigSleepJmpBypass    = new QTreeWidgetItem( TreeConfig );
     auto ConfigProxyLoading      = new QTreeWidgetItem( TreeConfig );
     auto ConfigAmsiEtwPatch      = new QTreeWidgetItem( TreeConfig );
+    auto ConfigAutoProxy         = new QTreeWidgetItem( TreeConfig ); // [HVC-026]
     auto ConfigInjection         = new QTreeWidgetItem( TreeConfig );
     auto ConfigInjectionAlloc    = new QTreeWidgetItem( ConfigInjection );
     auto ConfigInjectionExecute  = new QTreeWidgetItem( ConfigInjection );
@@ -515,6 +517,7 @@ auto Payload::DefaultConfig() -> void
     ConfigStackSpoof             = new QCheckBox;
     ProxyLoading                 = new QComboBox;
     auto AmsiEtwPatch            = new QComboBox;
+    auto ConfigAutoProxyCheck    = new QCheckBox;   // [HVC-026]
     auto ConfigSpawn64LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
     auto ConfigSpawn32LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn32" ].toString() );
     auto DefaultIndSyscallCheck  = DemonConfig[ "IndirectSyscall" ].toBool();
@@ -557,9 +560,11 @@ auto Payload::DefaultConfig() -> void
     SleepObfSpoofAddress->setObjectName( "ConfigItem" );
     ProxyLoading->setObjectName( "ConfigItem" );
     AmsiEtwPatch->setObjectName( "ConfigItem" );
+    ConfigAutoProxyCheck->setObjectName( "ConfigItem" );    // [HVC-026]
 
     ConfigIndSyscallCheck->setChecked( DefaultIndSyscallCheck );
     ConfigStackSpoof->setChecked( DefaultStackDuplication );
+    ConfigAutoProxyCheck->setChecked( true );               // [HVC-026] ON by default
 
     SleepObfJmpBypass->addItems( QStringList() << "None" << "jmp rax" << "jmp rbx" );
     ConfigInjectAlloc->addItems( QStringList() << "Win32" << "Native/Syscall" );
@@ -621,6 +626,7 @@ auto Payload::DefaultConfig() -> void
     TreeConfig->setItemWidget( ConfigSleepStackSpoof,  1, ConfigStackSpoof );
     TreeConfig->setItemWidget( ConfigProxyLoading,     1, ProxyLoading );
     TreeConfig->setItemWidget( ConfigAmsiEtwPatch,     1, AmsiEtwPatch );
+    TreeConfig->setItemWidget( ConfigAutoProxy,        1, ConfigAutoProxyCheck ); // [HVC-026]
 
     // disable invalid sleep obf option combinations
     connect( SleepObfTechnique, &QComboBox::currentTextChanged, this, [=, this]( const QString& text ) {
@@ -656,6 +662,7 @@ auto Payload::DefaultConfig() -> void
     ConfigSleepStackSpoof->setText( 0, "Stack Duplication" );
     ConfigProxyLoading->setText( 0, "Proxy Loading" );
     ConfigAmsiEtwPatch->setText( 0, "Amsi/Etw Patch" );
+    ConfigAutoProxy->setText( 0, "Auto Proxy Detection" ); // [HVC-026]
 
     ConfigInjection->setText( 0, "Injection" );
     ConfigInjection->setExpanded( true );

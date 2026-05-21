@@ -1,0 +1,7 @@
+{
+    "name": "Light",
+    "displayName": "Light",
+    "author": "Havoc Framework",
+    "version": "1.0",
+    "description": "Light palette built on a white panel with a deep indigo accent. Ships as a builtin theme and doubles as the starting point for custom themes."
+}

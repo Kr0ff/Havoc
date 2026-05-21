@@ -27,8 +27,8 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::setupUi(QWidget *Form
     gridLayout->setObjectName( QString::fromUtf8( "gridLayout" ) );
     SessionTableWidget = new QTableWidget( Form );
 
-    if ( SessionTableWidget->columnCount() < 11 )
-        SessionTableWidget->setColumnCount( 11 );
+    if ( SessionTableWidget->columnCount() < 12 )
+        SessionTableWidget->setColumnCount( 12 );
 
     {
         const auto& tc = ThemeManager::Instance().ActiveColors();
@@ -41,6 +41,7 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::setupUi(QWidget *Form
     }
 
     TitleAgentID   = new QTableWidgetItem( "ID"       );
+    TitleListener  = new QTableWidgetItem( "Listener" );
     TitleExternal  = new QTableWidgetItem( "External" );
     TitleInternal  = new QTableWidgetItem( "Internal" );
     TitleUser      = new QTableWidgetItem( "User"     );
@@ -53,17 +54,18 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::setupUi(QWidget *Form
     TitleNote      = new QTableWidgetItem( "Note"     );
 
     SessionTableWidget->setHorizontalHeaderItem( 0,  TitleAgentID   );
-    SessionTableWidget->setHorizontalHeaderItem( 1,  TitleExternal  );
-    SessionTableWidget->setHorizontalHeaderItem( 2,  TitleInternal  );
-    SessionTableWidget->setHorizontalHeaderItem( 3,  TitleUser      );
-    SessionTableWidget->setHorizontalHeaderItem( 4,  TitleComputer  );
-    SessionTableWidget->setHorizontalHeaderItem( 5,  TitleOperating );
-    SessionTableWidget->setHorizontalHeaderItem( 6,  TitleProcess   );
-    SessionTableWidget->setHorizontalHeaderItem( 7,  TitleProcessId );
-    SessionTableWidget->setHorizontalHeaderItem( 8,  TitleLast      );
-    SessionTableWidget->setHorizontalHeaderItem( 9,  TitleHealth    );
-    SessionTableWidget->setHorizontalHeaderItem( 10, TitleNote      );
-    SessionTableWidget->horizontalHeader()->resizeSection( 5, 150 );
+    SessionTableWidget->setHorizontalHeaderItem( 1,  TitleListener  );
+    SessionTableWidget->setHorizontalHeaderItem( 2,  TitleExternal  );
+    SessionTableWidget->setHorizontalHeaderItem( 3,  TitleInternal  );
+    SessionTableWidget->setHorizontalHeaderItem( 4,  TitleUser      );
+    SessionTableWidget->setHorizontalHeaderItem( 5,  TitleComputer  );
+    SessionTableWidget->setHorizontalHeaderItem( 6,  TitleOperating );
+    SessionTableWidget->setHorizontalHeaderItem( 7,  TitleProcess   );
+    SessionTableWidget->setHorizontalHeaderItem( 8,  TitleProcessId );
+    SessionTableWidget->setHorizontalHeaderItem( 9,  TitleLast      );
+    SessionTableWidget->setHorizontalHeaderItem( 10, TitleHealth    );
+    SessionTableWidget->setHorizontalHeaderItem( 11, TitleNote      );
+    SessionTableWidget->horizontalHeader()->resizeSection( 6, 150 );
 
     SessionTableWidget->setEnabled( true );
     SessionTableWidget->setShowGrid( false );
@@ -83,7 +85,7 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::setupUi(QWidget *Form
     connect( SessionTableWidget, &QTableWidget::itemSelectionChanged, this, &HavocNamespace::UserInterface::Widgets::SessionTable::updateRow );
 
     connect( SessionTableWidget, &QTableWidget::itemChanged, this, [this]( QTableWidgetItem* changedItem ) {
-        if ( ! changedItem || changedItem->column() != 10 ) return;
+        if ( ! changedItem || changedItem->column() != 11 ) return;
 
         auto agentID = SessionTableWidget->item( changedItem->row(), 0 );
         if ( ! agentID ) return;
@@ -143,6 +145,7 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::NewSessionItem( Util:
     SessionTableWidget->blockSignals( true );
 
     auto item_ID        = new QTableWidgetItem();
+    auto item_Listener  = new QTableWidgetItem();
     auto item_External  = new QTableWidgetItem();
     auto item_Internal  = new QTableWidgetItem();
     auto item_User      = new QTableWidgetItem();
@@ -168,53 +171,58 @@ void HavocNamespace::UserInterface::Widgets::SessionTable::NewSessionItem( Util:
     item_ID->setFlags( item_ID->flags() ^ Qt::ItemIsEditable );
     SessionTableWidget->setItem( SessionTableWidget->rowCount() - 1, 0, item_ID );
 
+    item_Listener->setText( item.Listener );
+    item_Listener->setTextAlignment( Qt::AlignCenter );
+    item_Listener->setFlags( item_Listener->flags() ^ Qt::ItemIsEditable );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 1, item_Listener );
+
     item_External->setText( item.External );
     item_External->setTextAlignment( Qt::AlignCenter );
     item_External->setFlags( item_External->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 1, item_External );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 2, item_External );
 
     item_Internal->setText( item.Internal );
     item_Internal->setTextAlignment( Qt::AlignCenter );
     item_Internal->setFlags( item_Internal->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 2, item_Internal );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 3, item_Internal );
 
     item_User->setText( item.User );
     item_User->setTextAlignment( Qt::AlignCenter );
     item_User->setFlags( item_User->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 3, item_User );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 4, item_User );
 
     item_Computer->setText( item.Computer );
     item_Computer->setTextAlignment( Qt::AlignCenter );
     item_Computer->setFlags( item_Computer->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 4, item_Computer );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 5, item_Computer );
 
     item_OS->setText( item.OS );
     item_OS->setTextAlignment( Qt::AlignCenter );
     item_OS->setFlags( item_OS->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 5, item_OS );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 6, item_OS );
 
     item_Process->setText( item.Process );
     item_Process->setTextAlignment( Qt::AlignCenter );
     item_Process->setFlags( item_Process->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 6, item_Process );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 7, item_Process );
 
     item_ProcessID->setText( item.PID );
     item_ProcessID->setTextAlignment( Qt::AlignCenter );
     item_ProcessID->setFlags( item_ProcessID->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 7, item_ProcessID );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 8, item_ProcessID );
 
     item_Last->setText( item.Last );
     item_Last->setTextAlignment( Qt::AlignCenter );
     item_Last->setFlags( item_Last->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 8, item_Last );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 9, item_Last );
 
     item_Health->setText( item.Health );
     item_Health->setTextAlignment( Qt::AlignCenter );
     item_Health->setFlags( item_Health->flags() ^ Qt::ItemIsEditable );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 9, item_Health );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 10, item_Health );
 
     item_Note->setText( item.Notes );
-    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 10, item_Note );
+    SessionTableWidget->setItem( SessionTableWidget->rowCount()-1, 11, item_Note );
 
     SessionTableWidget->blockSignals( false );
     SessionTableWidget->setSortingEnabled( isSortingEnabled );

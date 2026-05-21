@@ -35,6 +35,17 @@ import (
 	"Havoc/pkg/utils"
 )
 
+// splitListenerField splits a stored listener field that may use either the
+// legacy ", " delimiter (entries created before v0.9.2) or the current "\n"
+// delimiter. HTTP header values never contain a bare newline, so the presence
+// of "\n" unambiguously identifies new-format entries.
+func splitListenerField(s string) []string {
+	if strings.Contains(s, "\n") {
+		return strings.Split(s, "\n")
+	}
+	return strings.Split(s, ", ")
+}
+
 func NewTeamserver(DatabasePath string) *Teamserver {
 	if d, err := db.DatabaseNew(DatabasePath); err != nil {
 		logger.Error("Failed to create a new db: " + err.Error())
@@ -240,20 +251,21 @@ func (t *Teamserver) Start() {
 			}
 
 			var HandlerData = handlers.HTTPConfig{
-				Name:         listener.Name,
-				KillDate:     KillDate,
-				WorkingHours: listener.WorkingHours,
-				Hosts:        listener.Hosts,
-				HostBind:     listener.HostBind,
-				Methode:      listener.Methode,
-				HostRotation: listener.HostRotation,
-				BehindRedir:  t.Profile.Config.Demon.TrustXForwardedFor,
-				PortBind:     strconv.Itoa(listener.PortBind),
-				PortConn:     strconv.Itoa(listener.PortConn),
-				UserAgent:    listener.UserAgent,
-				Headers:      listener.Headers,
-				Uris:         listener.Uris,
-				Secure:       listener.Secure,
+				Name:          listener.Name,
+				KillDate:      KillDate,
+				WorkingHours:  listener.WorkingHours,
+				Hosts:         listener.Hosts,
+				HostBind:      listener.HostBind,
+				Methode:       listener.Methode,
+				HostRotation:  listener.HostRotation,
+				BehindRedir:   t.Profile.Config.Demon.TrustXForwardedFor,
+				PortBind:      strconv.Itoa(listener.PortBind),
+				PortConn:      strconv.Itoa(listener.PortConn),
+				UserAgent:     listener.UserAgent,
+				Headers:       listener.Headers,
+				Uris:          listener.Uris,
+				Secure:        listener.Secure,
+				IgnoreHeaders: listener.IgnoreHeaders,
 			}
 
 			if listener.Cert != nil {
@@ -325,6 +337,24 @@ func (t *Teamserver) Start() {
 			}
 		}
 
+		/* Start all DNS listeners */
+		for _, listener := range t.Profile.Config.Listener.ListenerDNS {
+			var HandlerData = handlers.DNSConfig{
+				Name:         listener.Name,
+				Hosts:        listener.Hosts,
+				HostBind:     listener.HostBind,
+				Port:         listener.Port,
+				ZoneDomain:   listener.ZoneDomain,
+				QueryTimeout: listener.QueryTimeout,
+				ChunkDelayMs: listener.ChunkDelayMs,
+			}
+
+			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil {
+				logger.Error("Failed to start DNS listener from profile: " + err.Error())
+				return
+			}
+		}
+
 	}
 
 	if ListenerCount > 0 {
@@ -366,13 +396,13 @@ func (t *Teamserver) Start() {
 			}
 
 			/* set config of http listener */
-			HandlerData.Hosts = strings.Split(Data["Hosts"].(string), ", ")
+			HandlerData.Hosts = splitListenerField(Data["Hosts"].(string))
 			HandlerData.HostBind = Data["HostBind"].(string)
 			HandlerData.HostRotation = Data["HostRotation"].(string)
 			HandlerData.PortBind = Data["PortBind"].(string)
 			HandlerData.UserAgent = Data["UserAgent"].(string)
-			HandlerData.Headers = strings.Split(Data["Headers"].(string), ", ")
-			HandlerData.Uris = strings.Split(Data["Uris"].(string), ", ")
+			HandlerData.Headers = splitListenerField(Data["Headers"].(string))
+			HandlerData.Uris = splitListenerField(Data["Uris"].(string))
 			HandlerData.BehindRedir = t.Profile.Config.Demon.TrustXForwardedFor
 
 			HandlerData.Secure = false
@@ -385,7 +415,7 @@ func (t *Teamserver) Start() {
 				switch Data["Response Headers"].(type) {
 
 				case string:
-					HandlerData.Response.Headers = strings.Split(Data["Response Headers"].(string), ", ")
+					HandlerData.Response.Headers = splitListenerField(Data["Response Headers"].(string))
 					break
 
 				default:
@@ -394,6 +424,10 @@ func (t *Teamserver) Start() {
 					}
 
 				}
+			}
+
+			if v, ok := Data["IgnoreHeaders"].(string); ok && v != "" {
+				HandlerData.IgnoreHeaders = strings.Split(v, "\n")
 			}
 
 			/* also ignore if we already have a listener running */
@@ -450,6 +484,65 @@ func (t *Teamserver) Start() {
 			if err := t.ListenerStart(handlers.LISTENER_PIVOT_SMB, HandlerData); err != nil && err.Error() != "listener already exists" {
 				logger.SetStdOut(os.Stderr)
 				logger.Error("Failed to start listener from db: " + err.Error())
+				return
+			}
+
+			break
+
+		case handlers.AGENT_DNS:
+
+			var (
+				Data        = make(map[string]any)
+				HandlerData = handlers.DNSConfig{
+					Name: listener["Name"],
+				}
+			)
+
+			err := json.Unmarshal([]byte(listener["Config"]), &Data)
+			if err != nil {
+				logger.Debug("Failed to unmarshal DNS listener from db: " + err.Error())
+				continue
+			}
+
+			HandlerData.ZoneDomain, _ = Data["ZoneDomain"].(string)
+			HandlerData.HostBind, _ = Data["HostBind"].(string)
+
+			switch v := Data["Port"].(type) {
+			case float64:
+				HandlerData.Port = int(v)
+			case string:
+				HandlerData.Port, _ = strconv.Atoi(v)
+			}
+			switch v := Data["QueryTimeout"].(type) {
+			case float64:
+				HandlerData.QueryTimeout = int(v)
+			case string:
+				HandlerData.QueryTimeout, _ = strconv.Atoi(v)
+			}
+			switch v := Data["ChunkDelayMs"].(type) {
+			case float64:
+				HandlerData.ChunkDelayMs = int(v)
+			case string:
+				HandlerData.ChunkDelayMs, _ = strconv.Atoi(v)
+			}
+			switch v := Data["Hosts"].(type) {
+			case string:
+				for _, h := range splitListenerField(v) {
+					if len(h) > 0 {
+						HandlerData.Hosts = append(HandlerData.Hosts, h)
+					}
+				}
+			case []interface{}:
+				for _, h := range v {
+					if s, ok := h.(string); ok && len(s) > 0 {
+						HandlerData.Hosts = append(HandlerData.Hosts, s)
+					}
+				}
+			}
+
+			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil && err.Error() != "listener already exists" {
+				logger.SetStdOut(os.Stderr)
+				logger.Error("Failed to start DNS listener from db: " + err.Error())
 				return
 			}
 

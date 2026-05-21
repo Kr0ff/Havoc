@@ -57,7 +57,7 @@ func (e *External) Request(ctx *gin.Context) {
 
     ExternalIP := strings.Split(ctx.Request.RemoteAddr, ":")[0]
 
-    if Response, Success := parseAgentRequest(e.Teamserver, Body, ExternalIP); Success {
+    if Response, Success := parseAgentRequest(e.Teamserver, Body, ExternalIP, false, e.Config.Name); Success {
         // [HVC-002 2026-03-26] Base64-encode the response before writing it to the wire.
         encoded := base64.StdEncoding.EncodeToString(Response.Bytes())
         _, err := ctx.Writer.Write([]byte(encoded))

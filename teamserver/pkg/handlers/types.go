@@ -21,10 +21,11 @@ type (
 		PortConn     string
 		BehindRedir  bool
 		UserAgent    string
-		Headers      []string
-		Uris         []string
-		HostHeader   string
-		Secure       bool
+		Headers       []string
+		Uris          []string
+		HostHeader    string
+		Secure        bool
+		IgnoreHeaders []string
 
 		Cert struct {
 			Cert string
@@ -107,9 +108,21 @@ const (
 	LISTENER_PIVOT_SMB = 2
 	LISTENER_EXTERNAL  = 3
 	LISTENER_SERVICE   = 4
+	LISTENER_DNS       = 5
 
 	AGENT_HTTPS     = "Https"
 	AGENT_HTTP      = "Http"
 	AGENT_EXTERNAL  = "External"
 	AGENT_PIVOT_SMB = "Smb"
+	AGENT_DNS       = "Dns"
 )
+
+type DNSConfig struct {
+	Name         string
+	Hosts        []string
+	HostBind     string
+	Port         int
+	ZoneDomain   string
+	QueryTimeout int
+	ChunkDelayMs int
+}

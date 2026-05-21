@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpacerItem>
 
 using namespace HavocNamespace::HavocSpace;
@@ -29,9 +30,37 @@ NewListener::NewListener( QDialog* Dialog )
     if ( ListenerDialog->objectName().isEmpty() )
         ListenerDialog->setObjectName( QString::fromUtf8( "ListenerWidget" ) );
 
-    Dialog->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/Listener" ) );
+    {
+        const auto& tc = ThemeManager::Instance().ActiveColors();
+        Dialog->setStyleSheet( QString(
+            "QDialog { background-color: %1; color: %2; }"
+            "QPushButton { background-color: %3; color: %1; }"
+            "QLineEdit { background-color: %4; color: %2; border-radius: 2px; padding: 3px; padding-left: 5px; }"
+            "QLineEdit:read-only { background-color: %5; color: %2; }"
+            "QListView { background-color: %4; color: %2; }"
+            "QLabel { color: %2; }"
+            "#bool { background-color: %1; color: %2; }"
+            "QComboBox { background-color: %4; color: %2; }"
+            "QComboBox:!enabled { background-color: %1; color: %6; }"
+            "QComboBox::item { background: %4; color: %2; }"
+            "QComboBox::item:selected { background: %6; color: %2; }"
+            "QGroupBox { background-color: %1; }"
+            "QGroupBox:!enabled { background: %5; border: 1px solid %5; border-radius: 3px; }"
+            "QGroupBox::title { color: %2; }"
+            "QScrollArea { background-color: %1; border: none; }"
+            "QScrollBar:vertical { background-color: %4; width: 8px; border-radius: 4px; margin: 0px; }"
+            "QScrollBar::handle:vertical { background-color: %6; border-radius: 4px; min-height: 20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; background: none; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+            "QScrollBar:horizontal { background-color: %4; height: 8px; border-radius: 4px; margin: 0px; }"
+            "QScrollBar::handle:horizontal { background-color: %6; border-radius: 4px; min-width: 20px; }"
+            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; background: none; }"
+            "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }"
+        ).arg( tc.panel, tc.text, tc.accent, tc.selection, tc.bgMain, tc.muted ) );
+    }
 
-    ListenerDialog->resize( 550, 600 );
+    ListenerDialog->resize( 600, 650 );
+    ListenerDialog->setMinimumSize( 520, 480 );
 
     gridLayout = new QGridLayout( ListenerDialog );
     gridLayout->setObjectName(QString::fromUtf8("gridLayout"));
@@ -166,8 +195,8 @@ NewListener::NewListener( QDialog* Dialog )
 
     gridLayout_2->addWidget( StackWidgetConfigPages, 0, 0, 1, 1 );
 
-
     gridLayout->addWidget(ConfigBox, 3, 0, 1, 6);
+    gridLayout->setRowStretch( 3, 1 );
 
     ComboPayload = new QComboBox( ListenerDialog );
     ComboPayload->setObjectName( QString::fromUtf8( "ComboPayload" ) );
@@ -279,10 +308,78 @@ NewListener::NewListener( QDialog* Dialog )
         LabelPassword->setStyleSheet( style );
     }
 
-    // Add Pages
-    StackWidgetConfigPages->addWidget( PageHTTP );
-    StackWidgetConfigPages->addWidget( PageSMB );
-    StackWidgetConfigPages->addWidget( PageExternal );
+    // =============
+    // ==== DNS ====
+    // =============
+    PageDNS = new QWidget();
+    PageDNS->setObjectName( QString::fromUtf8( "PageDNS" ) );
+    formLayout_DNS = new QFormLayout( PageDNS );
+    formLayout_DNS->setObjectName( QString::fromUtf8( "formLayout_DNS" ) );
+
+    LabelDnsZone         = new QLabel( PageDNS );
+    InputDnsZone         = new QLineEdit( PageDNS );
+    LabelDnsHosts        = new QLabel( PageDNS );
+    InputDnsHosts        = new QLineEdit( PageDNS );
+    LabelDnsHostBind     = new QLabel( PageDNS );
+    InputDnsHostBind     = new QLineEdit( PageDNS );
+    LabelDnsPort         = new QLabel( PageDNS );
+    InputDnsPort         = new QLineEdit( PageDNS );
+    LabelDnsQueryTimeout = new QLabel( PageDNS );
+    InputDnsQueryTimeout = new QLineEdit( PageDNS );
+    LabelDnsChunkDelay   = new QLabel( PageDNS );
+    InputDnsChunkDelay   = new QLineEdit( PageDNS );
+
+    formLayout_DNS->setWidget( 0, QFormLayout::LabelRole, LabelDnsZone );
+    formLayout_DNS->setWidget( 0, QFormLayout::FieldRole, InputDnsZone );
+    formLayout_DNS->setWidget( 1, QFormLayout::LabelRole, LabelDnsHosts );
+    formLayout_DNS->setWidget( 1, QFormLayout::FieldRole, InputDnsHosts );
+    formLayout_DNS->setWidget( 2, QFormLayout::LabelRole, LabelDnsHostBind );
+    formLayout_DNS->setWidget( 2, QFormLayout::FieldRole, InputDnsHostBind );
+    formLayout_DNS->setWidget( 3, QFormLayout::LabelRole, LabelDnsPort );
+    formLayout_DNS->setWidget( 3, QFormLayout::FieldRole, InputDnsPort );
+    formLayout_DNS->setWidget( 4, QFormLayout::LabelRole, LabelDnsQueryTimeout );
+    formLayout_DNS->setWidget( 4, QFormLayout::FieldRole, InputDnsQueryTimeout );
+    formLayout_DNS->setWidget( 5, QFormLayout::LabelRole, LabelDnsChunkDelay );
+    formLayout_DNS->setWidget( 5, QFormLayout::FieldRole, InputDnsChunkDelay );
+
+    LabelDnsZone->setText( "Zone Domain:" );
+    LabelDnsHosts->setText( "Hosts (comma separated):" );
+    LabelDnsHostBind->setText( "Host Bind:" );
+    LabelDnsPort->setText( "Port:" );
+    LabelDnsQueryTimeout->setText( "Query Timeout (ms):" );
+    LabelDnsChunkDelay->setText( "Chunk Delay (ms):" );
+
+    InputDnsZone->setPlaceholderText( "updates.company-cdn.net" );
+    InputDnsHosts->setPlaceholderText( "10.0.0.1" );
+    InputDnsHostBind->setText( "0.0.0.0" );
+    InputDnsPort->setText( "53" );
+    InputDnsQueryTimeout->setText( "4000" );
+    InputDnsChunkDelay->setText( "50" );
+
+    // Add Pages — each wrapped in a QScrollArea so Hosts/Headers/URIs are
+    // always reachable regardless of how many items the operator has added.
+    // Background and scrollbar colours are taken from ThemeManager so every
+    // theme remains consistent without hardcoding colour values here.
+    auto wrapScroll = []( QWidget* page ) -> QScrollArea* {
+        auto s = new QScrollArea;
+        s->setWidget( page );
+        s->setWidgetResizable( true );
+        s->setFrameShape( QFrame::NoFrame );
+        s->setHorizontalScrollBarPolicy( Qt::ScrollBarAsNeeded );
+        s->setVerticalScrollBarPolicy( Qt::ScrollBarAsNeeded );
+        // Use the same background colour the Listener.qss assigns to QDialog
+        // (ThemeColors::panel). setStyleSheet on the scroll area takes effect
+        // for the outer widget; viewport()->setAutoFillBackground(false) makes
+        // the viewport transparent so the outer background shows through.
+        const auto& tc = ThemeManager::Instance().ActiveColors();
+        s->setStyleSheet( QString( "QScrollArea { background-color: %1; border: none; }" ).arg( tc.panel ) );
+        s->viewport()->setAutoFillBackground( false );
+        return s;
+    };
+    StackWidgetConfigPages->addWidget( wrapScroll( PageHTTP     ) );  // index 0
+    StackWidgetConfigPages->addWidget( wrapScroll( PageSMB      ) );  // index 1
+    StackWidgetConfigPages->addWidget( wrapScroll( PageExternal ) );  // index 2
+    StackWidgetConfigPages->addWidget( wrapScroll( PageDNS      ) );  // index 3
 
     ListenerDialog->setWindowTitle( "Create Listener" );
     LabelPayload->setText(QCoreApplication::translate("ListenerWidget", "Payload: ", nullptr));
@@ -323,6 +420,7 @@ NewListener::NewListener( QDialog* Dialog )
     ComboPayload->addItem( "Http" );
     ComboPayload->addItem( "Smb" );
     ComboPayload->addItem( "External" );
+    ComboPayload->addItem( "Dns" );
 
     ComboProxyType->addItem( "http" );
     ComboProxyType->addItem( "https" );
@@ -353,7 +451,6 @@ NewListener::NewListener( QDialog* Dialog )
         formLayout_Hosts->setWidget( HostsData.size(), QFormLayout::FieldRole, Item );
 
         HostsData.push_back( Item );
-        ListenerDialog->resize( 550, 500 );
     } );
 
     QObject::connect( ButtonHostsGroupClear, &QPushButton::clicked, this, [&]()
@@ -362,8 +459,6 @@ NewListener::NewListener( QDialog* Dialog )
             delete uri;
 
         HostsData.clear();
-
-        ListenerDialog->resize( 550, 500 );
     } );
 
     QObject::connect( ButtonUriGroupAdd, &QPushButton::clicked, this, [&]()
@@ -374,7 +469,6 @@ NewListener::NewListener( QDialog* Dialog )
         formLayout_Uri->setWidget( UrisData.size(), QFormLayout::FieldRole, Item );
 
         UrisData.push_back( Item );
-        ListenerDialog->resize( 550, 500 );
     } );
 
     QObject::connect( ButtonUriGroupClear, &QPushButton::clicked, this, [&]()
@@ -383,8 +477,6 @@ NewListener::NewListener( QDialog* Dialog )
             delete uri;
 
         UrisData.clear();
-
-        ListenerDialog->resize( 550, 500 );
     } );
 
     QObject::connect( ButtonHeaderGroupAdd, &QPushButton::clicked, this, [&]()
@@ -395,7 +487,6 @@ NewListener::NewListener( QDialog* Dialog )
         formLayout_Header->setWidget( HeadersData.size(), QFormLayout::FieldRole, Item );
 
         HeadersData.push_back( Item );
-        ListenerDialog->resize( 550, 500 );
     } );
 
     QObject::connect( ButtonHeaderGroupClear, &QPushButton::clicked, this, [&]()
@@ -404,8 +495,6 @@ NewListener::NewListener( QDialog* Dialog )
             delete header;
 
         HeadersData.clear();
-
-        ListenerDialog->resize( 550, 500 );
     } );
 
     QObject::connect( ComboPayload, &QComboBox::currentTextChanged, this, [&]( const QString& text )
@@ -429,6 +518,10 @@ NewListener::NewListener( QDialog* Dialog )
         else if ( text.compare( HavocSpace::Listener::PayloadExternal ) == 0 )
         {
             StackWidgetConfigPages->setCurrentIndex( 2 );
+        }
+        else if ( text.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+        {
+            StackWidgetConfigPages->setCurrentIndex( 3 );
         }
         else
         {
@@ -571,6 +664,19 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
 
             InputEndpoint->setText( Info.Endpoint );
             InputEndpoint->setReadOnly( true );
+        }
+        else if ( Item.Protocol == Listener::PayloadDNS.toStdString() )
+        {
+            ComboPayload->setCurrentIndex( 4 );
+
+            auto Info = any_cast<Listener::DNS>( Item.Info );
+
+            InputDnsZone->setText( Info.ZoneDomain );
+            InputDnsHosts->setText( Info.Hosts );
+            InputDnsHostBind->setText( Info.HostBind );
+            InputDnsPort->setText( Info.Port );
+            InputDnsQueryTimeout->setText( Info.QueryTimeout );
+            InputDnsChunkDelay->setText( Info.ChunkDelayMs );
         }
         else
         {
@@ -718,6 +824,15 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
         }
 
         ListenerInfo.insert( { "Endpoint", InputEndpoint->text().toStdString() } );
+    }
+    else if ( Payload.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+    {
+        ListenerInfo.insert( { "ZoneDomain",   InputDnsZone->text().toStdString() } );
+        ListenerInfo.insert( { "Hosts",        InputDnsHosts->text().toStdString() } );
+        ListenerInfo.insert( { "HostBind",     InputDnsHostBind->text().toStdString() } );
+        ListenerInfo.insert( { "Port",         InputDnsPort->text().toStdString() } );
+        ListenerInfo.insert( { "QueryTimeout", InputDnsQueryTimeout->text().toStdString() } );
+        ListenerInfo.insert( { "ChunkDelayMs", InputDnsChunkDelay->text().toStdString() } );
     }
     else
     {
@@ -911,6 +1026,20 @@ void HavocNamespace::UserInterface::Dialogs::NewListener::onButton_Save()
         {
             MessageBox( "Listener Error", "No Endpoint specified", QMessageBox::Critical );
 
+            return;
+        }
+    }
+    else if ( Payload.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+    {
+        if ( InputDnsZone->text().isEmpty() )
+        {
+            MessageBox( "Listener Error", "No Zone Domain specified", QMessageBox::Critical );
+            return;
+        }
+
+        if ( InputDnsPort->text().isEmpty() || !is_number( InputDnsPort->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "Port must be a valid number", QMessageBox::Critical );
             return;
         }
     }

