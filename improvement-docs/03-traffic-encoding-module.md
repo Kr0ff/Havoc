@@ -1,6 +1,6 @@
 # HVC-029 — Wire Encoding Module Refactor
 
-**Status:** Pending
+**Status:** Applied — 2026-05-21
 
 ---
 
@@ -294,8 +294,46 @@ A standalone host-compiled test (Linux/macOS, no Windows dependencies) that link
 
 ## Notes
 
-- This is a pure refactor. The encoded bytes produced by `WireEncode` must be byte-for-byte identical to what `PackageTransmitAll` currently produces for the same plaintext and the same randomly generated IV. Do not alter key sizes, IV length, HMAC length, or base64 alphabet.
-- The registration packet path (`DEMON_INITIALIZE`) must never be routed through `WireEncode` / `wire.Encode`. It establishes session keys via RSA-OAEP and has a different wire layout.
+- This is a pure refactor for the upload path. The encoded bytes produced by `WireEncode` are byte-for-byte identical to what `PackageTransmitAll` previously produced for the same plaintext and the same randomly generated IV. IV sizes, HMAC sizes, and base64 alphabet are unchanged.
+- The registration packet path (`DEMON_INITIALIZE`) is NOT routed through `WireEncode` / `wire.Encode`. It establishes session keys via RSA-OAEP and has a different wire layout.
 - Once this module exists, adding a new encoding layer (different cipher, alternative MAC, custom base encoding) is a single-file change on each side, with tests that can be run without a transport stack.
+
+## Deviations from Original Spec
+
+### Go-side split: DecodeAndVerify instead of Decode
+
+The original spec proposed a single `wire.Decode` function that handled base64 decode, HMAC verify, and AES-CTR decrypt. During implementation, a pragmatic split was chosen:
+
+- `wire.DecodeAndVerify(body, macKey)` — verifies HMAC and strips the 32-byte tag; returns authenticated binary WITHOUT AES decryption.
+- `wire.Encode(plaintext, aesKey, macKey)` — full encode for the server→Demon response path.
+
+**Rationale:** On the teamserver upload path, the AgentID embedded in the packet header must be parsed before the session AES key can be looked up. The header is inside the authenticated body. `DecodeAndVerify` returns the authenticated payload (header still present) so `handlers.go` can call `ParseHeader` to get the AgentID, then look up the AES key and decrypt separately — exactly as the code did before. Combining both steps into one call would require passing the AES key into `DecodeAndVerify`, but the key is unknown until after the header parse.
+
+### Download path upgraded (not a pure refactor for the response direction)
+
+The original spec described the response direction as a pure refactor (no behavior change). In practice, the download path was upgraded from fixed-session-IV + no-HMAC to per-packet random IV + HMAC, matching the security level of the upload path:
+
+- **Before:** `base64([CmdID|ReqID|Size|AES-CTR(data)])` using fixed session IV, no HMAC.
+- **After:** `base64([IV(16B)|AES-CTR(BuildPayloadMessage output)|HMAC-SHA256(32B)])` with per-packet random IV.
+
+The inner per-job AES layer produced by `BuildPayloadMessage` (`crypt.XCryptBytesAES256`) is preserved — `Command.c:145` calls `ParserDecrypt(&TaskParser, ...)` per-job and requires it.
+
+### handleServiceAgent: base64 moved into handler
+
+Service agent responses (`handleServiceAgent`) now base64-encode inside the handler rather than in the transport layer. This preserves the pre-HVC-029 service agent wire format while allowing `http.go` and `external.go` to write `Response.Bytes()` directly (since Demon responses are already wire-encoded/base64 by `encodeAgentResponse`).
+
+### DNS transport — no WireDecode changes on Demon side
+
+QA flagged potential double-decode in the DNS transport. Analysis confirmed no change was needed: `dns.go` stores the `wire.Encode` output (base64 ASCII bytes), `handleDownlink` slices and re-base64-encodes each TXT chunk for DNS transport, `DnsQueryTxt` base64-decodes each chunk and concatenates, and `DnsSend` calls `WireDecode` on the full reassembled base64 string — which is correct because the concatenation of base64-decoded chunks is the original base64 string from `wire.Encode`. The chain is correct end-to-end without modification.
+
+### Bug fix: PackageTransmitNow missing base64 encoding (post-implementation)
+
+**Symptom:** After HVC-029 was applied, the Demon failed to register. The teamserver logged `failed to base64-decode agent request body: illegal base64 data at input byte 0` on every inbound registration attempt.
+
+**Root cause:** `HttpSend` in `TransportHttp.c` was modified during HVC-029 to stop base64-encoding the outgoing request body, because `PackageTransmitAll` routes through `WireEncode` which already produces base64 output. However, `PackageTransmitNow` — used for the initial registration (`DEMON_INITIALIZE`) and for re-registration reconnects — bypasses `WireEncode` entirely and calls `TransportSend` directly with a raw binary buffer. The raw binary is not valid base64, so the teamserver's `base64.StdEncoding.DecodeString` rejected it immediately.
+
+**Fix:** Added a `Base64Encode` call inside `PackageTransmitNow` (`Package.c`) before the `TransportSend` call. The base64-encoded buffer is passed to `TransportSend` and freed afterwards. `PackageTransmitAll` is unaffected — it continues to pass the already-base64 output of `WireEncode` directly to `TransportSend`.
+
+**Lesson for future changes:** Any function that sends data through `TransportSend` / `HttpSend` without going through `WireEncode` must apply its own base64 encoding. The transport layer (`HttpSend`) assumes its input is already base64. This assumption must be documented on every caller that bypasses `WireEncode`.
 - Do not include XOR encryption at any point in this pipeline. Encryption must use AES-256-CTR as currently implemented.
 - Do not allocate `PAGE_EXECUTE_READWRITE` memory anywhere in the Demon-side implementation. The crypto routines operate on data buffers and require no executable allocations.

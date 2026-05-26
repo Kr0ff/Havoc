@@ -44,6 +44,10 @@ enum class Commands {
     TRANSFER                = 2530,
     SOCKET                  = 2540,
     KERBEROS                = 2550,
+    LATERAL  = 2600,
+    PERSIST  = 2610,
+    CREDS    = 2620,
+    PRIVESC  = 2630,
 
     OUTPUT  = 90,
     ERROR   = 91,
@@ -92,6 +96,10 @@ public:
     auto Net( QString TaskID, QString Command, QString Param ) -> void;
     auto Pivot( QString TaskID, QString Command, QString Param ) -> void;
     auto Token( QString TaskID, QString SubCommand, QString Arguments ) -> void;
+    auto Lateral( const QString& TaskID, const QString& Sub, const QString& Target, const QString& Cmd, const QString& Method ) -> void;
+    auto Persist( const QString& TaskID, const QString& Sub, const QMap<std::string,std::string>& Params ) -> void;
+    auto Creds( const QString& TaskID, const QString& Sub, const QString& Filename ) -> void;
+    auto Privesc( const QString& TaskID, const QString& Sub, const QString& Method, const QString& Cmd ) -> void;
     auto Config( const QString& TaskID, const QString& Key, const QString& Value ) -> void;
     auto Screenshot( const QString& TaskID ) -> void;
     auto Task( const QString& TaskID, const QString& Command ) -> void;

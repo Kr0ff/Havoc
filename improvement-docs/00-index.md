@@ -8,14 +8,18 @@ This directory contains all improvement proposals, feature specifications, and e
 |----|-------|------|----------|--------|-----|
 | HVC-013 | Raw TCP Transport | Transport | High | Pending | [01-transport-tcp.md](01-transport-tcp.md) |
 | HVC-028 | DNS-over-HTTPS Transport | Transport | Medium | Pending | [02-transport-doh.md](02-transport-doh.md) |
-| HVC-029 | Wire Encoding Module Refactor | Architecture | High | Pending | [03-traffic-encoding-module.md](03-traffic-encoding-module.md) |
-| HVC-030 | Sleep Obfuscation Enhancements | Evasion | High | Pending | [04-sleep-obfuscation.md](04-sleep-obfuscation.md) |
-| HVC-031 | Evasion Enhancements (ETW, Module Hide, Anti-Debug) | Evasion | High | Pending | [05-evasion-enhancements.md](05-evasion-enhancements.md) |
-| HVC-032 | New Agent Commands (Lateral, Persist, Creds) | Commands | High | Pending | [06-new-commands.md](06-new-commands.md) |
+| HVC-029 | Wire Encoding Module Refactor | Architecture | High | Applied | [03-traffic-encoding-module.md](03-traffic-encoding-module.md) |
+| HVC-030 | Sleep Obfuscation Enhancements | Evasion | High | In Progress (Sub-1 + Sub-2 + Sub-3 + Sub-4 + Sub-5 + Sub-6 Applied; spec Sub-4/5 x86 and heap-enc pending) | [04-sleep-obfuscation.md](04-sleep-obfuscation.md) |
+| HVC-031 | Evasion Enhancements (ETW, Module Hide, Anti-Debug) | Evasion | High | In Progress (Sub-2 + Sub-4 Applied; Sub-3 Pending) | [05-evasion-enhancements.md](05-evasion-enhancements.md) |
+| HVC-032 | New Agent Commands (Lateral, Persist, Creds) | Commands | High | Applied | [06-new-commands.md](06-new-commands.md) |
 | HVC-033 | Cryptographic Improvements (KDF, FS, Replay) | Crypto | Medium | Pending | [07-crypto-improvements.md](07-crypto-improvements.md) |
 | HVC-034 | Listener Enhancements (jitter, mTLS, fake bodies) | Listener | Medium | Pending | [08-listener-enhancements.md](08-listener-enhancements.md) |
 | HVC-035 | Teamserver Operator UX (RBAC, audit log, tags) | Teamserver | Medium | Pending | [09-teamserver-ux.md](09-teamserver-ux.md) |
 | HVC-036 | Injection Engine Improvements | Injection | Low | Pending | [10-injection-improvements.md](10-injection-improvements.md) |
+| ISS-037 | PE stomping opt-in flag (injection stability fix) | Stability | Critical | Applied | [issue-docs/RCI-001-injection-stability.md](issue-docs/RCI-001-injection-stability.md) |
+| ISS-037-R1 | ISS-037 regression: sleep=0 + injection crash from SpoofFunc | Stability | Critical | Applied | [issue-docs/RCI-001-injection-stability.md](issue-docs/RCI-001-injection-stability.md) |
+| HVC-038 | Profile-Exposed Config Command Options | Commands | High | Applied | N/A |
+| HVC-044 | Stack Spoofing (KaynLoader + Injection Threads) | Evasion | High | Applied | [HVC-044-stack-spoofing.md](HVC-044-stack-spoofing.md) |
 
 ## Template
 

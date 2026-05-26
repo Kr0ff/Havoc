@@ -397,6 +397,75 @@ auto CommandExecute::Net( QString TaskID, QString Command, QString Param ) -> vo
     NewPackageCommand( this->DemonCommandInstance->Teamserver, Body );
 }
 
+auto CommandExecute::Lateral( const QString& TaskID, const QString& Sub, const QString& Target, const QString& Cmd, const QString& Method ) -> void
+{
+    auto Info = QMap<string,string>{
+        { "TaskID",      TaskID.toStdString() },
+        { "DemonID",     this->DemonCommandInstance->DemonConsole->SessionInfo.Name.toStdString() },
+        { "CommandID",   to_string( static_cast<int>( Commands::LATERAL ) ) },
+        { "CommandLine", DemonCommandInstance->CommandInputList[ TaskID ].toStdString() },
+        { "SubCommand",  Sub.toStdString() },
+        { "Target",      Target.toStdString() },
+        { "Cmd",         Cmd.toStdString() },
+        { "Method",      Method.toStdString() },
+    };
+    NewPackageCommand( this->DemonCommandInstance->Teamserver, Util::Packager::Body_t {
+        .SubEvent = Util::Packager::Session::SendCommand,
+        .Info     = Info,
+    } );
+}
+
+auto CommandExecute::Persist( const QString& TaskID, const QString& Sub, const QMap<std::string,std::string>& Params ) -> void
+{
+    auto Info = QMap<string,string>{
+        { "TaskID",      TaskID.toStdString() },
+        { "DemonID",     this->DemonCommandInstance->DemonConsole->SessionInfo.Name.toStdString() },
+        { "CommandID",   to_string( static_cast<int>( Commands::PERSIST ) ) },
+        { "CommandLine", DemonCommandInstance->CommandInputList[ TaskID ].toStdString() },
+        { "SubCommand",  Sub.toStdString() },
+    };
+    for ( auto it = Params.begin(); it != Params.end(); ++it )
+        Info[ it.key() ] = it.value();
+    NewPackageCommand( this->DemonCommandInstance->Teamserver, Util::Packager::Body_t {
+        .SubEvent = Util::Packager::Session::SendCommand,
+        .Info     = Info,
+    } );
+}
+
+auto CommandExecute::Creds( const QString& TaskID, const QString& Sub, const QString& Filename ) -> void
+{
+    auto Info = QMap<string,string>{
+        { "TaskID",      TaskID.toStdString() },
+        { "DemonID",     this->DemonCommandInstance->DemonConsole->SessionInfo.Name.toStdString() },
+        { "CommandID",   to_string( static_cast<int>( Commands::CREDS ) ) },
+        { "CommandLine", DemonCommandInstance->CommandInputList[ TaskID ].toStdString() },
+        { "SubCommand",  Sub.toStdString() },
+        { "Filename",    Filename.toStdString() },
+    };
+    NewPackageCommand( this->DemonCommandInstance->Teamserver, Util::Packager::Body_t {
+        .SubEvent = Util::Packager::Session::SendCommand,
+        .Info     = Info,
+    } );
+}
+
+auto CommandExecute::Privesc( const QString& TaskID, const QString& Sub, const QString& Method, const QString& Cmd ) -> void
+{
+    auto Info = QMap<string,string>{
+        { "TaskID",      TaskID.toStdString() },
+        { "DemonID",     this->DemonCommandInstance->DemonConsole->SessionInfo.Name.toStdString() },
+        { "CommandID",   to_string( static_cast<int>( Commands::PRIVESC ) ) },
+        { "CommandLine", DemonCommandInstance->CommandInputList[ TaskID ].toStdString() },
+        { "SubCommand",  Sub.toStdString() },
+        { "Method",      Method.toStdString() },
+        { "Cmd",         Cmd.toStdString() },
+    };
+    NewPackageCommand( this->DemonCommandInstance->Teamserver, Util::Packager::Body_t {
+        .SubEvent = Util::Packager::Session::SendCommand,
+        .Info     = Info,
+    } );
+}
+
+
 auto CommandExecute::Pivot( QString TaskID, QString Command, QString Param ) -> void
 {
     auto Body = Util::Packager::Body_t {

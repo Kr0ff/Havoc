@@ -13,6 +13,20 @@ include_directories( include )
 
 set( COMMON_SOURCE
         src/core/Command.c
+
+        # [HVC-032] Per-group command split files and new command implementations
+        src/commands/Command_FS.c
+        src/commands/Command_Proc.c
+        src/commands/Command_Token.c
+        src/commands/Command_Inject.c
+        src/commands/Command_Net.c
+        src/commands/Command_Config.c
+        src/commands/Command_Lateral.c
+        src/commands/Command_Persist.c
+        src/commands/Command_Creds.c
+        src/commands/Command_Privesc.c
+        src/commands/Command_Pivot.c
+
         src/core/Win32.c
         src/core/MiniStd.c
         src/core/Token.c
@@ -21,7 +35,6 @@ set( COMMON_SOURCE
         src/core/Spoof.c
         src/core/Syscalls.c
         src/core/SysNative.c
-        src/core/Command.c
         src/core/Transport.c
         src/core/TransportHttp.c
         src/core/TransportSmb.c
@@ -35,11 +48,14 @@ set( COMMON_SOURCE
         src/core/Kerberos.c
         src/core/Thread.c
         src/core/Memory.c
+        src/core/NtdllUnhook.c
+        src/core/MemoryHide.c
         src/core/Runtime.c
         src/core/HwBpEngine.c
         src/core/HwBpExceptions.c
         src/core/CoffeeLdr.c
         src/core/ObjectApi.c
+        src/core/PeProtect.c
 )
 
 set( INJECT_SOURCE
@@ -51,6 +67,7 @@ set( CRYPT_SOURCE
         src/crypt/AesCrypt.c
         src/crypt/HmacSha256.c
         src/crypt/RsaCrypt.c
+        src/crypt/WireEncoder.c
 )
 
 set( MAIN_SOURCE

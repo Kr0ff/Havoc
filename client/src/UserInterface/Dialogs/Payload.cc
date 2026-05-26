@@ -490,11 +490,17 @@ auto Payload::DefaultConfig() -> void
 
     auto ConfigIndirectSyscalls  = new QTreeWidgetItem( TreeConfig );
     auto ConfigSleepStackSpoof   = new QTreeWidgetItem( TreeConfig );
+    auto ConfigRandGadget        = new QTreeWidgetItem( TreeConfig ); /* HVC-030 Sub-3 — random gadget per sleep cycle */
+    auto ConfigUnhookNtdll       = new QTreeWidgetItem( TreeConfig ); /* HVC-031 Sub-4 — strip EDR inline hooks at init */
+    auto ConfigHideModules       = new QTreeWidgetItem( TreeConfig ); /* HVC-031 Sub-2 — unlink loaded modules from PEB LDR lists */
+    auto ConfigPeStomp           = new QTreeWidgetItem( TreeConfig ); /* ISS-037 — opt-in PE header stomping during default sleep */
+    auto ConfigCoffeeVeh         = new QTreeWidgetItem( TreeConfig ); /* VEH for BOF loading opt-in */
+    auto ConfigCoffeeThreaded    = new QTreeWidgetItem( TreeConfig ); /* threaded BOF execution opt-in */
+    auto ConfigAutoProxy         = new QTreeWidgetItem( TreeConfig ); // [HVC-026]
     auto ConfigSleepObfTechnique = new QTreeWidgetItem( TreeConfig );
     auto ConfigSleepJmpBypass    = new QTreeWidgetItem( TreeConfig );
     auto ConfigProxyLoading      = new QTreeWidgetItem( TreeConfig );
     auto ConfigAmsiEtwPatch      = new QTreeWidgetItem( TreeConfig );
-    auto ConfigAutoProxy         = new QTreeWidgetItem( TreeConfig ); // [HVC-026]
     auto ConfigInjection         = new QTreeWidgetItem( TreeConfig );
     auto ConfigInjectionAlloc    = new QTreeWidgetItem( ConfigInjection );
     auto ConfigInjectionExecute  = new QTreeWidgetItem( ConfigInjection );
@@ -518,6 +524,18 @@ auto Payload::DefaultConfig() -> void
     ProxyLoading                 = new QComboBox;
     auto AmsiEtwPatch            = new QComboBox;
     auto ConfigAutoProxyCheck    = new QCheckBox;   // [HVC-026]
+    auto ConfigRandGadgetCheck   = new QCheckBox;   /* HVC-030 Sub-3 — random gadget per sleep cycle */
+    auto DefaultRandGadget       = DemonConfig[ "RandGadget" ].toBool(); /* read default from teamserver DemonConfig */
+    auto ConfigUnhookNtdllCheck  = new QCheckBox;   /* HVC-031 Sub-4 — strip EDR inline hooks at init */
+    auto DefaultUnhookNtdll      = DemonConfig[ "UnhookNtdll" ].toBool();
+    auto ConfigHideModulesCheck  = new QCheckBox;   /* HVC-031 Sub-2 — unlink loaded modules from PEB LDR lists */
+    auto DefaultHideModules      = DemonConfig[ "HideModules" ].toBool();
+    auto ConfigPeStompCheck      = new QCheckBox;   /* ISS-037 — opt-in PE header stomping during default sleep */
+    auto DefaultPeStomp          = DemonConfig[ "PeStomp" ].toBool();
+    auto ConfigCoffeeVehCheck      = new QCheckBox;   /* CoffeeVeh - VEH for BOF loading */
+    auto DefaultCoffeeVeh          = DemonConfig[ "CoffeeVeh" ].toBool();
+    auto ConfigCoffeeThreadedCheck = new QCheckBox;   /* CoffeeThreaded - threaded BOF execution */
+    auto DefaultCoffeeThreaded     = DemonConfig[ "CoffeeThreaded" ].toBool();
     auto ConfigSpawn64LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
     auto ConfigSpawn32LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn32" ].toString() );
     auto DefaultIndSyscallCheck  = DemonConfig[ "IndirectSyscall" ].toBool();
@@ -543,6 +561,12 @@ auto Payload::DefaultConfig() -> void
     ConfigAmsiEtwPatch->setFlags( Qt::NoItemFlags );
     ConfigSleepObfTechnique->setFlags( Qt::NoItemFlags );
     ConfigSleepJmpBypass->setFlags( Qt::NoItemFlags );
+    ConfigRandGadget->setFlags( Qt::NoItemFlags );     /* HVC-030 Sub-3 */
+    ConfigUnhookNtdll->setFlags( Qt::NoItemFlags );    /* HVC-031 Sub-4 */
+    ConfigHideModules->setFlags( Qt::NoItemFlags );    /* HVC-031 Sub-2 */
+    ConfigPeStomp->setFlags( Qt::NoItemFlags );        /* ISS-037 */
+    ConfigCoffeeVeh->setFlags( Qt::NoItemFlags );       /* CoffeeVeh */
+    ConfigCoffeeThreaded->setFlags( Qt::NoItemFlags );  /* CoffeeThreaded */
     ConfigSleepStackSpoof->setFlags( Qt::NoItemFlags );
     ConfigInjectionSpawn64->setFlags( Qt::NoItemFlags );
     ConfigInjectionSpawn32->setFlags( Qt::NoItemFlags );
@@ -561,10 +585,22 @@ auto Payload::DefaultConfig() -> void
     ProxyLoading->setObjectName( "ConfigItem" );
     AmsiEtwPatch->setObjectName( "ConfigItem" );
     ConfigAutoProxyCheck->setObjectName( "ConfigItem" );    // [HVC-026]
+    ConfigRandGadgetCheck->setObjectName( "ConfigItem" );   /* HVC-030 Sub-3 */
+    ConfigUnhookNtdllCheck->setObjectName( "ConfigItem" );  /* HVC-031 Sub-4 */
+    ConfigHideModulesCheck->setObjectName( "ConfigItem" );  /* HVC-031 Sub-2 */
+    ConfigPeStompCheck->setObjectName( "ConfigItem" );      /* ISS-037 */
+    ConfigCoffeeVehCheck->setObjectName( "ConfigItem" );      /* CoffeeVeh */
+    ConfigCoffeeThreadedCheck->setObjectName( "ConfigItem" ); /* CoffeeThreaded */
 
     ConfigIndSyscallCheck->setChecked( DefaultIndSyscallCheck );
     ConfigStackSpoof->setChecked( DefaultStackDuplication );
     ConfigAutoProxyCheck->setChecked( true );               // [HVC-026] ON by default
+    ConfigRandGadgetCheck->setChecked( DefaultRandGadget ); /* HVC-030 Sub-3 — default from profile */
+    ConfigUnhookNtdllCheck->setChecked( DefaultUnhookNtdll ); /* HVC-031 Sub-4 — default from profile */
+    ConfigHideModulesCheck->setChecked( DefaultHideModules ); /* HVC-031 Sub-2 — default from profile */
+    ConfigPeStompCheck->setChecked( DefaultPeStomp );         /* ISS-037 — default from profile */
+    ConfigCoffeeVehCheck->setChecked( DefaultCoffeeVeh );           /* default from profile */
+    ConfigCoffeeThreadedCheck->setChecked( DefaultCoffeeThreaded ); /* default from profile */
 
     SleepObfJmpBypass->addItems( QStringList() << "None" << "jmp rax" << "jmp rbx" );
     ConfigInjectAlloc->addItems( QStringList() << "Win32" << "Native/Syscall" );
@@ -623,10 +659,17 @@ auto Payload::DefaultConfig() -> void
     TreeConfig->setItemWidget( ConfigIndirectSyscalls, 1, ConfigIndSyscallCheck );
     TreeConfig->setItemWidget( ConfigSleepObfTechnique,1, SleepObfTechnique );
     TreeConfig->setItemWidget( ConfigSleepJmpBypass,   1, SleepObfJmpBypass );
+    TreeConfig->setItemWidget( ConfigRandGadget,       1, ConfigRandGadgetCheck );  /* HVC-030 Sub-3 */
+    TreeConfig->setItemWidget( ConfigUnhookNtdll,      1, ConfigUnhookNtdllCheck ); /* HVC-031 Sub-4 */
+    TreeConfig->setItemWidget( ConfigHideModules,      1, ConfigHideModulesCheck ); /* HVC-031 Sub-2 */
+    TreeConfig->setItemWidget( ConfigPeStomp,          1, ConfigPeStompCheck );    /* ISS-037 */
+    TreeConfig->setItemWidget( ConfigCoffeeVeh,      1, ConfigCoffeeVehCheck );      /* CoffeeVeh */
+    TreeConfig->setItemWidget( ConfigCoffeeThreaded, 1, ConfigCoffeeThreadedCheck ); /* CoffeeThreaded */
+    TreeConfig->setItemWidget( ConfigAutoProxy,        1, ConfigAutoProxyCheck ); // [HVC-026]
     TreeConfig->setItemWidget( ConfigSleepStackSpoof,  1, ConfigStackSpoof );
     TreeConfig->setItemWidget( ConfigProxyLoading,     1, ProxyLoading );
     TreeConfig->setItemWidget( ConfigAmsiEtwPatch,     1, AmsiEtwPatch );
-    TreeConfig->setItemWidget( ConfigAutoProxy,        1, ConfigAutoProxyCheck ); // [HVC-026]
+    
 
     // disable invalid sleep obf option combinations
     connect( SleepObfTechnique, &QComboBox::currentTextChanged, this, [=, this]( const QString& text ) {
@@ -636,9 +679,13 @@ auto Payload::DefaultConfig() -> void
         SleepObfJmpBypass->setEnabled( isTimer );
         if ( !isTimer ) SleepObfJmpBypass->setCurrentIndex( 0 );
 
-        // Stack Duplication: only meaningful for Timer-based (Ekko/Zilean)
-        ConfigStackSpoof->setEnabled( isTimer );
-        if ( !isTimer ) ConfigStackSpoof->setChecked( false );
+        // Stack Duplication: controls both sleep TIB-swap (Ekko/Zilean only) and
+        // injection thread RtlUserThreadStart trick (HVC-044, all sleep techniques)
+        // - leave enabled for all sleep techniques so injection spoofing can be toggled
+
+        // Random Gadget: only meaningful for Timer-based (Ekko/Zilean)
+        ConfigRandGadgetCheck->setEnabled( isTimer );
+        if ( !isTimer ) ConfigRandGadgetCheck->setChecked( false );
     });
 
     // emit initial state to set correct disabled state
@@ -656,13 +703,27 @@ auto Payload::DefaultConfig() -> void
         ConfigServiceName->setText( 0, "Service Name" );
     }
 
+    // Shellcode has no PE header -- PE stomping cannot be used with raw shellcode output
+    /*
+    if ( Format.compare( "Windows Shellcode" ) == 0 ) {
+        ConfigPeStompCheck->setEnabled( false );
+        ConfigPeStompCheck->setChecked( false );
+    }
+    */
+
     ConfigIndirectSyscalls->setText(  0, "Indirect Syscall" );
     ConfigSleepObfTechnique->setText( 0, "Sleep Technique" );
     ConfigSleepJmpBypass->setText( 0, "Sleep Jmp Gadget" );
+    ConfigRandGadget->setText( 0, "Random Gadget" );         /* HVC-030 Sub-3 — key read by builder.go as "Random Gadget" */
+    ConfigUnhookNtdll->setText( 0, "Unhook Ntdll" );         /* HVC-031 Sub-4 — key read by builder.go as "Unhook Ntdll" */
+    ConfigHideModules->setText( 0, "Hide Modules" );          /* HVC-031 Sub-2 — key read by builder.go as "Hide Modules" */
+    ConfigPeStomp->setText( 0, "PE Stomping" );               /* ISS-037 — key read by builder.go as "PE Stomping" */
+    ConfigCoffeeVeh->setText( 0, "Coffee VEH" );      /* key read by builder.go as "Coffee VEH" */
+    ConfigCoffeeThreaded->setText( 0, "Coffee Threaded" ); /* key read by builder.go as "Coffee Threaded" */
+    ConfigAutoProxy->setText( 0, "Auto Proxy Detection" ); // [HVC-026]
     ConfigSleepStackSpoof->setText( 0, "Stack Duplication" );
     ConfigProxyLoading->setText( 0, "Proxy Loading" );
     ConfigAmsiEtwPatch->setText( 0, "Amsi/Etw Patch" );
-    ConfigAutoProxy->setText( 0, "Auto Proxy Detection" ); // [HVC-026]
 
     ConfigInjection->setText( 0, "Injection" );
     ConfigInjection->setExpanded( true );

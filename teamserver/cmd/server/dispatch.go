@@ -969,6 +969,11 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return
 					}
 
+					// Apply profile-based address defaults (fields not in the client UI config map)
+					if t.Profile != nil && t.Profile.Config.Demon != nil {
+						PayloadBuilder.SetDemonProfileDefaults(t.Profile.Config.Demon)
+					}
+
 					if Arch == "x64" {
 						PayloadBuilder.SetArch(builder.ARCHITECTURE_X64)
 					} else {

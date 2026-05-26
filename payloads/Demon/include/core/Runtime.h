@@ -47,6 +47,11 @@ BOOL RtSspicli(
     VOID
 );
 
+/* [HVC-032] ole32.dll — CoInitializeEx, CoCreateInstance, CoUninitialize */
+BOOL RtOle32(
+    VOID
+);
+
 BOOL RtAmsi(
     VOID
 );

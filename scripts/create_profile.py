@@ -46,7 +46,10 @@ Field reference (from teamserver/pkg/profile/config.go):
   Listeners.Dns:   Name, Hosts, HostBind, Port, ZoneDomain, QueryTimeout, ChunkDelayMs
   Demon:           Sleep, Jitter, IndirectSyscall, StackDuplication,
                    SleepTechnique, ProxyLoading, AmsiEtwPatching,
-                   TrustXForwardedFor, DotNetNamePipe,
+                   TrustXForwardedFor, DotNetNamePipe, RandGadget, UnhookNtdll, HideModules, PeStomp,
+                   Verbose, CoffeeVeh, CoffeeThreaded,
+                   SleepObfStartAddr.{Library,Function,Offset},
+                   InjectSpoofAddr.{Library,Function,Offset},
                    Injection.Spawn64/Spawn32,
                    Binary.Header.{MagicMz-x64/x86, CompileTime, ImageSize-x64/x86}
                    Binary.ReplaceStrings-x64/x86
@@ -343,6 +346,39 @@ def build_profile(args: argparse.Namespace) -> str:
         e.attr("IndirectSyscall", True)
     if args.demon_stack_duplication:
         e.attr("StackDuplication", True)
+    if args.demon_rand_gadget:
+        e.attr("RandGadget", True)
+    if args.demon_unhook_ntdll:
+        e.attr("UnhookNtdll", True)
+    if args.demon_hide_modules:
+        e.attr("HideModules", True)
+    if args.demon_pe_stomp:
+        e.attr("PeStomp", True)
+    if args.demon_verbose:
+        e.attr("Verbose", True)
+    if args.demon_coffee_veh:
+        e.attr("CoffeeVeh", True)
+    if args.demon_coffee_threaded:
+        e.attr("CoffeeThreaded", True)
+
+    if args.demon_sleep_obf_addr_lib and args.demon_sleep_obf_addr_func:
+        e.blank()
+        e.block_open("SleepObfStartAddr", indent=1)
+        e.attr("Library",  args.demon_sleep_obf_addr_lib, indent=2)
+        e.attr("Function", args.demon_sleep_obf_addr_func, indent=2)
+        if args.demon_sleep_obf_addr_offset:
+            e.attr("Offset", args.demon_sleep_obf_addr_offset, indent=2)
+        e.block_close(indent=1)
+
+    if args.demon_inject_spoof_lib and args.demon_inject_spoof_func:
+        e.blank()
+        e.block_open("InjectSpoofAddr", indent=1)
+        e.attr("Library",  args.demon_inject_spoof_lib, indent=2)
+        e.attr("Function", args.demon_inject_spoof_func, indent=2)
+        if args.demon_inject_spoof_offset:
+            e.attr("Offset", args.demon_inject_spoof_offset, indent=2)
+        e.block_close(indent=1)
+
     if args.demon_sleep_technique:
         e.attr("SleepTechnique", args.demon_sleep_technique)
     if args.demon_proxy_loading:
@@ -562,6 +598,82 @@ def make_arg_parser() -> argparse.ArgumentParser:
                    help="Enable indirect syscalls (IndirectSyscall = true)")
     g.add_argument("--demon-stack-duplication", action="store_true",
                    help="Enable stack duplication (StackDuplication = true)")
+    g.add_argument(
+        "--demon-rand-gadget",
+        action="store_true",
+        default=False,
+        help="Re-select a random gadget address each Ekko/Zilean sleep cycle",
+    )
+    g.add_argument(
+        "--demon-unhook-ntdll",
+        action="store_true",
+        default=False,
+        help="Overwrite loaded ntdll .text with a clean copy from \\KnownDlls at startup (removes EDR inline hooks)",
+    )
+    g.add_argument(
+        "--demon-hide-modules",
+        action="store_true",
+        default=False,
+        help="Hide dynamically loaded modules from PEB LDR lists (HideModules = true)",
+    )
+    g.add_argument(
+        "--demon-pe-stomp",
+        action="store_true",
+        default=False,
+        help="Stomp PE header region during default sleep (PeStomp = true; leave off for injected payloads)",
+    )
+    g.add_argument(
+        "--demon-verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose debug logging in Demon (Verbose = true)",
+    )
+    g.add_argument(
+        "--demon-coffee-veh",
+        action="store_true",
+        default=False,
+        help="Enable VEH for BOF/object file loading (CoffeeVeh = true)",
+    )
+    g.add_argument(
+        "--demon-coffee-threaded",
+        action="store_true",
+        default=False,
+        help="Enable threaded BOF/object file execution (CoffeeThreaded = true)",
+    )
+    g.add_argument(
+        "--demon-sleep-obf-addr-lib",
+        metavar="LIB",
+        help="DLL for custom sleep-obf thread start address (e.g. ntdll.dll)",
+    )
+    g.add_argument(
+        "--demon-sleep-obf-addr-func",
+        metavar="FUNC",
+        help="Function name for custom sleep-obf thread start address",
+    )
+    g.add_argument(
+        "--demon-sleep-obf-addr-offset",
+        type=int,
+        default=0,
+        metavar="BYTES",
+        help="Byte offset from function for sleep-obf start address (default: 0)",
+    )
+    g.add_argument(
+        "--demon-inject-spoof-lib",
+        metavar="LIB",
+        help="DLL for injection spoof address (e.g. kernel32.dll)",
+    )
+    g.add_argument(
+        "--demon-inject-spoof-func",
+        metavar="FUNC",
+        help="Function name for injection spoof address",
+    )
+    g.add_argument(
+        "--demon-inject-spoof-offset",
+        type=int,
+        default=0,
+        metavar="BYTES",
+        help="Byte offset from function for injection spoof address (default: 0)",
+    )
     g.add_argument("--demon-sleep-technique", metavar="TECHNIQUE",
                    choices=["Ekko", "Zilean", "FOLIAGE", "WaitForSingleObjectEx"],
                    help="Sleep obfuscation technique")

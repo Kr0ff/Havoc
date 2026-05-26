@@ -381,15 +381,24 @@ def _validate_hostrotation(v):
 
 
 def _validate_sleep_technique(v):
-    valid = ("Ekko", "Zilean", "FOLIAGE", "WaitForSingleObjectEx")
+    # Accepted values must match the switch cases in teamserver/pkg/common/builder/builder.go
+    valid = ("Ekko", "Zilean", "Foliage", "WaitForSingleObjectEx")
     if v not in valid:
         return f"unknown SleepTechnique {v!r}; known values: {', '.join(valid)}"
 
 
 def _validate_proxy_loading(v):
-    valid = ("RTLREGISTERWAIT", "RTLCREATETIMER", "RTLQUEUEWORKITEM")
+    # Accepted values must match the switch cases in teamserver/pkg/common/builder/builder.go
+    valid = ("None (LdrLoadDll)", "RtlRegisterWait", "RtlCreateTimer", "RtlQueueWorkItem")
     if v not in valid:
         return f"unknown ProxyLoading {v!r}; known values: {', '.join(valid)}"
+
+
+def _validate_jmp_gadget(v):
+    # Accepted values must match the switch cases in teamserver/pkg/common/builder/builder.go
+    valid = ("None", "jmp rax", "jmp rbx")
+    if v not in valid:
+        return f"unknown SleepJmpGadget {v!r}; known values: {', '.join(valid)}"
 
 
 def _validate_amsi_etw(v):
@@ -402,6 +411,7 @@ SCHEMA = {
     "Teamserver": [
         FieldSpec("Host", "string", required=True),
         FieldSpec("Port", "int", required=True, validator=_validate_port),
+        FieldSpec("HeaderMaskSeed", "string", required=False),  # per-packet XOR mask seed (HVC-003)
     ],
     "Teamserver.Build": [
         FieldSpec("Compiler64", "string", required=False),
@@ -465,6 +475,14 @@ SCHEMA = {
         FieldSpec("IndirectSyscall", "bool", required=False),
         FieldSpec("StackDuplication", "bool", required=False),
         FieldSpec("SleepTechnique", "string", required=False, validator=_validate_sleep_technique),
+        FieldSpec("SleepJmpGadget", "string", required=False, validator=_validate_jmp_gadget),
+        FieldSpec("RandGadget", "bool", required=False),           # HVC-030 Sub-3: random gadget per cycle
+        FieldSpec("UnhookNtdll", "bool", required=False),          # HVC-031 Sub-4: overwrite ntdll .text with clean KnownDlls copy
+        FieldSpec("HideModules", "bool", required=False),           # HVC-031 Sub-2: unlink loaded modules from PEB LDR lists
+        FieldSpec("PeStomp", "bool", required=False),               # ISS-037: stomp PE header during default sleep; off by default
+        FieldSpec("Verbose", "bool", required=False),               # enable verbose debug logging
+        FieldSpec("CoffeeVeh", "bool", required=False),             # enable VEH for BOF loading
+        FieldSpec("CoffeeThreaded", "bool", required=False),        # enable threaded BOF execution
         FieldSpec("ProxyLoading", "string", required=False, validator=_validate_proxy_loading),
         FieldSpec("AmsiEtwPatching", "string", required=False, validator=_validate_amsi_etw),
         FieldSpec("DotNetNamePipe", "string", required=False),
@@ -473,6 +491,18 @@ SCHEMA = {
     "Demon.Injection": [
         FieldSpec("Spawn64", "string", required=False),
         FieldSpec("Spawn32", "string", required=False),
+        FieldSpec("Alloc", "string", required=False),              # memory allocation technique
+        FieldSpec("Execute", "string", required=False),            # memory execution technique
+    ],
+    "Demon.SleepObfStartAddr": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
+    ],
+    "Demon.InjectSpoofAddr": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
     ],
     "Demon.Binary": [],
     "Demon.Binary.Header": [
@@ -560,7 +590,7 @@ class Validator:
                         self._err(f"{path_prefix}.{spec.name}", msg)
 
         # Warn about unrecognised fields
-        skip_keys = {"__label__", "Build", "Response", "Cert", "Proxy", "Injection", "Binary", "Header", "Discord"}
+        skip_keys = {"__label__", "Build", "Response", "Cert", "Proxy", "Injection", "Binary", "Header", "Discord", "SleepObfStartAddr", "InjectSpoofAddr"}
         for key in body:
             if key not in known_keys and key not in skip_keys:
                 self._warn(f"{path_prefix}.{key}", f"unrecognised field '{key}'")
@@ -687,6 +717,12 @@ class Validator:
                 v = inj.get(key, "")
                 if v and not v.startswith("C:\\"):
                     self._warn(f"Demon.Injection.{key}", f"path '{v}' does not look like a Windows absolute path")
+
+        for addr_blk in demon.get("SleepObfStartAddr", []):
+            self._validate_fields(addr_blk, "Demon.SleepObfStartAddr", "Demon.SleepObfStartAddr")
+
+        for addr_blk in demon.get("InjectSpoofAddr", []):
+            self._validate_fields(addr_blk, "Demon.InjectSpoofAddr", "Demon.InjectSpoofAddr")
 
         for bin_blk in demon.get("Binary", []):
             for hdr in bin_blk.get("Header", []):

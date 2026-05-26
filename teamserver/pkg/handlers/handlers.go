@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"bytes"
-	"crypto/hmac"
+	"encoding/base64"
 	//"encoding/hex"
 	"fmt"
 	"math/bits"
@@ -11,8 +11,25 @@ import (
 	"Havoc/pkg/common/crypt"
 	"Havoc/pkg/common/packer"
 	"Havoc/pkg/common/parser"
+	"Havoc/pkg/common/wire"
 	"Havoc/pkg/logger"
 )
+
+// encodeAgentResponse wraps a plaintext Demon response with wire.Encode:
+// base64([IV(16) | AES-CTR(plaintext) | HMAC-SHA256(32)]).
+// Called at every success return in handleDemonAgent so the Demon's WireDecode
+// can authenticate and decrypt the response.
+func encodeAgentResponse(plaintext []byte, aesKey []byte) (bytes.Buffer, bool) {
+	var buf bytes.Buffer
+	macKey := crypt.HmacSHA256(aesKey, []byte("mac"))
+	encoded, err := wire.Encode(plaintext, aesKey, macKey)
+	if err != nil {
+		logger.Error("[HVC-029] wire.Encode failed for agent response: " + err.Error())
+		return buf, false
+	}
+	buf.Write(encoded)
+	return buf, true
+}
 
 // parseAgentRequest
 // parses the agent request and handles the given data.
@@ -66,12 +83,15 @@ func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP stri
 		logger.Debug(fmt.Sprintf("parseAgentRequest: known agent %08x, body=%d bytes (payload=%d + tag=%d)",
 			scratchHeader.AgentID, len(Body), len(Body)-HmacTagSize, HmacTagSize))
 
-		payload := Body[:len(Body)-HmacTagSize]
-		tag := Body[len(Body)-HmacTagSize:]
-
 		a := Teamserver.AgentInstance(scratchHeader.AgentID)
 		macKey := crypt.HmacSHA256(a.Encryption.AESKey, []byte("mac"))
-		if !hmac.Equal(crypt.HmacSHA256(macKey, payload), tag) {
+
+		// [HVC-029] Delegate HMAC verification to wire.DecodeAndVerify.
+		// The body passed here is already binary (base64 stripped by the HTTP/external
+		// transport layer). DecodeAndVerify strips the 32-byte tag, verifies it with
+		// hmac.Equal (constant-time), and returns the authenticated payload.
+		verifiedPayload, verifyErr := wire.DecodeAndVerify(Body, macKey)
+		if verifyErr != nil {
 			logger.Warn(fmt.Sprintf("parseAgentRequest: HMAC verification failed for agent %08x — dropping packet", scratchHeader.AgentID))
 			return Response, false
 		}
@@ -79,7 +99,7 @@ func parseAgentRequest(Teamserver agent.TeamServer, Body []byte, ExternalIP stri
 		logger.Debug(fmt.Sprintf("parseAgentRequest: HMAC verified for agent %08x", scratchHeader.AgentID))
 
 		// Parse header from authenticated payload (without HMAC tag).
-		Header, err = agent.ParseHeader(payload)
+		Header, err = agent.ParseHeader(verifiedPayload)
 		if err != nil {
 			logger.Debug("[Error] Header: " + err.Error())
 			return Response, false
@@ -173,7 +193,7 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 					return Response, false
 				}
 				logger.Debug(fmt.Sprintf("reconnected %x", Build))
-				return Response, true
+				return encodeAgentResponse(Response.Bytes(), Agent.Encryption.AESKey)
 			}
 
 			if first_iter {
@@ -210,7 +230,7 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 						}}
 						var Payload = agent.BuildPayloadMessage(NoJob, Agent.Encryption.AESKey, Agent.Encryption.AESIv)
 						_, _ = Response.Write(Payload)
-						return Response, true
+						return encodeAgentResponse(Response.Bytes(), Agent.Encryption.AESKey)
 					}
 					Header.Data = parser.NewParser(decompressed)
 					logger.Debug(fmt.Sprintf("handleDemonAgent: agent %08x, LZNT1 decompressed to %d bytes",
@@ -434,7 +454,7 @@ func handleDemonAgent(Teamserver agent.TeamServer, Header agent.Header, External
 		}
 	}
 
-	return Response, true
+	return encodeAgentResponse(Response.Bytes(), Agent.Encryption.AESKey)
 }
 
 // handleServiceAgent
@@ -471,7 +491,7 @@ func handleServiceAgent(Teamserver agent.TeamServer, Header agent.Header, Extern
 	Task = Teamserver.ServiceAgent(Header.MagicValue).SendResponse(AgentData, Header)
 	//logger.Debug("Response:\n", hex.Dump(Task))
 
-	_, err = Response.Write(Task)
+	_, err = Response.Write([]byte(base64.StdEncoding.EncodeToString(Task)))
 	if err != nil {
 		return Response, false
 	}

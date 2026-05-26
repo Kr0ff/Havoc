@@ -1,254 +1,1104 @@
-# SKILL.md -- Lessons Learned from Havoc C2 Code Changes
+# SKILL.md — Havoc C2 Framework Skill Definitions
 
-This file captures mistakes made and lessons learned during code analysis
-and modification of the Havoc C2 framework. It serves as a training reference
-for future work to avoid repeating the same errors.
+This file defines invocable skills (standard operating procedures) for the three specialist
+agent roles defined in `AGENTS.md`. Each skill is a named, step-by-step procedure that an
+agent invokes when it encounters a specific type of task. Skills encode proven patterns and
+hard lessons from this codebase — they exist because the right approach is non-obvious.
 
----
+**How to invoke:** Reference the skill name when assigning work to an agent. The agent reads
+the relevant skill section and follows it exactly before writing any code or analysis.
 
-## Lesson 1: Profile Fixes Can Unmask Latent Agent Bugs
-
-**What happened:** Fixed profile settings to actually propagate to the builder
-and Demon agent (BUGFIX-001--006). The fixes were correct -- settings like HWBP,
-SleepJmpGadget, ProxyLoading were now applied. But agents started terminating.
-
-**Root cause:** The features themselves had bugs (handle leaks, NULL dereferences,
-wrong sizeof). These bugs always existed but were never triggered because the
-profile settings were silently ignored.
-
-**Lesson:** When fixing configuration propagation, always audit the downstream
-code that USES the configuration values. Enabling a feature is only correct if
-the feature itself works. The proper workflow is:
-
-1. Fix config propagation
-2. Audit the feature implementation for bugs
-3. Fix feature bugs
-4. Test with the feature actually enabled
-
-**Rule:** After any change that enables previously-disabled code paths, trace
-those code paths for latent bugs before declaring the fix complete.
+All skills operate under the constraints in `CLAUDE.md` and `AGENTS.md`. When a skill step
+contradicts those documents, the constraint in `CLAUDE.md` wins.
 
 ---
 
-## Lesson 2: sizeof(void) Is Not Zero -- It's 1 on GCC
-
-**What happened:** `sizeof( VOID )` was used as a copy size for
-RtlCopyMappedMemory in the sleep obfuscation ROP chain. The intent was to copy
-a full pointer (8 bytes on x64). On MSVC, `sizeof(void)` is a compile error.
-On GCC/MinGW (which compiles the Demon), it's a GCC extension that evaluates
-to 1.
-
-**Root cause:** The original developer likely meant `sizeof(PVOID)` but wrote
-`sizeof(VOID)`. Since the Demon is compiled with MinGW (GCC), this compiled
-without warning and silently copied only 1 byte.
-
-**Lesson:** Never use `sizeof(void)` or `sizeof(VOID)`. For pointer-sized
-copies, always use `sizeof(PVOID)` or `sizeof(ULONG_PTR)`.
-
-**Rule:** When reviewing C code compiled with MinGW/GCC, grep for
-`sizeof.*VOID` and verify each instance is intentional.
+## Skills for: red-team-developer
 
 ---
 
-## Lesson 3: Handle Leaks Are Silent Killers
+### skill: implement-demon-feature
 
-**What happened:** `HwBpEngineSetBp` opened a thread handle via
-`SysNtOpenThread` but only closed it on the FAILED path. The success path
-returned without closing. Each breakpoint set/remove/restore leaked one handle.
+**When to invoke:** Starting any new feature, evasion improvement, or subsystem change in
+the Demon C agent (`payloads/Demon/`).
 
-**Root cause:** Classic copy-paste or oversight. The FAILED label had proper
-cleanup, but the success path was forgotten. The function is called from the
-VEH exception handler (on every breakpoint hit), so the leak is rapid.
+#### Procedure
 
-**Lesson:** For any function that opens handles or allocates resources:
-1. List ALL exit points (return statements, gotos)
-2. Verify EACH exit point closes/frees resources
-3. Prefer a single cleanup label with goto (RAII pattern in C)
+**Step 1 — Read before writing**
+1. Read `Demon.md` in full. If the feature involves the teamserver wire protocol or builder,
+   also read `Teamserver.md`.
+2. Read the relevant improvement spec in `improvement-docs/` (or issue doc in
+   `improvement-docs/issue-docs/`). Understand the exact problem and acceptance criteria.
+3. Read `CHANGES.md` entries for the three most recent applied changes in the same subsystem.
+   Understand what was already tried, what patterns were established, and what failures occurred.
+4. Read the files that will be modified. Do not rely on the improvement spec's code snippets
+   alone — read the actual current file state.
 
-**Rule:** After writing or modifying a function that opens handles, audit ALL
-return paths -- not just the error paths.
+**Step 2 — Identify existing patterns to reuse**
+1. Before writing any new function, search for existing functions that do the same thing:
+   - API resolution: `LdrModuleLoad`, `LdrFunctionAddr`, `HashStringA`
+   - Memory: `MemSet`, `MemCopy`, `MmVirtualAlloc`, `MmVirtualWrite`
+   - Syscalls: `SysNtProtectVirtualMemory`, `SysNtSuspendThread`, etc.
+   - Debug output: `PRINTF(...)`, `PUTS(...)`
+2. Reuse exact patterns. Do not reimpliment what already exists.
 
----
+**Step 3 — Validate any new DJB2 hash constants**
+For every new `H_FUNC_*` constant added to `Defines.h`, run before writing the constant:
+```python
+def djb2_upper(s):
+    h = 5381
+    for c in s.upper():
+        h = (((h << 5) + h) + ord(c)) & 0xFFFFFFFF
+    return h
+print(hex(djb2_upper("FunctionName")))
+```
+Do not commit the constant until the script output matches it exactly.
+**Wrong hash = silent NULL from `LdrFunctionAddr` = complete silent no-op at runtime.**
 
-## Lesson 4: Initialize Local Variables From Parameters, Not NULL
+**Step 4 — Write the implementation**
+Follow the coding style rules from `AGENTS.md § Coding Style`:
+- `PVOID Var = { 0 };` declarations, `PRINTF`/`PUTS` macros, uppercase types, spaces around operators
+- Every new function gets one brief header comment — its purpose and key parameters
+- One inline comment per non-obvious logic block (the WHY, not the WHAT)
+- No em dash (`—`) anywhere in string literals or log messages — use hyphen (`-`) only
 
-**What happened:** `HwBpEngineRemove` declared `PHWBP_ENGINE HwBpEngine = NULL`
-then checked `if (!HwBpEngine)` to decide whether to use the global engine.
-Since the local was always NULL, the Engine parameter was always ignored.
-
-**Root cause:** The function was likely copied from `HwBpEngineDestroy` which
-has the same pattern but different semantics. `HwBpEngineAdd` correctly does
-`PHWBP_ENGINE HwBpEngine = Engine;`.
-
-**Lesson:** When a function takes a parameter that can be NULL (with a fallback
-to a global), initialize the local variable FROM the parameter, then check:
+Apply the memory safety pattern without exception:
 ```c
-PHWBP_ENGINE HwBpEngine = Engine;  // from parameter
-if (!HwBpEngine) {
-    HwBpEngine = Instance->HwBpEngine;  // fallback to global
+/* 1. Protect */
+Status = Instance->Win32.NtProtectVirtualMemory(
+    NtCurrentProcess(), &BaseAddr, &Size, PAGE_READWRITE, &OldProtect );
+if ( ! NT_SUCCESS( Status ) ) {          /* 2. Guard */
+    PRINTF( "Name: NtProtect failed 0x%X\n", Status )
+    return;
 }
+/* 3. Write */
+MemSet( BaseAddr, 0, Size );
+/* 4. Reset aliased locals, restore original protection */
+BaseAddr    = OriginalBase;
+Size        = OriginalSize;
+Instance->Win32.NtProtectVirtualMemory(
+    NtCurrentProcess(), &BaseAddr, &Size, OldProtect, &OldProtect );
 ```
 
-**Rule:** When auditing functions with "use parameter or fall back to global"
-patterns, verify the local is initialized from the parameter, not from NULL.
+**Step 5 — Gate optional features inside their own module**
+If the feature is controlled by a config flag (e.g., `Config.Implant.PeStomp`):
+```c
+VOID MyFeature_Do( VOID ) {
+    if ( ! Instance->Config.Implant.MyFeatureFlag ) return;  /* gate inside, not in caller */
+    // ...
+}
+```
+Never put the gate in `Obf.c`, `Demon.c`, or any other caller. The core agent code path
+must remain unchanged when the feature flag is false.
+
+**Step 6 — Re-read every modified file**
+After each edit, re-read the full modified file. Verify:
+- The edit is at the correct line and not duplicated
+- No unintended surrounding code was disturbed
+- Wire format sequence (if `DemonConfig` was modified) still matches `builder.go` in count and order
+
+**Step 7 — Update documentation**
+1. Add entry to `CHANGES.md` — status, files changed, root cause, fix summary
+2. Update `improvement-docs/00-index.md` — set status to `Applied` for the relevant row
+3. Update `CLAUDE.md` if a new pattern or constraint was introduced
+4. Update memory files if a new root cause or lesson was discovered
+
+#### Exit Criteria
+- [ ] Every new `H_FUNC_*` constant verified with `djb2_upper()` before commit
+- [ ] No `PAGE_EXECUTE_READWRITE` in the diff
+- [ ] NT_SUCCESS guard present before every MemSet/MemCopy/MmVirtualWrite
+- [ ] OldProtect (not a hardcoded constant) used in all final NtProtect restore calls
+- [ ] NtProtect aliasing guards present (BaseAddr/Size reset before second call)
+- [ ] No em dash in any string literal
+- [ ] All modified files re-read and verified
+- [ ] `CHANGES.md` updated
 
 ---
 
-## Lesson 5: VEH Handlers Need NULL Guards
+### skill: add-config-bool
 
-**What happened:** The ExceptionHandler for hardware breakpoints accessed
-`Instance->HwBpEngine->Breakpoints` without checking if `HwBpEngine` was NULL.
-If HwBpEngine was destroyed (or never initialized), this NULL-dereferenced and
-crashed the agent.
+**When to invoke:** Adding any new boolean or string configuration option to the Demon agent
+that requires changes in the profile, builder, wire format, Demon parser, and client UI.
 
-**Root cause:** VEH handlers are registered globally for all threads. They can
-fire at any time, including during initialization/destruction windows. The
-handler assumed the engine was always initialized when called.
+This skill enforces the **12-file lockstep** that prevents wire format misalignment.
+A single missed file causes all subsequent config fields to be parsed from the wrong
+slot with no error at runtime.
 
-**Lesson:** Exception handlers (VEH, SEH, signal handlers) must be defensive:
-1. Always NULL-check global state before accessing it
-2. Return the appropriate "not handled" value if state is invalid
-3. Never assume the handler's setup/teardown is atomic
+#### Procedure
 
-**Rule:** Any exception/signal handler should start with NULL checks on all
-global state it accesses.
+**Step 1 — Determine the field position**
+Read `AGENTS.md § Config Blob Pattern` to find the current last field index. The new
+field goes at the END — never inserted in the middle.
 
----
+Current tail: field 25 (`ConfigInjectSpoofOffset`). New field = 26.
 
-## Lesson 6: Agent Findings Need Manual Verification
+**Step 2 — Profile config struct** (`teamserver/pkg/profile/config.go`)
+Add a new field to the `Demon` struct:
+```go
+MyNewFlag bool `yaotl:"MyNewFlag,optional"`
+```
 
-**What happened:** Three analysis agents reported 8 bugs. After manual
-verification, 4 were false positives:
-- "OBF_JMP takes address of stack temp" -- actually takes address of struct field
-- "NULL Rip when gadget search fails" -- OBF_JMP overrides Rip for BYPASS_NONE
-- "MmVirtualAlloc infinite recursion" -- fallback to DX_MEM_SYSCALL prevents it
-- "VEH handler left active after failure" -- Command.c calls DotnetClose on error
+**Step 3 — Builder** (`teamserver/pkg/common/builder/builder.go`)
+Make three additions:
+1. Declare a local variable near the top of `PatchConfig()`:
+   ```go
+   ConfigMyNewFlag := win32.FALSE
+   ```
+2. Parse the UI/profile value in the option-parsing block:
+   ```go
+   if val, ok := b.config.Config["My New Label"]; ok {
+       if v, ok := val.(bool); ok && v {
+           ConfigMyNewFlag = win32.TRUE
+       }
+   }
+   ```
+3. Add `AddInt` at the END of the sequence (after the last existing field):
+   ```go
+   DemonConfig.AddInt( ConfigMyNewFlag )   /* field 26 */
+   ```
 
-**Root cause:** Agents analyze code statically and can miss:
-- Macro expansion context (what `p` actually expands to)
-- Fallback logic in subsequent code
-- Error handling in the caller (not the callee)
+**Step 4 — Dispatch** (`teamserver/cmd/server/dispatch.go`)
+If the field comes from the profile rather than the UI, call `SetDemonProfileDefaults()`
+or the equivalent setter after `SetConfig(Config)`. If it's a UI-only field, no change needed.
 
-**Lesson:** Always verify agent findings by:
-1. Reading the actual code at the reported line
-2. Tracing macro expansions manually
-3. Checking the calling code for error handling
-4. Testing with actual compiler behavior
+**Step 5 — Demon struct** (`payloads/Demon/include/Demon.h`)
+Add the field to `Config.Implant`:
+```c
+BOOL  MyNewFlag;
+```
+Place it after the last existing field (`CoffeeThreaded`) in the struct declaration.
 
-**Rule:** Treat agent findings as hypotheses to verify, not confirmed facts.
-A 50% false positive rate is normal for static analysis.
+**Step 6 — Demon config parser** (`payloads/Demon/src/Demon.c`)
+Add the parse call in `DemonConfig()` at the matching position — immediately after the last
+existing parse call (`ParserGetInt32` for `CoffeeThreaded`):
+```c
+Instance->Config.Implant.MyNewFlag = ParserGetInt32( &Parser );
+```
 
----
+**Step 7 — Client UI** (`client/src/UserInterface/Dialogs/Payload.cc`)
+Add in seven places following the exact pattern of existing checkboxes:
+1. `QTreeWidgetItem* ConfigMyNewFlag = nullptr;`  — declaration (with other item declarations)
+2. `QCheckBox* ConfigMyNewFlagCheck = nullptr;`    — declaration (with other checkbox declarations)
+3. Read profile default: `bool defaultMyNewFlag = DemonConfig.value("MyNewFlag", false).toBool();`
+4. `ConfigMyNewFlag = new QTreeWidgetItem();` `ConfigMyNewFlag->setFlags(Qt::NoItemFlags);`
+5. `ConfigMyNewFlagCheck = new QCheckBox(); ConfigMyNewFlagCheck->setObjectName("ConfigItem");`
+6. `ConfigMyNewFlagCheck->setChecked(defaultMyNewFlag);`
+7. `ConfigImplant->setItemWidget(ConfigMyNewFlag, 1, ConfigMyNewFlagCheck);`
+   `ConfigMyNewFlag->setText(0, "My New Label");`
 
-## Lesson 7: Compile-Time Guards vs Runtime Values
+**CRITICAL:** `setText(0, "My New Label")` must exactly match the key used in
+`b.config.Config["My New Label"]` in `builder.go`. Same case, same spaces.
 
-**What happened:** Sleep obfuscation techniques are selected at both compile
-time (via #ifdef) and runtime (via config value). The builder correctly sets
-compile-time defines to match the runtime technique. But if mismatched, the
-runtime switch statement falls through to DEFAULT safely.
+**Step 8 — Profile example** (`profiles/havoc.yaotl`)
+Add the field with its default value in the `Demon { }` block:
+```
+MyNewFlag = false
+```
 
-**Lesson:** The Demon's design has a correct defense-in-depth pattern:
-- Compile-time: only include code for the chosen technique (reduces binary size)
-- Runtime: switch statement has DEFAULT fallback to unobfuscated sleep
-- This means even if values are wrong, the agent survives (just loses obfuscation)
+**Step 9 — Profile linter** (`scripts/check_profile.py`)
+Add a `FieldSpec` entry in the `SCHEMA["Demon"]` list:
+```python
+FieldSpec("MyNewFlag", "bool", required=False),
+```
 
-**Rule:** When modifying the builder or config, always verify that compile-time
-defines match the runtime config values. Test what happens on mismatch.
+**Step 10 — Profile generator** (`scripts/create_profile.py`)
+Add a CLI argument and emitter:
+```python
+parser.add_argument("--demon-my-new-flag", action="store_true", default=False)
+# In build_profile():
+if args.demon_my_new_flag:
+    demon_lines.append("    MyNewFlag = true")
+```
 
----
+**Step 11 — Gate the feature inside its own module**
+If the feature has a dedicated implementation file, gate internally:
+```c
+VOID MyFeature( VOID ) {
+    if ( ! Instance->Config.Implant.MyNewFlag ) return;
+    ...
+}
+```
+Do not gate in `Obf.c`, `Demon.c`, or any other caller.
 
-## Lesson 8: x64 Rsp Alignment Is Per-Windows-Build
+**Step 12 — Update docs**
+- `CHANGES.md` — new entry
+- `improvement-docs/00-index.md` — status to `Applied`
+- `CLAUDE.md` — add to the field ordering table in the PE Stomping / Config Blob section
 
-**What happened:** Foliage sleep obfuscation crashed within a few sleep cycles.
-The ROP chain's CONTEXT entries had `Rsp % 16 == 0` instead of the x64 ABI
-requirement of `Rsp % 16 == 8` at function entry.
-
-**Root cause:** `NtGetContextThread` on a freshly-created suspended thread returns
-different Rsp alignment depending on the Windows build (kernel version). Some
-return `% 16 == 0`, others `% 16 == 8`. The Foliage code used the captured Rsp
-directly without normalizing. The Ekko/Zilean code already had the fix
-(`Rop[i].Rsp -= sizeof(PVOID)`) because it uses `RtlCaptureContext` which
-always returns `% 16 == 0`.
-
-**Lesson:** When building ROP chains from captured thread contexts:
-1. Never assume the captured Rsp has correct ABI alignment
-2. Always normalize: `if ((Rsp & 0xF) == 0) Rsp -= sizeof(PVOID);`
-3. Check that existing similar code (e.g., Ekko/Zilean) already has the fix
-   — if it does, the new code path probably needs it too
-4. The crash manifests as `#GP` from `movaps` in NtContinue target functions
-   (SystemFunction032, WaitForSingleObjectEx, etc.) — not from NtContinue itself
-
-**Rule:** When one code path has an alignment fix and a parallel code path
-doesn't, that's a bug. Always check sibling implementations for fixes that
-should be shared.
-
----
-
-## Lesson 9: Never Call Win32 APIs on Manually-Created NT Threads
-
-**What happened:** The Foliage ROP chain called `WaitForSingleObjectEx` (a
-Win32 API from kernelbase.dll) on the APC thread. This thread was created via
-`NtCreateThreadEx` with `NtTestAlert` as start address + `CREATE_SUSPENDED` —
-it never ran through `BaseThreadInitThunk` / `RtlUserThreadStart`, so its TEB
-Win32 subsystem state (activation context, FLS, loader lock, CRT) was
-uninitialised. The Win32 wrapper accessed these fields and crashed.
-
-**Root cause:** Win32 APIs (kernelbase/kernel32) are wrappers around NT
-syscalls that assume standard thread initialisation has occurred. Threads
-created directly with `NtCreateThreadEx` bypass this initialisation entirely.
-
-**Lesson:** On threads created directly via `NtCreateThreadEx` (especially
-with `CREATE_SUSPENDED` for APC/ROP chains):
-1. Only use NT-native syscalls (`NtWaitForSingleObject`, not `WaitForSingleObjectEx`)
-2. Only use ntdll functions (they have no Win32 subsystem dependency)
-3. Avoid kernelbase.dll / kernel32.dll wrappers entirely
-4. `SystemFunction032` (advapi32) works because it's a thin wrapper that
-   doesn't touch TEB Win32 state — but this is the exception, not the rule
-
-**Rule:** If the thread was created with `NtCreateThreadEx`, restrict the ROP
-chain to ntdll functions and direct syscalls only.
-
----
-
-## Lesson 10: Audit ALL Non-ntdll Functions in ROP Chains on Manual Threads
-
-**What happened:** After FIX-11 replaced `WaitForSingleObjectEx` with
-`NtWaitForSingleObject`, the Foliage agent survived much longer but still
-crashed intermittently. `SystemFunction032` (advapi32 → cryptbase.dll) was
-the only remaining non-ntdll function in the ROP chain. It intermittently
-accessed uninitialised TEB state on the APC thread.
-
-**Root cause:** The same bug class as Lesson 9. SystemFunction032 is a
-"usually safe" advapi32 function (simple RC4), but on some Windows versions
-or under certain conditions, its implementation touches TEB fields that only
-exist on properly initialised threads.
-
-**Lesson:** When building ROP chains on manually-created threads
-(`NtCreateThreadEx` + `CREATE_SUSPENDED`):
-1. Audit EVERY function in the chain — not just the obvious Win32 wrappers
-2. Only ntdll functions and direct syscalls are guaranteed safe
-3. Even "simple" functions from other DLLs (advapi32, kernel32) can have
-   hidden TEB dependencies in their implementation or forwarding chain
-4. If you must use a non-ntdll algorithm (RC4, etc.), implement it as a
-   position-independent stub in separately allocated executable memory
-
-**Rule:** For ANY function in a ROP chain on a manual thread, verify it comes
-from ntdll. If not, replace it with an ntdll alternative or a custom stub.
+#### Exit Criteria (wire format parity check)
+Count the `AddInt`/`AddString` calls in `builder.go:PatchConfig()`. Count the
+`ParserGetInt32`/`ParserGetString` calls in `Demon.c:DemonConfig()`. The totals must be equal.
+List types at each position side-by-side and verify they match.
 
 ---
 
-## Meta-Lesson: The Checklist
+### skill: implement-bug-fix
 
-Before declaring any Demon code change complete:
+**When to invoke:** Diagnosing and fixing a crash, incorrect behaviour, or regression in
+any Demon, teamserver, or client component.
 
-1. [ ] Traced the full data flow (profile -> builder -> agent -> runtime)
-2. [ ] Audited all exit paths for resource cleanup
-3. [ ] Verified type sizes match between packer and parser
-4. [ ] Checked for sizeof(void) usage
-5. [ ] Verified NULL checks on global state in handlers
-6. [ ] Manually verified all agent findings (filter false positives)
-7. [ ] Tested compilation (Go + MinGW + Qt)
-8. [ ] Documented changes with IDs in CHANGES.md
-9. [ ] Updated version if applicable
-10. [ ] Checked Rsp alignment in ROP chains (must be %16==8 at function entry)
-11. [ ] Verified ALL functions in ROP chains on manual threads are from ntdll only
+#### Procedure
+
+**Step 1 — Reproduce and locate**
+1. Identify the exact execution path to the crash: `DemonRoutine()` → which function?
+   → which line? Work backwards from the symptom using the ISS pattern:
+   - "Crash immediately after registration" → first `SleepObf()` call → `SleepObf()` callers
+   - "Crash on first sleep" → DEFAULT case in `Obf.c`
+   - "Crash after module load" → `LdrModuleLoad` call sites in `Command.c`
+2. Read the relevant issue doc in `improvement-docs/issue-docs/` if one exists.
+3. Read `CHANGES.md` for recently applied changes in the same subsystem — regressions are
+   almost always caused by the most recent change to that code path.
+
+**Step 2 — Identify root cause class**
+Common root causes in this codebase:
+- **NT_SUCCESS guard missing:** `NtProtect` failed, `MemSet` ran on non-writable memory → AV
+- **Wrong target region:** NtProtect succeeded, but `BaseAddr` points to code not a header → code corruption
+- **Wire format mismatch:** New field inserted mid-sequence, all subsequent fields parse from wrong slot
+- **DJB2 hash wrong:** `LdrFunctionAddr` returns NULL, function pointer = 0, callers become no-ops
+- **OldProtect not restored:** Hardcoded `PAGE_EXECUTE_READ` used in final NtProtect → wrong protection
+- **Aliasing guard missing:** `BaseAddr`/`RegionSize` modified in-place by first NtProtect; second call uses stale page-aligned values
+
+**Step 3 — Write the minimal fix**
+Apply the fix to the narrowest possible scope. Do not refactor surrounding code.
+Do not add error handling for scenarios that cannot happen.
+
+If the fix introduces a new protection pattern, follow the template from
+`skill: implement-demon-feature § Step 4`.
+
+**Step 4 — Check for sibling code paths with the same bug**
+If the bug is a pattern (missing guard, wrong constant), search for all call sites:
+```bash
+grep -rn "NtProtectVirtualMemory\|PAGE_EXECUTE_READ" payloads/Demon/src/
+```
+Fix all instances of the same bug class in the same pass — do not fix one and leave others.
+
+**Step 5 — Verify no regression on the core path**
+After the fix, trace the DEFAULT sleep path (`Obf.c`) with all optional features disabled
+(PeStomp=false, StackSpoof=false, HideModules=false). The core path must reach
+`WaitForSingleObjectEx` unconditionally. No optional flag may block this path.
+
+**Step 6 — Document**
+Write an issue doc in `improvement-docs/issue-docs/` if none exists. Update `CHANGES.md`.
+If the root cause is a new class of bug, add a lesson to `SKILL.md § Lessons Learned`.
+
+#### Exit Criteria
+- [ ] Root cause identified and documented (not just the symptom)
+- [ ] Fix is minimal — no unrelated code changed
+- [ ] All sibling code paths with the same bug pattern fixed
+- [ ] Core sleep path (DEFAULT case) verified reachable with all optionals disabled
+- [ ] `CHANGES.md` updated; issue doc created or updated
+
+---
+
+### skill: verify-djb2-hash
+
+**When to invoke:** Adding any new `H_FUNC_*` constant to `Defines.h`.
+
+**This is mandatory before committing. Wrong hash = silent NULL. Silent NULL = complete
+no-op with no error, no crash, no log output.**
+
+#### Procedure
+
+1. Identify the exact Windows API export name (case-sensitive, as exported from the DLL):
+   - `NtOpenSection` (not `ZwOpenSection`, not `NtOpenSection_`)
+   - `NtMapViewOfSection`
+   - `BaseThreadInitThunk`
+
+2. Run the exact HashEx algorithm (seed 5381, uppercase, DJB2):
+   ```python
+   def djb2_upper(s):
+       h = 5381
+       for c in s.upper():
+           h = (((h << 5) + h) + ord(c)) & 0xFFFFFFFF
+       return h
+
+   name = "FunctionNameHere"
+   print(f"H_FUNC_{name.upper().replace('.', '_')} = {hex(djb2_upper(name))}")
+   ```
+
+3. Compare the output to the constant you are about to write. They must match exactly.
+
+4. Check for hash collisions — no two `H_FUNC_*` constants may share the same value.
+   Search `Defines.h` for the computed hex value before adding the new constant.
+
+5. Add to `Defines.h` with a comment showing the verified function name:
+   ```c
+   #define H_FUNC_NTOPENSECTION      0x134eda0e   /* NtOpenSection */
+   #define H_FUNC_NTMAPVIEWOFSECTION 0xd6649bca   /* NtMapViewOfSection */
+   ```
+
+#### Known-verified constants
+
+| Constant | Value | Function |
+|----------|-------|----------|
+| `H_FUNC_NTOPENSECTION` | `0x134eda0e` | `NtOpenSection` |
+| `H_FUNC_NTMAPVIEWOFSECTION` | `0xd6649bca` | `NtMapViewOfSection` |
+| `H_FUNC_RTLUSERTHREADSTART` | verify before use | `RtlUserThreadStart` |
+| `H_FUNC_BASETHREADINITTHUNK` | verify before use | `BaseThreadInitThunk` |
+
+---
+
+## Skills for: qa-specialist
+
+---
+
+### skill: review-change
+
+**When to invoke:** Reviewing a completed implementation from a red-team-developer agent.
+This skill is the full QA procedure. Run every applicable checklist item.
+
+#### Procedure
+
+**Step 1 — Gather the diff**
+1. Identify all modified files from the change description.
+2. Read each file in full at the modified sections — do not rely on the diff alone. The diff
+   shows what changed; the file shows what the change is embedded in.
+
+**Step 2 — Wire format audit** (if `builder.go` or `Demon.c` was modified)
+1. Open `builder.go:PatchConfig()`. List every `AddInt`, `AddString`, `AddWString` call in order.
+2. Open `Demon.c:DemonConfig()`. List every `ParserGetInt32`, `ParserGetString`, `ParserGetBytes` call in order.
+3. Compare the two lists side-by-side, position by position. The type (Int/String) and order must match.
+4. Count: total Add* calls must equal total Parser* calls.
+5. Verify new fields are at the END — no insertion in the middle.
+6. `FAIL` if: count mismatch, type mismatch at any position, or new field inserted mid-sequence.
+
+**Step 3 — DJB2 hash audit** (if `Defines.h` was modified)
+1. Extract every new `H_FUNC_*` constant.
+2. Run `djb2_upper(function_name)` for each and compare to the constant value.
+3. `FAIL` if any constant does not match its verification result.
+4. `FAIL` if any two constants share the same value (collision).
+
+**Step 4 — Memory safety audit** (for all Demon C changes)
+For every `NtProtectVirtualMemory` call in the diff:
+1. Confirm an `if (!NT_SUCCESS(Status)) { return; }` block immediately follows.
+2. Confirm no `MemSet`, `MemCopy`, or `MmVirtualWrite` is reachable when the NtProtect failed.
+3. Confirm the final NtProtect restore call passes the local `OldProtect` variable — not a
+   hardcoded constant like `PAGE_EXECUTE_READ` (0x20) or `PAGE_READONLY` (0x02).
+4. Confirm `BaseAddr` and `RegionSize`/`Size` locals are reset to their original values
+   before the second NtProtect call in any protect/write/restore sequence.
+5. `FAIL` if: guard absent, write reachable after failure, hardcoded restore constant,
+   or aliasing guard absent.
+
+**Step 5 — Protection constant audit**
+Search the diff for: `0x40`, `PAGE_EXECUTE_READWRITE`, `PAGE_RWX`.
+`FAIL` if any appears in production code (comments are acceptable).
+
+Search for `PAGE_EXECUTE_WRITECOPY` (0x80) usage:
+- Permitted only when patching pages with original protection `PAGE_EXECUTE_READ`
+  (SEC_IMAGE execute pages, e.g., ntdll `.text`)
+- Not appropriate for PE header pages (original protection `PAGE_READONLY`)
+
+**Step 6 — PE stomping audit** (if `PeProtect.c` was modified)
+1. Confirm `PeProtect_Init()` checks `IMAGE_DOS_SIGNATURE` before reading the PE header backup.
+2. Confirm that when MZ is absent, `Config.Implant.PeStomp` is force-set to `FALSE` and the
+   function returns immediately.
+3. Confirm `PeProtect_Stomp()`, `PeProtect_Restore()`, `PeProtect_Init()` each gate themselves
+   with `if (!Instance->Config.Implant.PeStomp) return;` at their entry.
+4. Confirm no external caller is the sole gate (gate must be inside the function).
+5. `FAIL` if MZ check absent; gate absent in any of the three functions; or external-only gate.
+
+**Step 7 — ntdll unhooking audit** (if `NtdllUnhook.c` or `Demon.c:DemonInit` was modified)
+1. Confirm `DemonInit()` order: `DemonConfig()` → `SysInitialize()` → `UnhookNtdll()`.
+2. Confirm `UnhookNtdll()` uses `SysNtProtectVirtualMemory` — not `Win32.NtProtectVirtualMemory`.
+3. Confirm ntdll `.text` overwrite uses `NtdllCopy` (static QWORD loop) — not `MemCopy`.
+4. Confirm `NtOpenSection`/`NtMapViewOfSection` are resolved inline — not added to `Win32`.
+
+**Step 8 — Optional feature isolation audit**
+1. Identify every optional config flag used in the diff.
+2. For each flag, confirm the gate is inside the optional module — not in `Obf.c`, `Demon.c`,
+   or another caller.
+3. Trace the DEFAULT sleep path with all optionals disabled. Confirm `WaitForSingleObjectEx`
+   is always reachable.
+4. `FAIL` if any optional flag gates the core sleep path.
+
+**Step 9 — String literal audit**
+Search the diff for `—` (U+2014). `FAIL` if any em dash appears in a `PRINTF`, `PUTS`,
+or any other string that reaches terminal output.
+
+**Step 10 — UI label / builder key consistency audit** (if `Payload.cc` and `builder.go` both modified)
+1. List every `setText(0, "Label")` call in `Payload.cc`.
+2. For each, find the matching `b.config.Config["Label"]` in `builder.go`.
+3. Compare character-for-character. `FAIL` if they differ.
+
+**Step 11 — Documentation audit**
+1. Confirm `CHANGES.md` has a new entry with: status, files changed, root cause, fix summary.
+2. Confirm `improvement-docs/00-index.md` shows `Applied` for the relevant row.
+3. Confirm `CLAUDE.md` is updated if a new pattern was introduced.
+
+#### Report Format
+
+```
+## QA Report — <change name> — <date>
+
+Files reviewed: [list]
+
+### Wire Format
+- [PASS/FAIL] builder.go N AddInt/AddString == Demon.c N ParserGetInt32/ParserGetString
+- [PASS/FAIL] Type sequence matches at all positions
+...
+
+### Memory Safety
+- [PASS/FAIL] NT_SUCCESS guard at <file>:<line>
+- [PASS/FAIL] OldProtect restoration at <file>:<line>
+...
+
+### Summary
+N checks. N PASS, N FAIL, N WARN.
+FAIL items must be resolved before this change is merged.
+```
+
+---
+
+### skill: audit-memory-safety
+
+**When to invoke:** Spot-checking any Demon C file for memory safety issues, independent
+of a full change review.
+
+#### Procedure
+
+1. **NtProtect guard scan:**
+   ```bash
+   grep -n "NtProtectVirtualMemory" payloads/Demon/src/core/TargetFile.c
+   ```
+   For each call, verify `if (!NT_SUCCESS(Status)) return;` immediately follows.
+
+2. **Hardcoded protection scan:**
+   ```bash
+   grep -n "PAGE_EXECUTE_READ\|PAGE_READONLY\|0x20\|0x02" payloads/Demon/src/core/TargetFile.c
+   ```
+   Any hardcoded constant in a final NtProtect restore call is a bug — should be `OldProtect`.
+
+3. **RWX scan:**
+   ```bash
+   grep -rn "PAGE_EXECUTE_READWRITE\|0x40" payloads/Demon/src/
+   ```
+   Any result in production code is a `FAIL`.
+
+4. **Write-after-failed-protect scan:**
+   Manually trace every `MemSet`/`MemCopy`/`MmVirtualWrite` call. Confirm each is guarded
+   by a preceding NT_SUCCESS check that returns on failure.
+
+5. **Aliasing scan:**
+   For every function with two NtProtect calls on the same `BaseAddr`/`Size` locals, confirm
+   those locals are reset between calls.
+
+---
+
+### skill: audit-wire-format
+
+**When to invoke:** Verifying wire format consistency after any change to `builder.go`,
+`Demon.c`, or both.
+
+#### Procedure
+
+1. Open `teamserver/pkg/common/builder/builder.go`. Find `PatchConfig()`. Extract the
+   sequence of `AddInt`/`AddString`/`AddWString` calls in order. Format as a numbered list
+   with types: `1:Int, 2:Int, 3:String, ...`
+
+2. Open `payloads/Demon/src/Demon.c`. Find `DemonConfig()`. Extract the sequence of
+   `ParserGetInt32`/`ParserGetString`/`ParserGetBytes` calls in order. Format identically.
+
+3. Compare the two lists side-by-side. Every position must have the same type.
+
+4. Total count must match.
+
+5. Cross-reference with the field table in `AGENTS.md § Config Blob Pattern`. Field positions
+   13-25 must not have shifted.
+
+6. If a mismatch is found: identify which field is at the wrong position, trace its `AddInt`
+   call in builder.go and its `ParserGetInt32` call in Demon.c, and report the exact lines
+   where the sequences diverge.
+
+---
+
+## Skills for: code-tester
+
+---
+
+### skill: build-verify
+
+**When to invoke:** Before any test scenario. Always run first.
+
+#### Procedure
+
+```bash
+# 1. Teamserver Go build
+cd teamserver
+go build -ldflags="-s -w -X cmd.VersionCommit=$(git rev-parse HEAD)" -o ../havoc main.go
+echo "Go build exit: $?"          # must be 0
+
+# 2. Go tests
+go test ./...                     # must be all PASS, zero failures
+
+# 3. Client CMake + Make
+cd ../client && mkdir -p Build && cd Build
+cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | grep -i "error"
+make -j4 2>&1 | grep -i "error:"  # must produce no output
+```
+
+**False positive suppression:** Clang IDE diagnostics in Demon C files (`'Demon.h' file
+not found`, `Unknown type name 'VOID'`, etc.) are not build errors. Only MinGW output matters.
+If the MinGW cross-compile is available, add: `make demon-build 2>&1 | grep -i "error:"`.
+
+**Exit criteria:**
+- `go build` exit code = 0
+- `go test ./...` = all PASS
+- `make -j4` output contains no `error:` lines
+
+---
+
+### skill: test-injection-stability
+
+**When to invoke:** Verifying that any change involving `PeProtect.c`, `Obf.c`, `DemonInit`,
+or any sleep obfuscation path does not introduce an injection crash.
+
+#### Procedure
+
+**Scenario A — Shellcode injection with PeStomp enabled**
+
+1. Build a debug shellcode payload with `PeStomp = true`.
+2. Start the teamserver with a configured listener.
+3. Inject the shellcode into a remote process (via "shellcode inject" from a live Demon,
+   or via an external injector).
+4. Monitor debug output from the injected agent.
+
+Expected log line (must appear exactly once):
+```
+PeProtect_Init: no PE header at ModuleBase - disabling PeStomp (shellcode mode)
+```
+
+Pass criteria:
+- Log line appears
+- Host process does not terminate within the first 3 sleep cycles
+- Agent continues checking in at the configured sleep interval
+
+Fail indicators:
+- Host process terminates within seconds of registration
+- Log line absent (MZ check not reached)
+- Teamserver marks agent dead after one check-in
+
+**Scenario B — Default-config shellcode injection (no PeStomp)**
+
+1. Build a shellcode payload with all defaults (PeStomp=false, StackSpoof=false).
+2. Inject into a remote process.
+3. Monitor for 5+ sleep cycles.
+
+Pass: Agent alive and checking in at configured interval.
+Fail: Host process crash. Agent flooding teamserver (sleep=0 regression).
+
+**Scenario C — EXE with PeStomp enabled (regression check)**
+
+1. Build a debug EXE with `PeStomp = true`.
+2. Run the EXE directly (not injected).
+
+Pass:
+- "no PE header" log line does NOT appear
+- Stomp/restore log lines appear each sleep cycle
+- OldProtect value in restore matches OldProtect saved in stomp (add temporary debug print)
+
+Fail: Agent crashes on first sleep. "no PE header" appears (MZ check returns false on a real PE).
+
+---
+
+### skill: test-ntdll-unhook
+
+**When to invoke:** Verifying that `UnhookNtdll = true` with `IndirectSyscall = true`
+succeeds and the agent connects normally.
+
+#### Procedure
+
+1. Build a debug payload with `UnhookNtdll = true` and `IndirectSyscall = true`.
+2. Run the payload.
+3. Collect debug output.
+
+Expected sequence (must all appear in this order):
+```
+UnhookNtdll: .text CleanText=<addr>  LoadedText=<addr>  TextSize=<N>
+UnhookNtdll: NtProtect(RW) status=0x00000000  OldProt=0x00000020
+UnhookNtdll: NtdllCopy complete - <N> bytes written
+UnhookNtdll: NtProtect(restore) status=0x00000000  RestoredProt=0x00000020
+UnhookNtdll: clean view unmapped - returning 1
+Successfully unhooked ntdll.dll
+```
+
+Key values to verify:
+- Both NtProtect status = `0x00000000` (STATUS_SUCCESS)
+- `OldProt=0x00000020` = `PAGE_EXECUTE_READ` — confirms original protection correct
+- `NtdllCopy complete` with non-zero byte count
+- Agent connects to teamserver after unhooking completes
+
+Fail indicators:
+- Any NtProtect status non-zero
+- Missing `NtdllCopy complete` line
+- Agent crash before first sleep
+
+Regression: `UnhookNtdll = false` must produce no ntdll log lines; agent must connect normally.
+
+---
+
+### skill: test-sleep-regression
+
+**When to invoke:** After any change to `Obf.c`, `PeProtect.c`, `ObfTimer.c`, or `ObfFoliage.c`.
+Verifies the sleep=0 regression is not present.
+
+#### Procedure
+
+1. Build a payload with default settings (sleep=10, StackSpoof=false, PeStomp=false,
+   no sleep obfuscation technique).
+2. Run the payload against a teamserver.
+3. Observe the teamserver connection log for 60 seconds.
+
+Pass: Agent checks in approximately every 10 seconds (allow ±2s variation).
+The total number of check-ins in 60 seconds should be 5-7.
+
+Fail: Agent floods the teamserver with rapid sequential check-ins — dozens per second.
+This indicates `WaitForSingleObjectEx` is not being called in the DEFAULT sleep path.
+
+**Root cause pattern if regression present:**
+Trace `Obf.c:SleepObf()` DEFAULT case. Verify:
+1. `PeProtect_Stomp()` is called (it gates itself internally — no crash possible)
+2. `SpoofFunc` is gated on `StackSpoof=true` AND `MmGadgetFind` returns non-NULL
+3. The `else` branch falls through to direct `WaitForSingleObjectEx`
+4. Step 3 must be unconditionally reachable when StackSpoof=false
+
+---
+
+### skill: test-config-alignment
+
+**When to invoke:** After any change to the config blob sequence (new field added or reordered).
+Verifies all config fields are parsed from the correct position.
+
+#### Procedure
+
+1. Build a debug payload with every optional feature enabled and non-default values:
+   - `Sleep = 15`, `Jitter = 5`
+   - `RandGadget = true`, `UnhookNtdll = true`, `HideModules = true`, `PeStomp = true`
+   - `Verbose = true`, `CoffeeVeh = true`, `CoffeeThreaded = true`
+   - `IndirectSyscall = true`
+2. Run the payload with `--debug-dev`.
+3. Verify that each feature produces its corresponding log line.
+
+Expected log evidence per feature (in `DemonInit` / first sleep cycle):
+- `RandGadget`: gadget scan log
+- `UnhookNtdll`: ntdll unhook sequence (see `skill: test-ntdll-unhook`)
+- `HideModules`: hide module log on first `LdrModuleLoad` call
+- `PeStomp` (EXE/DLL): stomp log on first sleep; "no PE header" must NOT appear
+- `Verbose`: verbose mode log
+- `IndirectSyscall`: syscall address log from `SysInitialize`
+
+Fail: Any feature set to `true` produces no output and appears to have no effect.
+This indicates a wire format misalignment where that feature's field is parsed from a
+different (adjacent) field's position.
+
+---
+
+### skill: test-parser-safety
+
+**When to invoke:** After any change to `Parser.c`, `Demon.c:DemonConfig()`, or any function
+that reads a length-prefixed field from an untrusted buffer. Verifies the UINT32 underflow
+guard and NULL-source MemCopy protections are effective.
+
+#### Procedure
+
+**Scenario 1 - Mismatched AES key (config blob corruption)**
+
+1. Edit the teamserver profile to use a wrong-length AES key or mismatched IV so the
+   decrypted config blob contains garbage length fields.
+2. Build a debug payload and run it against the teamserver.
+3. Observe behaviour.
+
+Pass: Agent does not crash (access violation, segfault). It either exits cleanly,
+re-connects, or logs a parse error and idles. No heap read past allocated buffer.
+
+Fail: Agent crashes or produces an access violation during `DemonConfig()` - indicates
+a UINT32 underflow occurred and subsequent reads went out of bounds.
+
+**Scenario 2 - KaynLdr shellcode injection (KArgs=NULL path)**
+
+1. Build a debug shellcode payload (KaynLdr mode is NOT used - use a non-KaynLdr injector
+   that sets `KArgs = NULL`).
+2. Inject the shellcode into a remote process.
+3. Monitor for successful registration and first sleep cycle.
+
+Pass: Agent registers with the teamserver without crashing in `DemonInit`. No access
+violation before config parse completes.
+
+Fail: Remote process terminates immediately after shellcode runs - indicates `IMAGE_SIZE`
+or another PE field access faulted on the headerless mapping because the MZ check was absent.
+
+**Expected log behaviour on a correctly-configured build:**
+`ParserGetBytes` should not log a bounds-exceeded message during normal operation. If that
+message appears on a valid build with correct profile settings, it indicates a bug elsewhere
+in the config blob construction - investigate `builder.go:PatchConfig()` field ordering.
+
+---
+
+### skill: regression-check
+
+**When to invoke:** After any change to the codebase, before declaring the implementation
+complete. This is the full regression gate.
+
+#### Procedure
+
+Run all of the following in order:
+
+1. `skill: build-verify` — must pass before continuing
+2. Default-config agent: connect, survive 5 sleep cycles, check-in at correct interval
+3. `skill: test-sleep-regression` — verify no sleep=0
+4. If `PeProtect.c` touched: `skill: test-injection-stability` Scenario A + B + C
+5. If `NtdllUnhook.c` or `DemonInit` ordering touched: `skill: test-ntdll-unhook`
+6. If config blob sequence changed: `skill: test-config-alignment`
+
+#### Report Format
+
+```
+## Test Report — <change name> — <date>
+
+### Build
+- [PASS] go build exit 0
+- [PASS] go test ./... all PASS
+- [PASS] client make: no errors
+
+### Regression
+- [PASS] Default-config agent: 6 check-ins in 60s (expected ~6)
+- [PASS] Sleep regression: no flooding
+- [PASS] Injection stability (shellcode, PeStomp=true): "no PE header" seen; survived 5 cycles
+- [PASS] Injection stability (EXE, PeStomp=true): stomp/restore logs; OldProt=0x02
+- [PASS] ntdll unhook: OldProt=0x20 on both calls; 1486764 bytes written
+- [PASS] Config alignment: all 10 features produced expected log evidence
+
+### Verdict
+N scenarios. N PASS, N FAIL.
+```
+
+---
+
+## Lessons Learned
+
+These lessons are preserved from earlier codebase work. Each captures a non-obvious bug or
+mistake that was made and should not be repeated.
+
+---
+
+### Lesson 1: Profile Fixes Can Unmask Latent Agent Bugs
+
+**What happened:** Fixed profile settings to actually propagate to the builder and Demon agent.
+Features like HWBP, SleepJmpGadget, ProxyLoading were now applied. But agents started terminating.
+
+**Root cause:** The features themselves had bugs (handle leaks, NULL dereferences, wrong sizeof).
+These bugs always existed but were never triggered because the profile settings were silently ignored.
+
+**Rule:** After any change that enables previously-disabled code paths, trace those code paths
+for latent bugs before declaring the fix complete. Fix config propagation, then audit the feature.
+
+---
+
+### Lesson 2: sizeof(void) Is Not Zero — It Is 1 on GCC
+
+**What happened:** `sizeof(VOID)` was used as a copy size. On GCC/MinGW (used for Demon),
+`sizeof(void)` is a GCC extension that evaluates to 1, silently copying only 1 byte.
+
+**Rule:** Never use `sizeof(void)` or `sizeof(VOID)`. For pointer-sized copies, use
+`sizeof(PVOID)` or `sizeof(ULONG_PTR)`. When reviewing, `grep -n "sizeof.*VOID"` and verify.
+
+---
+
+### Lesson 3: Handle Leaks From Incomplete Exit Path Audit
+
+**What happened:** `HwBpEngineSetBp` closed a thread handle on the failed path but not the
+success path. The function is called from the VEH handler — the leak is rapid.
+
+**Rule:** For every function that opens handles or allocates resources, enumerate ALL exit
+points (return, goto, fall-through). Verify each one closes/frees resources.
+
+---
+
+### Lesson 4: Initialize Local Variables From Parameters, Not NULL
+
+**What happened:** `HwBpEngineRemove` declared `PHWBP_ENGINE HwBpEngine = NULL` and then
+checked `if (!HwBpEngine)` to decide whether to fall back to the global. The local was always
+NULL so the parameter was always ignored.
+
+**Rule:** When a function accepts a parameter with a NULL fallback to a global, initialize
+the local FROM the parameter:
+```c
+PHWBP_ENGINE HwBpEngine = Engine;   // from parameter
+if (!HwBpEngine) HwBpEngine = Instance->HwBpEngine;  // fallback
+```
+
+---
+
+### Lesson 5: VEH Handlers Must NULL-Guard All Global State
+
+**What happened:** The HWBP exception handler accessed `Instance->HwBpEngine->Breakpoints`
+without checking if `HwBpEngine` was NULL. VEH handlers fire from all threads at any time,
+including initialization/destruction windows.
+
+**Rule:** Every VEH/SEH handler starts with NULL checks on all global state before accessing.
+Return `EXCEPTION_CONTINUE_SEARCH` if state is invalid — do not crash.
+
+---
+
+### Lesson 6: Agent Findings Are Hypotheses, Not Confirmed Facts
+
+**What happened:** Three analysis agents reported 8 bugs. After manual verification, 4 were
+false positives — agents missed macro expansion context, fallback logic in subsequent code,
+and error handling in callers.
+
+**Rule:** Always verify agent findings by reading the actual code at the reported line and
+tracing macro expansions manually. A 50% false positive rate is normal for static analysis.
+
+---
+
+### Lesson 7: x64 RSP Alignment Varies By Windows Build
+
+**What happened:** Foliage sleep crashed. The ROP chain had `Rsp % 16 == 0` instead of
+`Rsp % 16 == 8` (required at x64 function entry). `NtGetContextThread` on a freshly-created
+suspended thread returns different Rsp alignment depending on the Windows build.
+
+**Rule:** Never use the captured Rsp from `NtGetContextThread` directly. Normalize:
+```c
+if ((Rsp & 0xF) == 0) Rsp -= sizeof(PVOID);
+```
+The crash manifests as `#GP` from `movaps` in the ROP chain target functions, not from
+`NtContinue` itself.
+
+---
+
+### Lesson 8: Only ntdll Functions Are Safe on Manually-Created NT Threads
+
+**What happened:** Foliage ROP chain called `WaitForSingleObjectEx` (kernelbase.dll) on an
+APC thread created with `NtCreateThreadEx` + `NtTestAlert`. The thread never ran through
+`BaseThreadInitThunk`, so its TEB Win32 subsystem state was uninitialised. The Win32 wrapper
+accessed uninitialised fields and crashed.
+
+**Rule:** On threads created directly via `NtCreateThreadEx` (with `CREATE_SUSPENDED` for
+APC/ROP chains), use ONLY ntdll functions and direct syscalls — no kernelbase.dll,
+kernel32.dll, or advapi32.dll wrappers. If an algorithm is needed (e.g., RC4), implement
+it as a position-independent stub in separately allocated executable memory.
+
+---
+
+### Lesson 9: Audit ALL Functions in ROP Chains for Non-ntdll Dependencies
+
+**What happened:** After replacing `WaitForSingleObjectEx` with `NtWaitForSingleObject`,
+Foliage still crashed intermittently. `SystemFunction032` (advapi32) — the RC4 wrapper —
+accessed uninitialised TEB state on the APC thread on some Windows versions.
+
+**Rule:** For ANY function in a ROP chain on a manual thread, confirm it comes from ntdll.
+If not, replace it or implement the algorithm as a custom stub. "Simple" functions from
+other DLLs can have hidden TEB dependencies in their implementation or forwarding chain.
+
+---
+
+### Lesson 10: NT_SUCCESS Guard Covers Failure — Not Wrong Target
+
+**What happened:** ISS-037 added `NT_SUCCESS` guards to `PeProtect_Stomp()` to prevent
+writing to non-writable memory. In KaynLdr shellcode mode, NtProtect SUCCEEDS (private
+allocation), but `ModuleBase` points to `.text` code, not a PE header. The guard passed.
+`MemSet` zeroed 4 KB of live agent code.
+
+**Rule:** `NT_SUCCESS` only guards the FAIL case. When NtProtect succeeds, validate that
+the target region IS what you expect (e.g., check for `IMAGE_DOS_SIGNATURE` before assuming
+`ModuleBase` is a PE header). Both guards are always needed independently.
+
+---
+
+### Lesson 11: Hardcoded Protection Constants Cause Permanent Permission Creep
+
+**What happened:** `PeProtect_Stomp()` and `PeProtect_Restore()` restored the PE header page
+with hardcoded `PAGE_EXECUTE_READ` (0x20). The original protection was `PAGE_READONLY` (0x02).
+After one sleep cycle, the PE header page permanently gained the execute bit — incorrect and
+a potential detection signal.
+
+**Rule:** Always use `OldProtect` (the value saved by the preceding NtProtect call) as the
+restoration protection. Never hardcode a protection constant in a restore call. The original
+protection is whatever it was — do not guess.
+
+---
+
+### Lesson 12: DJB2 Hash Errors Are Completely Silent
+
+**What happened:** HVC-030 Sub-3 pe-sieve fix was a complete no-op at runtime. Both
+`RtlUserThreadStart` and `BaseThreadInitThunk` resolved to NULL because their `H_FUNC_*`
+constants were wrong. The code ran without error — it just silently wrote NULL to every
+frame that was supposed to hold those addresses.
+
+**Rule:** DJB2 hash verification is mandatory before committing ANY new `H_FUNC_*` constant.
+Wrong hash = `LdrFunctionAddr` returns NULL = all users of that pointer silently no-op.
+There is no runtime error, no crash, no log. Run `djb2_upper(name)` and confirm.
+
+---
+
+### Lesson 13: UINT32 Length Counters on Untrusted Buffers Must Be Bounds-Checked Before Arithmetic
+
+**What happened (ISS-005):** `ParserGetBytes` read a 4-byte `Length` field from the config
+blob and subtracted it from `parser->Length` twice without checking whether `Length` fit in
+the remaining buffer. When `Length > parser->Length - 4`, both subtractions underflowed, wrapping
+`parser->Length` to ~0xFFFFFFxx. Every subsequent read went far out of bounds.
+
+**Rule:** Before any `parser->Length -= N` operation, verify `N <= parser->Length`. `parser->Length`
+is UINT32, not INT32 - there is no signed overflow, only silent wrap to a huge value. The
+pattern: `if ( Length > parser->Length - sizeof(DWORD) ) { parser->Length = 0; *size = 0; return EmptyBuf; }`.
+
+---
+
+### Lesson 14: Functions Returning Buffer Pointers Used Directly in MemCopy Must Never Return NULL
+
+**What happened (ISS-006):** All call sites in `DemonConfig` passed the return value of
+`ParserGetBytes` directly into `MemCopy(dest, Buffer, Length)` without a NULL check. When
+`ParserGetBytes` returned NULL (its original error path), the MemCopy faulted immediately.
+Auditing every one of 15+ call sites is error-prone - one missed check is enough to crash.
+
+**Rule:** When a parser function has many callers following the same `Buffer = Parse(); MemCopy(dest, Buffer, size);`
+pattern, fix the failure path inside the parser: return a static safe zero-length buffer
+(`EmptyBuf`) and set `*size = 0`. Any `MemCopy(dest, EmptyBuf, 0)` is a safe no-op. This
+eliminates the entire class of bugs without touching a single call site.
+
+---
+
+### Lesson 15: `*(PWORD)Base == IMAGE_DOS_SIGNATURE` Is a Mandatory Guard, Not an Optional Check
+
+**What happened (ISS-007):** When `KArgs == NULL` (non-KaynLdr injector), `DemonInit` called
+`IMAGE_SIZE(Instance->Session.ModuleBase)` unconditionally. `IMAGE_SIZE` reads `e_lfanew` from
+`ModuleBase` to reach the NT headers. In a KaynLdr headerless mapping, `ModuleBase[0]` is the
+start of `.text` code. Reading `e_lfanew` from code bytes yields a garbage RVA; the NT header
+dereference accesses an arbitrary address and faults before config parse even begins.
+
+**Rule:** Any code that treats a `PVOID` as a PE image must validate `*(PWORD)Base == IMAGE_DOS_SIGNATURE`
+first. A non-NULL pointer check is insufficient - KaynLdr mappings, fresh allocations, and
+non-PE blobs all pass non-NULL but crash on `e_lfanew`. When the MZ check fails, set any
+dependent size or offset to 0 and do not proceed. Apply this guard consistently across the
+entire codebase wherever `IMAGE_SIZE`, `IMAGE_NT_HEADER`, or direct `e_lfanew` access appears.
+
+---
+
+### Lesson 16: Rewriting Shared Library Code While Threads Execute It Requires Full Thread Suspension
+
+**What happened (ISS-001):** `UnhookNtdll()` called `NtdllCopy` to overwrite ntdll `.text`
+without suspending host threads. In a multi-threaded host process, another thread fetching an
+instruction from the in-progress region during the QWORD-by-QWORD copy reads a partially-written
+cache line. This produces a nonsense instruction sequence that causes a `#GP` (general protection
+fault) or `#UD` (undefined instruction) fault — a crash in the host process. Single-threaded
+targets (e.g. freshly spawned notepad) would not trigger this, making it a rare and intermittent
+failure.
+
+**Rule:** Any code that overwrites memory containing executable code in a process that may have
+more than one thread must enumerate and suspend all non-current threads before writing, and resume
+them after restoring page protection. Use `SysNtGetNextThread` + `SysNtQueryInformationThread`
+(ThreadBasicInformation) for TID-based filtering. Use the `ThdSaved` flag pattern to track
+whether handles are saved to the resume array or need to be closed in the loop body — this
+prevents both double-closes and handle leaks.
+
+---
+
+### Lesson 17: PEB LDR List Walks Without LoaderLock Are Racy and Crash-Prone
+
+**What happened (ISS-002, ISS-003):** `HideModule()`, `LdrModulePeb`, `LdrModulePebByString`,
+and `LdrModuleSearch` all walked `InLoadOrderModuleList` without holding `PEB->LoaderLock`. A
+concurrent `LoadLibrary` or `FreeLibrary` on another thread splices the same list simultaneously.
+The walking thread reads a `Flink` pointer that the other thread has already zeroed or replaced,
+causing an access violation or infinite loop. `LdrModuleSearch`'s `Entry != FirstEntry`
+termination condition is particularly vulnerable — if `Flink` is corrupted, the walk never
+terminates (ISS-011).
+
+**Rule:** Every PEB LDR list walk — including `HideModule`, all `LdrModule*` functions, and any
+future enumeration — must acquire `LoaderLock` before the first `Flink` dereference and release
+it at every exit point. Resolve `LdrLockLoaderLock`/`LdrUnlockLoaderLock` inline via
+`LdrFunctionAddr` (they are not in `Instance->Win32`). Guard the acquire with `if (pLdrLock)`
+for the early-init case where `Modules.Ntdll` is still NULL.
+
+**DJB2 hashes (verified):**
+- `LdrLockLoaderLock`   → `0xcdcd3c90`
+- `LdrUnlockLoaderLock` → `0xfc603ed3`
+
+---
+
+### Lesson 18: Heap Allocation Failure Before Lock Acquire Permanently Deadlocks the Loader
+
+**What happened (ISS-003 addendum):** `LdrModulePebByString` allocated a wide-string work buffer
+with `MmHeapAlloc(MAX_PATH)` at line 135, then acquired `LoaderLock` at line 145. No NULL check
+existed between them. Under OOM conditions, `MmHeapAlloc` returns NULL; the subsequent
+`MemCopy(NULL, ...)` produces an access violation. At crash time the lock is already held,
+leaving it permanently acquired for the process lifetime. Every future `LoadLibrary` call
+deadlocks waiting for the lock that will never be released.
+
+**Rule:** Heap allocations that are prerequisites for a critical-section operation must be NULL-
+checked BEFORE the lock is acquired. Pattern: `Name = MmHeapAlloc(MAX_PATH); if (!Name) return NULL;`
+then acquire the lock. This keeps the resource acquisition order clean (allocation -> check -> lock)
+and eliminates the permanently-held-lock failure mode.
+
+---
+
+### Lesson 19: Functions Declared `BOOL` Without a `return` Statement Have Undefined Return Value
+
+**What happened (ISS-004):** `SysInitialize()` was declared `BOOL SysInitialize(IN PVOID Ntdll)`
+but had no `return` statement. The C standard defines this as undefined behaviour — on most x64
+calling conventions the "return value" is whatever happens to be in `RAX` at function exit (the
+last computed value, which is the NTSTATUS from the final `SYS_EXTRACT` macro or some other
+expression). On EDR environments where `SysExtract(NtAddBootEntry)` fails and `SysAddress` stays
+NULL, the function could return a non-zero garbage value that callers treat as TRUE, masking the
+initialization failure.
+
+**Rule:** Every non-void function must have an explicit `return` statement on all code paths.
+For functions that compute a boolean result from instance state, the pattern is
+`return Instance->Subsystem.Key != NULL;` or `return ConditionIsMet;` as the final statement.
+Never rely on the implicit return value from the last expression or on compiler warnings to catch
+missing returns — `-W` flags may not be enabled, and the bug is completely silent at runtime.
+
+---
+
+### Lesson 20: MinGW Compat Blocks for Vista+/Win8.1+ Types
+
+**What happened (HVC-032):** `src/commands/` files referenced `SOCKADDR_INET`, `MIB_IPNET_TABLE2`,
+`MIB_IPNET_ROW2`, `CIMTYPE`, `HPSS`, and `PSS_CAPTURE_FLAGS`. These are Vista+/Win8.1+ types
+declared in `ws2ipdef.h`, `netioapi.h`, `wbemcli.h`, and `processsnapshot.h`. MinGW-w64 on Kali
+does not ship these headers (or ships incomplete versions). Even with `-D_WIN32_WINNT=0x0603`,
+the types are absent, producing "unknown type name" errors.
+
+**Rule:** For every Vista+/Win8.1+ type not in core MinGW headers, add an inline compat block at
+the top of the `.c` file that needs it, guarded by the same macro the Windows SDK uses:
+
+```c
+#ifndef MIB_IPNET_TABLE2_DEFINED
+#define MIB_IPNET_TABLE2_DEFINED
+/* ... minimal struct defs from MSDN ... */
+#endif
+```
+
+Known guards: `CIMTYPE_DEFINED`, `SOCKADDR_INET_DEFINED`, `MIB_IPNET_TABLE2_DEFINED`,
+`_PROCESSSNAPSHOT_H_`. If a future MinGW ships the real header it will set these guards and
+the compat block is silently skipped.
+
+Additionally: **function pointer typedef return types must match Win32 exactly.** `CreateFileW`
+returns `HANDLE` (void *), not `BOOL` (int). A wrong return type in a typedef is silently cast
+on macOS/MSVC but produces "makes pointer from integer" on MinGW at every call site.
+
+---
+
+### Lesson 21: `src/commands/` Switch Case Safety Rules
+
+**What happened (HVC-032 QA):** Deep review of all 11 new command files found recurring patterns:
+
+1. **Bare `return` in a switch case** leaks the `Package` allocation, leaks open handles (token,
+   process, registry), and sends no response to the operator. The operator's command hangs
+   indefinitely. Fix: replace with `PackageAddInt32(Package, FALSE); break;`.
+
+2. **Missing `break` before the next case** (found in `SOCKET_COMMAND_WRITE`): the success path
+   `return`s, but the failure path fell through into `SOCKET_COMMAND_CONNECT`, parsing new socket
+   fields from the wrong buffer position and creating a spurious socket.
+
+3. **Token handle from `TokenCurrentHandle()` leaked** when not all case branches close it. Pattern:
+   open `hToken` once at the function top; close+NULL it in cases that use it; add a final
+   `if (hToken) { SysNtClose(hToken); hToken = NULL; }` just before `PackageTransmit`.
+
+4. **`PackageAddWString` field duplicated** in a loop body (session list: `sesi10_username` written
+   twice; second should be `sesi10_cname`). Client reads fields sequentially — a duplicate shifts
+   every subsequent field and corrupts the display for all remaining entries.
+
+5. **`MmHeapAlloc` result unchecked before `MemCopy`**: OOM crashes the agent in an injected
+   process with no recoverable error. Every heap allocation must be NULL-checked before use.
+
+6. **Assembly argument length assigned to wrong variable** (`&Buffer.Length` instead of
+   `&AssemblyArgs.Length`): `AssemblyArgs.Length` stays 0, so the .NET assembly always sees
+   empty arguments regardless of what the operator sent.

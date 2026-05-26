@@ -41,10 +41,47 @@ Demon {
     StackDuplication = true
 
     # Accepted: "WaitForSingleObjectEx", "Foliage", "Ekko", "Zilean"
-    SleepTechnique = "Ekko"
+    SleepTechnique = "Foliage"
 
     # Accepted: "None", "jmp rax", "jmp rbx" (only applies to Ekko/Zilean)
-    SleepJmpGadget = "jmp rbx"
+    SleepJmpGadget = "jmp rax"
+
+    # Re-select a random gadget address each sleep cycle (Ekko/Zilean only, ignored by Foliage)
+    RandGadget = false
+
+    # Overwrite loaded ntdll .text with a clean copy from \KnownDlls at startup — removes EDR inline hooks
+    UnhookNtdll = false
+
+    # Unlink dynamically loaded modules from PEB InLoadOrderModuleList, InMemoryOrderModuleList, InInitializationOrderModuleList
+    HideModules = false
+
+    # Stomp PE header region during default sleep -- opt-in; leave false for injected payloads (ISS-037)
+    PeStomp = false
+
+    # Enable verbose debug logging in the Demon agent at startup
+    Verbose = false
+
+    # Enable VEH (vectored exception handling) for BOF/object file loading (CoffeeLoader)
+    CoffeeVeh = false
+
+    # Enable threaded execution for BOF/object files (CoffeeLoader)
+    CoffeeThreaded = false
+
+    # Optional: custom thread start address for sleep obfuscation
+    # When omitted the agent uses RtlUserThreadStart (the safe default)
+    # SleepObfStartAddr {
+    #     Library  = "ntdll.dll"
+    #     Function = "RtlUserThreadStart"
+    #     Offset   = 0
+    # }
+
+    # Optional: custom thread start address for injection spoofing
+    # When omitted no spoof address is configured at build time (set via 'inject spoofaddr' at runtime)
+    # InjectSpoofAddr {
+    #     Library  = "kernel32.dll"
+    #     Function = "GetModuleHandleA"
+    #     Offset   = 0
+    # }
 
     # Accepted: "None (LdrLoadDll)", "RtlRegisterWait", "RtlCreateTimer", "RtlQueueWorkItem"
     ProxyLoading = "RtlQueueWorkItem"

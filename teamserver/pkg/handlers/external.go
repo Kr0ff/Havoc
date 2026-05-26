@@ -58,9 +58,8 @@ func (e *External) Request(ctx *gin.Context) {
     ExternalIP := strings.Split(ctx.Request.RemoteAddr, ":")[0]
 
     if Response, Success := parseAgentRequest(e.Teamserver, Body, ExternalIP, false, e.Config.Name); Success {
-        // [HVC-002 2026-03-26] Base64-encode the response before writing it to the wire.
-        encoded := base64.StdEncoding.EncodeToString(Response.Bytes())
-        _, err := ctx.Writer.Write([]byte(encoded))
+        // [HVC-029] Response is already base64-encoded by encodeAgentResponse/handleServiceAgent.
+        _, err := ctx.Writer.Write(Response.Bytes())
         if err != nil {
             logger.Debug("Failed to write to request: " + err.Error())
             ctx.Status(http.StatusNotFound)
