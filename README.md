@@ -22,6 +22,44 @@ See the [Installation](https://havocframework.com/docs/installation) docs for in
 
 ---
 
+### What's New in 0.9.4 "Eclipse Anchor"
+
+A major capability and stability release. Full details in [`CHANGES.md`](CHANGES.md).
+
+#### New Post-Exploitation Commands (HVC-032)
+
+- **Lateral movement** — `wmi exec` and `dcom exec` execute commands on remote hosts via COM-based WMI and DCOM without touching disk. All COM interfaces dynamically resolved via `RtOle32()` — no import table entries.
+- **Persistence** — `persist reg` (HKCU/HKLM Run key), `persist schtask` (ITaskService COM chain), `persist com` (CLSID registry hijack), and `persist remove` cover the most common persistence primitives.
+- **Credential access** — `creds lsass` dumps LSASS via `PssCaptureSnapshot` (with MiniDumpWriteDump fallback); `creds sam` saves SAM/SECURITY/SYSTEM hives using `RegSaveKeyExW`. `dbghelp.dll` is loaded inline at call time only to avoid startup artifacts.
+- **Privilege escalation** — `privesc uac` supports three UAC bypass methods (`fodhelper`, `computerdefaults`, `eventvwr`) with automatic registry key cleanup on all exit paths.
+
+#### Command.c Architectural Refactor (HVC-032)
+
+- The monolithic `Command.c` (3 576 lines) has been split into per-group files under `src/commands/`. `Command.c` now holds only the `DemonCommands[]` dispatch table. New command groups follow the established pattern — no changes to `Command.c` required.
+
+#### Stack Spoofing (HVC-044)
+
+- **KaynLoader entry spoofing** — `KaynSpoofEntry` (x64 ASM) writes `BaseThreadInitThunk` and `RtlUserThreadStart` fake frames before jumping to `KaynDllMain`, giving the loader thread a clean-looking callstack on entry.
+- **Injection thread spoofing** — `NtCreateThreadEx` receives `RtlUserThreadStart` as `StartRoutine` and the shellcode entry as `Argument`. `TEB.StartAddress` records ntdll's `RtlUserThreadStart` instead of the shellcode address, clearing pe-sieve `SUS_START` for injected payloads.
+
+#### EDR Evasion Improvements
+
+- **ntdll unhooking** (`HVC-031 Sub-4`) — At startup, Demon opens `\KnownDlls\ntdll.dll`, maps a clean view, and overwrites the loaded ntdll `.text` using `SysNtProtectVirtualMemory` (indirect syscall, bypasses EDR hook) + a custom QWORD copy loop. Removes all usermode inline hooks before any injection or network code runs.
+- **Module hiding** (`HVC-031 Sub-2`) — Opt-in `HideModules` flag unlinks each dynamically loaded module from all three PEB loader lists immediately after load, defeating `CreateToolhelp32Snapshot`, `EnumProcessModules`, and direct PEB walks.
+- **PE header stomping** (`HVC-030 Sub-2`, `ISS-037`) — Zeros the first 4 KB of the Demon image before each sleep and restores from a saved backup on wake. Opt-in (`PeStomp = false` by default) to avoid crashes in injected processes. Auto-disabled in shellcode/KaynLdr mode via MZ signature check.
+- **pe-sieve fixes** (`HVC-030 Sub-3/4`) — Foliage worker thread now has a 4-frame fake callstack (`NtTestAlert / BaseThreadInitThunk / RtlUserThreadStart / NULL`) at the `WaitForSingleObjectEx` step; thread start address changed to `RtlUserThreadStart`. `PAGE_NOACCESS` applied to the encrypted image region during sleep prevents entropy measurement (`implanted_shc`).
+
+#### New Profile Config Options (HVC-038)
+
+- `Verbose`, `CoffeeVeh`, `CoffeeThreaded`, `SleepObfStartAddr`, and `InjectSpoofAddr` are now configurable in the YAOTL profile at payload generation time.
+
+#### Stability Fixes
+
+- **Parser safety** (`ISS-005/006/007`) — UINT32 bounds check before length subtraction; `ParserGetBytes` returns a static `EmptyBuf` sentinel (never NULL) to prevent NULL-source `MemCopy`; MZ signature guard before PE header field access.
+- **Injection stability** (`ISS-001/002/003/004`) — Thread suspension around ntdll text rewrite; LoaderLock held on all PEB LDR walks; `MmHeapAlloc` NULL check in `LdrModulePebByString`; explicit `return` added to `SysInitialize`.
+
+---
+
 ### What's New in 0.9 "Warden's Eye"
 
 A collection of operator experience and agent capability improvements. Full details and revert instructions are in [`CHANGES.md`](CHANGES.md).
@@ -154,7 +192,7 @@ base64(
 
 - Sleep obfuscation via [Ekko](https://github.com/Cracked5pider/Ekko), Zilean, or [FOLIAGE](https://github.com/SecIdiot/FOLIAGE)
 - Sleep obfuscation source split into per-technique files (`ObfTimer.c`, `ObfFoliage.c`) with compile-time `SLEEPOBF_USE_TIMER` / `SLEEPOBF_USE_FOLIAGE` guards — only the selected technique is compiled into the binary
-- Sleep jump gadget bypass: `jmp rax` and `jmp [rbx]` ROP-chain dispatch (Ekko/Zilean)
+- Sleep jump gadget bypass: `jmp rax` and `jmp [rbx]` ROP-chain dispatch (Ekko/Zilean); runtime gadget randomization picks a different gadget address each sleep cycle to defeat per-cycle EDR fingerprinting
 - x64 return address spoofing during indirect syscalls
 - Indirect syscalls for `Nt*` APIs with dynamically resolved SSNs
 - SMB transport for child agents over named pipes; DNS transport with configurable resolver and chunked query sequence
@@ -163,12 +201,17 @@ base64(
 - Hardware-breakpoint-based AMSI / ETW patching (HwBpEngine)
 - Memory-patch AMSI/ETW bypass as an alternative to the HWBP technique
 - Proxy library loading via `RtlRegisterWait` / `RtlCreateTimer` / `RtlQueueWorkItem`
-- Stack duplication / call-stack spoofing during sleep
+- Stack duplication / call-stack spoofing during sleep; KaynLoader entry spoofing via `KaynSpoofEntry` ASM; injection thread start address spoofed to `RtlUserThreadStart`
 - BOF (Beacon Object File) loader and inline .NET assembly execution
 - Per-process AES-256-CTR session encryption with embedded key material
 - Pure-C SHA-256 + HMAC-SHA-256 implementation (no CRT, no BCrypt dependency)
 - LZNT1 compression of large response payloads via `RtlCompressBuffer`
 - Auto proxy detection at startup: reads `HKCU\...\Internet Settings` via Advapi32 registry API (no WinHTTP); falls back to WinHTTP WPAD/IE detection on first connect (HVC-026); WPAD detection now passes the full `scheme://host:port/path` URL to `WinHttpGetProxyForUrl` so DHCP/DNS and PAC file evaluation work correctly (HVC-027)
+- ntdll unhooking at startup — overwrites loaded ntdll `.text` with clean `\KnownDlls\ntdll.dll` copy via indirect syscall; removes all EDR usermode inline hooks before network or injection code runs
+- Module hiding — opt-in PEB LDR unlink for all dynamically loaded modules, defeating `CreateToolhelp32Snapshot` and direct PEB walks
+- PE header stomping during sleep — zeros the first 4 KB of the Demon image before each sleep and restores on wake; auto-disabled in KaynLdr shellcode mode
+- New post-exploitation commands: lateral movement (`wmi exec`, `dcom exec`), persistence (`persist reg/schtask/com/remove`), credential access (`creds lsass`, `creds sam`), privilege escalation (`privesc uac`)
+- Modular command architecture — `Command.c` holds only the dispatch table; all handlers live in per-group `src/commands/Command_<Group>.c` files
 - Spinlock-protected `Instance->Packages` linked list (data-race fix, ISSUE-2)
 - mingw-w64 v15 / GCC 14+ compilation compatibility (MINGW-COMPAT)
 - Hardware breakpoint engine fixes: thread handle leaks, NULL guards, parameter handling (HVC-009)

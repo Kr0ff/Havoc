@@ -17,6 +17,31 @@ Description and rationale.
 
 ---
 
+## Version 0.9.4 — 2026-05-26 — Eclipse Anchor
+
+```
+Teamserver : 0.9.3 → 0.9.4 "Eclipse Anchor"
+Client     : 1.8   → 1.9   "Eclipse Anchor"
+Files      :
+  teamserver/cmd/cmd.go    VersionNumber 0.9.3 → 0.9.4
+  client/src/global.cc     Version 1.8 → 1.9
+```
+
+Version bump covering the following applied changes: HVC-032 (new agent commands + Command.c
+split), HVC-032-R1 (post-split linker fix + runtime bug fixes), HVC-044 (KaynLoader entry +
+injection thread stack spoofing), HVC-038 (new profile config options: Verbose, CoffeeVeh,
+CoffeeThreaded, SleepObfStartAddr, InjectSpoofAddr), ISS-001 through ISS-007 (P1 stability
+fixes: NtdllCopy thread suspension, LoaderLock on PEB LDR walks, SysInitialize return value,
+parser UINT32 bounds guard, EmptyBuf NULL-safe return, MZ signature check before IMAGE_SIZE),
+ISS-037 + ISS-037-R1 + ISS-037-shell (PE header stomping: opt-in flag, regression fixes,
+shellcode mode MZ guard), HVC-031 Sub-2 (module hiding via PEB LDR unlink), HVC-031 Sub-4
+(ntdll unhooking at startup via clean KnownDlls copy), HVC-030 Sub-1 through Sub-8 (Ekko/Zilean
+sleep improvements: JMPRAX gadget fix, PE header stomp, Foliage callstack + pe-sieve fixes,
+PAGE_NOACCESS sleep window, runtime gadget randomization, out-of-bounds scan fix,
+non-executable gadget selection fix).
+
+---
+
 ## HVC-032 — 2026-05-26 — New agent commands + Command.c split into per-group files
 
 ```
@@ -25,38 +50,93 @@ Spec           : improvement-docs/06-new-commands.md
 Files          :
   payloads/Demon/include/common/Defines.h         17 new H_FUNC_* DJB2 hash constants
   payloads/Demon/include/Demon.h                  New Win32 func ptrs + Ole32 module field
-  payloads/Demon/include/core/Command.h            5 new command group IDs + sub-cmds + decls
+  payloads/Demon/include/core/Command.h            4 new command group IDs + sub-cmds + decls
   payloads/Demon/include/core/Runtime.h            RtOle32 declaration
   payloads/Demon/src/core/Command.c               Thinned to dispatcher only (~483 lines)
-  payloads/Demon/src/core/Runtime.c               RtOle32, registry/iphlpapi/shell32 additions
+  payloads/Demon/src/core/Runtime.c               RtOle32, registry/shell32 additions
   payloads/Demon/src/Demon.c                      RtOle32 in RtModules[], kernel32 helpers
-  payloads/Demon/CMakeLists.txt                   11 new .c sources in COMMON_SOURCE
+  payloads/Demon/CMakeLists.txt                   11 .c sources added to COMMON_SOURCE
   payloads/Demon/src/commands/Command_FS.c        Split from Command.c
   payloads/Demon/src/commands/Command_Proc.c      Split from Command.c
   payloads/Demon/src/commands/Command_Token.c     Split from Command.c
   payloads/Demon/src/commands/Command_Inject.c    Split from Command.c
   payloads/Demon/src/commands/Command_Net.c       Split from Command.c
   payloads/Demon/src/commands/Command_Config.c    Split from Command.c
+  payloads/Demon/src/commands/Command_Pivot.c     Split from Command.c (linker fix - was missing)
   payloads/Demon/src/commands/Command_Lateral.c   NEW: wmi exec, dcom exec via COM vtable
   payloads/Demon/src/commands/Command_Persist.c   NEW: persist reg, schtask, com, remove
   payloads/Demon/src/commands/Command_Creds.c     NEW: creds lsass, creds sam
   payloads/Demon/src/commands/Command_Privesc.c   NEW: privesc uac (3 methods)
-  payloads/Demon/src/commands/Command_Netinfo.c   NEW: netinfo adapters, netinfo arp
   payloads/Demon/include/commands/*.h             11 headers for the above .c files
-  teamserver/pkg/agent/commands.go               5 new command group constants
-  teamserver/pkg/agent/demons.go                  TaskPrepare + TaskDispatch for 5 groups
-  client/include/Havoc/DemonCmdDispatch.h         5 new enum values + 5 Execute methods
-  client/src/Havoc/Demon/CommandSend.cc           5 new Execute implementations
-  client/src/Havoc/Demon/ConsoleInput.cc          wmi/dcom/persist/creds/privesc/netinfo parsing
+  teamserver/pkg/agent/commands.go               4 new command group constants
+  teamserver/pkg/agent/demons.go                  TaskPrepare + TaskDispatch for 4 groups
+  client/include/Havoc/DemonCmdDispatch.h         4 new enum values + 4 Execute methods
+  client/src/Havoc/Demon/CommandSend.cc           4 new Execute implementations
+  client/src/Havoc/Demon/ConsoleInput.cc          wmi/dcom/persist/creds/privesc parsing
+  client/src/Havoc/Demon/Commands.cc              DemonCommandList entries for 5 commands
   CLAUDE.md                                        Command split pattern + COM resolution rules
 ```
 ---
-Split the monolithic Command.c (3576 lines) into per-group files in src/commands/. Added 11
-new post-exploitation commands across 5 groups: lateral movement (WMI/DCOM exec), persistence
+Split the monolithic Command.c (3576 lines) into per-group files in src/commands/. Added 9 new
+post-exploitation commands across 4 groups: lateral movement (WMI/DCOM exec), persistence
 (registry, scheduled task, COM hijack, remove), credential access (lsass dump, SAM hive backup),
-privilege escalation (UAC bypass via fodhelper/computerdefaults/eventvwr), and network discovery
-(adapter enumeration, ARP table). All COM interfaces dynamically resolved via RtOle32(). All
-new H_FUNC_* DJB2 constants verified with djb2_upper() before commit.
+and privilege escalation (UAC bypass via fodhelper/computerdefaults/eventvwr). All COM interfaces
+dynamically resolved via RtOle32(). All new H_FUNC_* DJB2 constants verified with djb2_upper()
+before commit.
+
+Post-release fixes (same date, see HVC-032-R1 below):
+- CommandPivot linker error: pivot handler was missing from the split; extracted from git history
+  and placed in Command_Pivot.c + Command_Pivot.h
+- OLE32.DLL name truncation: CHAR ModuleName[9] buffer was one byte short for "OLE32.DLL\0";
+  agent printed "OLE32.DL" in debug output and module resolution succeeded only by coincidence
+- Empty-name LdrModuleLoad at startup: EncodeUTF8("") produces {'\0', len=1} not {len=0};
+  SleepObfLib/SleepObfFunc/InjectSpoofLib/InjectSpoofFunc guards changed to `Len <= 1 ||
+  !Field[0]` to correctly treat null-terminated empty strings as "not configured"
+
+---
+
+## HVC-032-R1 — 2026-05-26 — Post-release bug fixes for HVC-032 Command.c split
+
+```
+Status         : Applied
+Files          :
+  payloads/Demon/include/commands/Command_Pivot.h  NEW - CommandPivot declaration
+  payloads/Demon/src/commands/Command_Pivot.c      NEW - CommandPivot body extracted from pre-split git history
+  payloads/Demon/src/core/Command.c               Add #include <commands/Command_Pivot.h>
+  payloads/Demon/CMakeLists.txt                   Add src/commands/Command_Pivot.c to COMMON_SOURCE
+  payloads/Demon/src/core/Runtime.c               Fix OLE32 module name buffer: CHAR[9] → CHAR[10], add 'L' at [8], '\0' at [9]
+  payloads/Demon/src/Demon.c                      Fix empty-string guard for SleepObfLib, SleepObfFunc, InjectSpoofLib, InjectSpoofFunc
+```
+---
+
+**Bug 1 - CommandPivot undefined reference (linker error):**
+During the HVC-032 Command.c split, `CommandPivot` was listed in the `DemonCommands[]` dispatch
+table but no compiled file defined it — `Pivot.c` only defines the internal `PivotAdd`,
+`PivotRemove`, `PivotCount`, and `PipeWrite` helpers, not the top-level dispatcher. Cross-compile
+failed with `undefined reference to 'CommandPivot'`. Fix: retrieved `CommandPivot` body from
+pre-split git history (`git show d47f5c8:payloads/Demon/src/core/Command.c`), placed it in
+`Command_Pivot.c` with includes for `<core/Pivot.h>` and `<core/Win32.h>`. Applied stability
+fix: bare `return` in the `DEMON_PIVOT_SMB_COMMAND` empty-data error path changed to
+`PackageAddInt32(Package, FALSE); break;` to avoid leaking the Package allocation.
+
+**Bug 2 - OLE32.DLL module name truncated to "OLE32.DL":**
+`Runtime.c` builds the module name character-by-character via `HideChar()` into a fixed
+`CHAR ModuleName[N]` buffer. The buffer was declared as `CHAR ModuleName[ 9 ]` (9 bytes) but
+`"OLE32.DLL"` requires 10 (9 chars + null terminator). `ModuleName[8] = HideChar('\0')` placed
+the null one byte too early, producing the truncated string `"OLE32.DL\0"`. `LdrModulePeb` call
+for ole32 produced a debug log of `LdrModuleLoad: ENTRY 'OLE32.DL'`. Fixed by changing the
+buffer to `CHAR ModuleName[ 10 ]`, writing `HideChar('L')` at index 8 and `HideChar('\0')` at
+index 9.
+
+**Bug 3 - Two spurious `LdrModuleLoad: ENTRY ''` calls at agent startup:**
+`EncodeUTF8("")` in the Go teamserver always appends a null terminator byte, producing
+`[]byte{'\x00'}` with length=1 rather than an empty `[]byte{}` with length=0. `AddBytes` writes
+length=1 to the config blob. On the Demon side `ParserGetString` returns `Len=1` and a pointer to
+`"\x00"`. The guard `if (Len == 0) SleepObfLib = NULL` did not trigger (Len=1), so SleepObfLib
+pointed to a non-NULL empty C string. `if (SleepObfLib && SleepObfFunc)` evaluated true and
+called `LdrModuleLoad("\x00")` twice at startup (once per pair). Fixed by changing all four
+guards to `if (Len <= 1 || !Field[0]) Field = NULL` so a null-terminated empty string is treated
+as "not configured".
 
 ---
 

@@ -10,7 +10,7 @@ using namespace std;
 using namespace HavocNamespace;
 using namespace HavocNamespace::HavocSpace;
 
-string HavocNamespace::Version  = "1.8";
+string HavocNamespace::Version  = "1.9";
 string HavocNamespace::CodeName = "Eclipse Anchor";
 
 // Global Variables in the Havoc Namespace
