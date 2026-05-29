@@ -164,6 +164,10 @@ When working on sleep obfuscation (`ObfFoliage.c`, `ObfTimer.c`, `Obf.c`) or any
 
 **`malformed_header` is acceptable:** Pe-sieve's `malformed_header` detection when PE header stomping (Sub-2) is active is expected and by design. Do not attempt to suppress it by re-writing valid headers — the goal is absence of the PE signature, not absence of this detection.
 
+**`CfgAddressAdd` requires a valid PE image base — never pass NULL (ISS-008).** `CfgAddressAdd(ImageBase, Function)` reads `((PIMAGE_DOS_HEADER)ImageBase)->e_lfanew` to locate the PE header and compute `SizeOfImage`. Passing `NULL` as `ImageBase` causes a NULL pointer dereference that immediately crashes the host process. This crash fires during `DemonInit` (before any sleep cycle) in any CFG-enforced target process (i.e., all modern Windows processes used for shellcode/DLL injection). The sleep cipher trampoline is a heap allocation with no owning PE module — do NOT register it with `CfgAddressAdd`. The cipher is called via `NtContinue` (Foliage: kernel sets RIP directly, bypasses CFG) and via a byte-scanned `jmp rax` gadget in ntdll (Timer: not a compiler-instrumented call site). Neither path triggers a CFG bitmap check, so no registration is needed or correct.
+
+**`ExecDelaySleep()` pattern for injection dissociation (HVC-046).** Two DWORD config fields — `ExecDelay` (seconds) and `ExecDelayJitter` (%) — gate a jittered `NtDelayExecution` call inserted between injection stages. `ExecDelaySleep()` is implemented in `Win32.c` and called after `MmVirtualAlloc` and after `MmVirtualProtect` (before thread creation) in every injection function (`Inject()`, `DllInjectReflective()`, `BeaconInjectProcess()`, `BeaconInjectTemporaryProcess()`, `ThreadCreateWoW64()`). When `ExecDelay == 0` (default) the function is a single-instruction no-op — zero runtime cost. `NtDelayExecution` is used (not `Sleep`/`WaitForSingleObjectEx`) because it accepts a relative negative `LARGE_INTEGER` (1s = -10,000,000 in 100-ns units) and is not EDR-hooked. A `PRINTF` debug line fires in `--debug-dev` builds showing the computed delay in seconds before sleeping. Config blob positions: `ExecDelay` = field 25, `ExecDelayJitter` = field 26 (both appended after `InjectSpoofOffset`). `H_FUNC_NTDELAYEXECUTION = 0xf5a936aa` (DJB2 verified). UI keys: `"Exec Delay"` and `"Exec Delay Jitter"` (exact strings read by `builder.go` `b.config.Config` map). Architecture doc: `improvement-docs/HVC-046-exec-delay.md`.
+
 ### PE Stomping (ISS-037)
 
 **`PeStomp` is opt-in and defaults to `false`.** PE header stomping (`PeProtect_Stomp()` /
@@ -544,6 +548,27 @@ log prefixes, and any other string that appears in terminal output, across all c
 - Any file added or modified in the current session
 
 If a file needs to be replaced or superseded, create the new version alongside the old one and note it in the PR description. Always ask the user before deleting anything.
+
+## Versioning Rule (HVC-045)
+
+Both teamserver and client use **3-part semver** (major.minor.patch):
+
+- **Patch bump** (major.minor.patch+1): moderate changes, new features within a subsystem, no wire-protocol break. Update `CHANGES.md` only.
+- **Minor bump** (major.minor+1.0): large codebase changes, new subsystems, breaking wire changes. Update `CHANGES.md` **and** `README.md`.
+- Codename stays the same for a minor series (e.g. Eclipse Anchor for all 0.9.x / 1.9.x builds).
+- Both teamserver and client version strings must be updated together for every change that adds new config blob fields (wire-format break = minor bump for both).
+- Teamserver version is in `teamserver/cmd/cmd.go` (`VersionNumber`). Client version is in `client/src/global.cc` (`HavocNamespace::Version`).
+
+## QA Rule (HVC-045)
+
+After writing any new `.c`/`.cc`/`.go` source files:
+
+1. Dispatch **QA Agent 1** (code quality): check NULL deref, missing return, handle leaks, stack overflow risk, USTRING aliasing, ROP chain register layout, shellcode-safe constraints.
+2. Dispatch **QA Agent 2** (code correctness / tester): verify algorithm correctness against known test vectors, check compile-flag combinations, verify config blob field order matches between Go and C, verify UI key/label match against builder switch-case strings.
+3. Fix all issues found before proceeding to integration.
+4. Document fixes in `CHANGES.md`.
+
+Both QA agents may be dispatched in parallel. Do not proceed to the next phase until both approve.
 
 ## Contributing
 

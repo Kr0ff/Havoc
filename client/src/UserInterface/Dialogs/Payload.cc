@@ -493,9 +493,12 @@ auto Payload::DefaultConfig() -> void
     auto ConfigRandGadget        = new QTreeWidgetItem( TreeConfig ); /* HVC-030 Sub-3 — random gadget per sleep cycle */
     auto ConfigUnhookNtdll       = new QTreeWidgetItem( TreeConfig ); /* HVC-031 Sub-4 — strip EDR inline hooks at init */
     auto ConfigHideModules       = new QTreeWidgetItem( TreeConfig ); /* HVC-031 Sub-2 — unlink loaded modules from PEB LDR lists */
-    auto ConfigPeStomp           = new QTreeWidgetItem( TreeConfig ); /* ISS-037 — opt-in PE header stomping during default sleep */
+    auto ConfigPeStomp           = new QTreeWidgetItem( TreeConfig ); /* ISS-037 - opt-in PE header stomping during default sleep */
+    auto ConfigSleepCipher       = new QTreeWidgetItem( TreeConfig ); /* HVC-045 - sleep obf cipher: RC4 or ChaCha20 */
     auto ConfigCoffeeVeh         = new QTreeWidgetItem( TreeConfig ); /* VEH for BOF loading opt-in */
     auto ConfigCoffeeThreaded    = new QTreeWidgetItem( TreeConfig ); /* threaded BOF execution opt-in */
+    auto ConfigExecDelay         = new QTreeWidgetItem( TreeConfig ); /* HVC-046: base delay seconds between injection stages */
+    auto ConfigExecDelayJitter   = new QTreeWidgetItem( TreeConfig ); /* HVC-046: jitter % applied to ExecDelay */
     auto ConfigAutoProxy         = new QTreeWidgetItem( TreeConfig ); // [HVC-026]
     auto ConfigSleepObfTechnique = new QTreeWidgetItem( TreeConfig );
     auto ConfigSleepJmpBypass    = new QTreeWidgetItem( TreeConfig );
@@ -530,12 +533,16 @@ auto Payload::DefaultConfig() -> void
     auto DefaultUnhookNtdll      = DemonConfig[ "UnhookNtdll" ].toBool();
     auto ConfigHideModulesCheck  = new QCheckBox;   /* HVC-031 Sub-2 — unlink loaded modules from PEB LDR lists */
     auto DefaultHideModules      = DemonConfig[ "HideModules" ].toBool();
-    auto ConfigPeStompCheck      = new QCheckBox;   /* ISS-037 — opt-in PE header stomping during default sleep */
+    auto ConfigPeStompCheck      = new QCheckBox;   /* ISS-037 - opt-in PE header stomping during default sleep */
     auto DefaultPeStomp          = DemonConfig[ "PeStomp" ].toBool();
+    auto SleepCipherCombo        = new QComboBox;   /* HVC-045 - sleep obf cipher selection */
+    auto DefaultSleepCipher      = DemonConfig[ "SleepCipher" ].toString();
     auto ConfigCoffeeVehCheck      = new QCheckBox;   /* CoffeeVeh - VEH for BOF loading */
     auto DefaultCoffeeVeh          = DemonConfig[ "CoffeeVeh" ].toBool();
     auto ConfigCoffeeThreadedCheck = new QCheckBox;   /* CoffeeThreaded - threaded BOF execution */
     auto DefaultCoffeeThreaded     = DemonConfig[ "CoffeeThreaded" ].toBool();
+    auto ConfigExecDelayLineEdit      = new QLineEdit( "0" );   /* HVC-046: base delay seconds between injection stages */
+    auto ConfigExecDelayJitterLineEdit = new QLineEdit( "0" ); /* HVC-046: jitter % applied to ExecDelay */
     auto ConfigSpawn64LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
     auto ConfigSpawn32LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn32" ].toString() );
     auto DefaultIndSyscallCheck  = DemonConfig[ "IndirectSyscall" ].toBool();
@@ -565,8 +572,11 @@ auto Payload::DefaultConfig() -> void
     ConfigUnhookNtdll->setFlags( Qt::NoItemFlags );    /* HVC-031 Sub-4 */
     ConfigHideModules->setFlags( Qt::NoItemFlags );    /* HVC-031 Sub-2 */
     ConfigPeStomp->setFlags( Qt::NoItemFlags );        /* ISS-037 */
+    ConfigSleepCipher->setFlags( Qt::NoItemFlags );    /* HVC-045 */
     ConfigCoffeeVeh->setFlags( Qt::NoItemFlags );       /* CoffeeVeh */
     ConfigCoffeeThreaded->setFlags( Qt::NoItemFlags );  /* CoffeeThreaded */
+    ConfigExecDelay->setFlags( Qt::NoItemFlags );        /* HVC-046 */
+    ConfigExecDelayJitter->setFlags( Qt::NoItemFlags );  /* HVC-046 */
     ConfigSleepStackSpoof->setFlags( Qt::NoItemFlags );
     ConfigInjectionSpawn64->setFlags( Qt::NoItemFlags );
     ConfigInjectionSpawn32->setFlags( Qt::NoItemFlags );
@@ -589,8 +599,11 @@ auto Payload::DefaultConfig() -> void
     ConfigUnhookNtdllCheck->setObjectName( "ConfigItem" );  /* HVC-031 Sub-4 */
     ConfigHideModulesCheck->setObjectName( "ConfigItem" );  /* HVC-031 Sub-2 */
     ConfigPeStompCheck->setObjectName( "ConfigItem" );      /* ISS-037 */
+    SleepCipherCombo->setObjectName( "ConfigItem" );         /* HVC-045 */
     ConfigCoffeeVehCheck->setObjectName( "ConfigItem" );      /* CoffeeVeh */
     ConfigCoffeeThreadedCheck->setObjectName( "ConfigItem" ); /* CoffeeThreaded */
+    ConfigExecDelayLineEdit->setObjectName( "ConfigItem" );       /* HVC-046 */
+    ConfigExecDelayJitterLineEdit->setObjectName( "ConfigItem" ); /* HVC-046 */
 
     ConfigIndSyscallCheck->setChecked( DefaultIndSyscallCheck );
     ConfigStackSpoof->setChecked( DefaultStackDuplication );
@@ -598,7 +611,9 @@ auto Payload::DefaultConfig() -> void
     ConfigRandGadgetCheck->setChecked( DefaultRandGadget ); /* HVC-030 Sub-3 — default from profile */
     ConfigUnhookNtdllCheck->setChecked( DefaultUnhookNtdll ); /* HVC-031 Sub-4 — default from profile */
     ConfigHideModulesCheck->setChecked( DefaultHideModules ); /* HVC-031 Sub-2 — default from profile */
-    ConfigPeStompCheck->setChecked( DefaultPeStomp );         /* ISS-037 — default from profile */
+    ConfigPeStompCheck->setChecked( DefaultPeStomp );         /* ISS-037 - default from profile */
+    SleepCipherCombo->addItems( QStringList() << "RC4" << "ChaCha20" ); /* HVC-045 */
+    SleepCipherCombo->setCurrentIndex( ( DefaultSleepCipher == "ChaCha20" ) ? 1 : 0 );
     ConfigCoffeeVehCheck->setChecked( DefaultCoffeeVeh );           /* default from profile */
     ConfigCoffeeThreadedCheck->setChecked( DefaultCoffeeThreaded ); /* default from profile */
 
@@ -663,8 +678,11 @@ auto Payload::DefaultConfig() -> void
     TreeConfig->setItemWidget( ConfigUnhookNtdll,      1, ConfigUnhookNtdllCheck ); /* HVC-031 Sub-4 */
     TreeConfig->setItemWidget( ConfigHideModules,      1, ConfigHideModulesCheck ); /* HVC-031 Sub-2 */
     TreeConfig->setItemWidget( ConfigPeStomp,          1, ConfigPeStompCheck );    /* ISS-037 */
+    TreeConfig->setItemWidget( ConfigSleepCipher,     1, SleepCipherCombo );       /* HVC-045 */
     TreeConfig->setItemWidget( ConfigCoffeeVeh,      1, ConfigCoffeeVehCheck );      /* CoffeeVeh */
     TreeConfig->setItemWidget( ConfigCoffeeThreaded, 1, ConfigCoffeeThreadedCheck ); /* CoffeeThreaded */
+    TreeConfig->setItemWidget( ConfigExecDelay,      1, ConfigExecDelayLineEdit );       /* HVC-046 */
+    TreeConfig->setItemWidget( ConfigExecDelayJitter, 1, ConfigExecDelayJitterLineEdit ); /* HVC-046 */
     TreeConfig->setItemWidget( ConfigAutoProxy,        1, ConfigAutoProxyCheck ); // [HVC-026]
     TreeConfig->setItemWidget( ConfigSleepStackSpoof,  1, ConfigStackSpoof );
     TreeConfig->setItemWidget( ConfigProxyLoading,     1, ProxyLoading );
@@ -717,9 +735,12 @@ auto Payload::DefaultConfig() -> void
     ConfigRandGadget->setText( 0, "Random Gadget" );         /* HVC-030 Sub-3 — key read by builder.go as "Random Gadget" */
     ConfigUnhookNtdll->setText( 0, "Unhook Ntdll" );         /* HVC-031 Sub-4 — key read by builder.go as "Unhook Ntdll" */
     ConfigHideModules->setText( 0, "Hide Modules" );          /* HVC-031 Sub-2 — key read by builder.go as "Hide Modules" */
-    ConfigPeStomp->setText( 0, "PE Stomping" );               /* ISS-037 — key read by builder.go as "PE Stomping" */
+    ConfigPeStomp->setText( 0, "PE Stomping" );               /* ISS-037 - key read by builder.go as "PE Stomping" */
+    ConfigSleepCipher->setText( 0, "Sleep Cipher" );         /* HVC-045 - key read by builder.go as "Sleep Cipher" */
     ConfigCoffeeVeh->setText( 0, "Coffee VEH" );      /* key read by builder.go as "Coffee VEH" */
     ConfigCoffeeThreaded->setText( 0, "Coffee Threaded" ); /* key read by builder.go as "Coffee Threaded" */
+    ConfigExecDelay->setText( 0, "Exec Delay" );           /* HVC-046: key read by builder.go as "Exec Delay" (seconds) */
+    ConfigExecDelayJitter->setText( 0, "Exec Delay Jitter" ); /* HVC-046: key read by builder.go as "Exec Delay Jitter" (%) */
     ConfigAutoProxy->setText( 0, "Auto Proxy Detection" ); // [HVC-026]
     ConfigSleepStackSpoof->setText( 0, "Stack Duplication" );
     ConfigProxyLoading->setText( 0, "Proxy Loading" );

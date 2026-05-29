@@ -406,6 +406,13 @@ def _validate_amsi_etw(v):
         return f"unknown AmsiEtwPatching {v!r}; must be 'HWBP' or 'MEMORY'"
 
 
+def _validate_sleep_cipher(v):
+    # Accepted values must match the switch cases in teamserver/pkg/common/builder/builder.go
+    valid = ("RC4", "ChaCha20")
+    if v not in valid:
+        return f"unknown SleepCipher {v!r}; known values: {', '.join(valid)}"
+
+
 # Schema: maps block path → list of FieldSpec
 SCHEMA = {
     "Teamserver": [
@@ -480,9 +487,12 @@ SCHEMA = {
         FieldSpec("UnhookNtdll", "bool", required=False),          # HVC-031 Sub-4: overwrite ntdll .text with clean KnownDlls copy
         FieldSpec("HideModules", "bool", required=False),           # HVC-031 Sub-2: unlink loaded modules from PEB LDR lists
         FieldSpec("PeStomp", "bool", required=False),               # ISS-037: stomp PE header during default sleep; off by default
+        FieldSpec("SleepCipher", "string", required=False, validator=_validate_sleep_cipher),  # HVC-045: "RC4" or "ChaCha20"
         FieldSpec("Verbose", "bool", required=False),               # enable verbose debug logging
         FieldSpec("CoffeeVeh", "bool", required=False),             # enable VEH for BOF loading
         FieldSpec("CoffeeThreaded", "bool", required=False),        # enable threaded BOF execution
+        FieldSpec("ExecDelay", "int", required=False),               # HVC-046: base delay ms between injection stages; 0 = disabled
+        FieldSpec("ExecDelayJitter", "int", required=False),         # HVC-046: jitter % applied to ExecDelay (0-100)
         FieldSpec("ProxyLoading", "string", required=False, validator=_validate_proxy_loading),
         FieldSpec("AmsiEtwPatching", "string", required=False, validator=_validate_amsi_etw),
         FieldSpec("DotNetNamePipe", "string", required=False),

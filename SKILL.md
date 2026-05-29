@@ -91,6 +91,22 @@ VOID MyFeature_Do( VOID ) {
 Never put the gate in `Obf.c`, `Demon.c`, or any other caller. The core agent code path
 must remain unchanged when the feature flag is false.
 
+**Step 5a — Wire ExecDelaySleep() at injection points (HVC-046)**
+Any new injection function (`MmVirtualAlloc` -> write -> `MmVirtualProtect` -> thread create)
+must call `ExecDelaySleep()` at two points: once after the alloc succeeds and once after the
+protect-change/before thread creation. The function is a no-op when `ExecDelay == 0`
+(the default) — no performance penalty. Pattern:
+```c
+if ( ! ( Memory = MmVirtualAlloc( DX_MEM_DEFAULT, Process, Size, PAGE_READWRITE ) ) )
+    goto END;
+ExecDelaySleep();   /* HVC-046: dissociate alloc->protect in time */
+/* ... write ... */
+if ( ! ( MmVirtualProtect( DX_MEM_SYSCALL, Process, Memory, Size, PAGE_EXECUTE_READ ) ) )
+    goto END;
+ExecDelaySleep();   /* HVC-046: dissociate protect->execute in time */
+/* ... thread create ... */
+```
+
 **Step 6 — Re-read every modified file**
 After each edit, re-read the full modified file. Verify:
 - The edit is at the correct line and not duplicated
@@ -257,6 +273,7 @@ Common root causes in this codebase:
 - **DJB2 hash wrong:** `LdrFunctionAddr` returns NULL, function pointer = 0, callers become no-ops
 - **OldProtect not restored:** Hardcoded `PAGE_EXECUTE_READ` used in final NtProtect → wrong protection
 - **Aliasing guard missing:** `BaseAddr`/`RegionSize` modified in-place by first NtProtect; second call uses stale page-aligned values
+- **CfgAddressAdd(NULL, ...):** called for a heap trampoline or non-PE address → NULL dereference of `ImageBase->e_lfanew` → immediate crash in any CFG-enforced target process during `DemonInit`. Only call `CfgAddressAdd` with a valid PE module base (ISS-008, Lesson 16).
 
 **Step 3 — Write the minimal fix**
 Apply the fix to the narrowest possible scope. Do not refactor surrounding code.
@@ -1102,3 +1119,55 @@ on macOS/MSVC but produces "makes pointer from integer" on MinGW at every call s
 6. **Assembly argument length assigned to wrong variable** (`&Buffer.Length` instead of
    `&AssemblyArgs.Length`): `AssemblyArgs.Length` stays 0, so the .NET assembly always sees
    empty arguments regardless of what the operator sent.
+
+---
+
+### Lesson 22: `CfgAddressAdd(NULL, ...)` Crashes Any CFG-Enforced Process (ISS-008)
+
+**What happened (HVC-045):** `SystemFunction032` (advapi32.dll) was replaced by compiled-in
+RC4/ChaCha20 ciphers living in a heap trampoline. The `CfgAddressAdd` call for the old cipher
+(`CfgAddressAdd(Advapi32, SystemFunction032)`) was replaced with
+`CfgAddressAdd(NULL, SleepCipherFunc)`. `CfgAddressAdd` reads `((PIMAGE_DOS_HEADER)ImageBase)->e_lfanew`
+to locate the PE headers — passing `NULL` as `ImageBase` is a NULL pointer dereference.
+This crash occurs during `DemonInit` (before any sleep cycle or task) in any CFG-enforced target
+process (virtually all modern Windows processes). EXE mode worked because MinGW-built Demon
+executables do not have CFG enabled, so `CfgQueryEnforced()` returned FALSE and the block was
+skipped. DLL and shellcode modes crashed immediately on injection.
+
+**Root cause insight:** The cipher is invoked via `NtContinue` (Foliage — kernel sets RIP
+directly, bypasses all userland CFG checks) and via a byte-scanned `jmp rax` gadget in ntdll
+(Timer — not a compiler-instrumented indirect call site). CFG only intercepts call sites that
+were instrumented at compile time with `/guard:cf`. Neither path qualifies. The registration
+was both incorrect (NULL `ImageBase`) and unnecessary (no CFG-guarded call site touches it).
+
+**Rule:** Never call `CfgAddressAdd` for heap-allocated stubs, trampolines, or any memory that
+is not backed by a loaded PE image. Pass only valid PE module handles (e.g.,
+`Instance->Modules.Ntdll`, `Instance->Modules.Kernel32`) as the first argument. Before adding
+a `CfgAddressAdd` call, verify: (a) the function is called through a CFG-instrumented site, and
+(b) the module base is a real PE image with a valid `e_lfanew`.
+
+---
+
+### Lesson 23: Injection Dissociation via ExecDelaySleep (HVC-046)
+
+**Problem:** EDRs and memory forensics tools correlate the tight temporal sequence
+`VirtualAllocEx -> VirtualProtectEx -> CreateRemoteThread` occurring within milliseconds as a
+high-confidence injection signature. The gap between allocation and execution in the base Demon
+injection path was zero.
+
+**Solution:** `ExecDelaySleep()` in `src/core/Win32.c` calls `NtDelayExecution` with a jittered
+relative delay (`Li.QuadPart = -(Ms * 10000LL)` — negative = relative 100-ns units). It is gated
+by `Instance->Config.Implant.ExecDelay == 0` as a pure no-op when disabled (default).
+
+**Why NtDelayExecution (not Sleep or WaitForSingleObjectEx)?**
+- No handle needed; accepts negative `LARGE_INTEGER` for relative time
+- Not EDR-hooked; not instrumented with CFG; not in the Win32 API surface at all
+- 1ms = `Li.QuadPart = -10000LL`; 1s = `-10000000LL`
+
+**Wiring rule:** Insert `ExecDelaySleep()` at exactly two points in each injection function:
+1. After `MmVirtualAlloc` (dissociates alloc->protect gap)
+2. After `MmVirtualProtect` / before `NtCreateThreadEx` (dissociates protect->execute gap)
+
+**Config blob positions:** `ExecDelay` = field 25, `ExecDelayJitter` = field 26 — both after
+`InjectSpoofOffset` in both `builder.go AddInt` sequence and `Demon.c ParserGetInt32` sequence.
+`H_FUNC_NTDELAYEXECUTION = 0xf5a936aa` (DJB2 verified 2026-05-28).

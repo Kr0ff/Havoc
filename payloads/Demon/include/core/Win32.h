@@ -246,6 +246,9 @@ VOID SharedSleep(
     ULONG64 Delay
 );
 
+/* HVC-046: jittered NtDelayExecution pause between injection stages */
+VOID ExecDelaySleep( VOID );
+
 VOID ShuffleArray(
     _Inout_ PVOID* array,
     IN     SIZE_T n

@@ -1461,6 +1461,34 @@ VOID SharedSleep(
     }
 }
 
+/* Jittered NtDelayExecution pause between injection stages (HVC-046).
+ * No-ops when ExecDelay == 0. ExecDelay is in seconds. Same jitter model as SharedSleep. */
+VOID ExecDelaySleep( VOID )
+{
+    LARGE_INTEGER Li    = { 0 };
+    ULONG         Base  = Instance->Config.Implant.ExecDelay;
+    ULONG         Ji    = Instance->Config.Implant.ExecDelayJitter;
+    ULONG         Range = 0;
+    ULONG         Sec   = 0;
+
+    if ( !Base ) return;
+
+    Sec = Base;
+    if ( Ji > 0 ) {
+        if ( Ji > 100 ) Ji = 100; /* clamp: Ji > 200 would make Range/2 > Base, underflowing ULONG */
+        Range = ( Base * Ji ) / 100;
+        if ( Range > 0 )
+            Sec = ( Base - Range / 2 ) + ( RandomNumber32() % Range );
+        if ( Sec < 1 ) Sec = 1;
+    }
+
+    PRINTF( "ExecDelaySleep: sleeping %lu second(s) between injection stages\n", Sec );
+
+    /* NtDelayExecution: negative LARGE_INTEGER = relative time in 100-ns units; 1s = 10,000,000 units */
+    Li.QuadPart = -( (LONGLONG)Sec * 10000000LL );
+    Instance->Win32.NtDelayExecution( FALSE, &Li );
+}
+
 VOID ShuffleArray(
     _Inout_ PVOID* array,
     IN     SIZE_T n

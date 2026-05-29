@@ -68,6 +68,8 @@ set( CRYPT_SOURCE
         src/crypt/HmacSha256.c
         src/crypt/RsaCrypt.c
         src/crypt/WireEncoder.c
+        src/crypt/Rc4Crypt.c
+        src/crypt/ChaCha20Crypt.c
 )
 
 set( MAIN_SOURCE

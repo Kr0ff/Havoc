@@ -65,7 +65,9 @@ void HavocSpace::Havoc::Init( int argc, char** argv )
     const auto  family = toml::find<std::string>( font, "family" );
     const auto  size   = toml::find<int>( font, "size" );
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QTextCodec::setCodecForLocale( QTextCodec::codecForName( "UTF-8" ) );
+#endif
     QApplication::setFont( QFont( family.c_str(), size ) );
         QTimer::singleShot( 10, [&]() {
         QApplication::setFont( QFont( family.c_str(), size ) );

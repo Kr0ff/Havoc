@@ -175,9 +175,12 @@ type Demon struct {
 	UnhookNtdll        bool                   `yaotl:"UnhookNtdll,optional"`
 	HideModules        bool                   `yaotl:"HideModules,optional"`
 	PeStomp            bool                   `yaotl:"PeStomp,optional"`
+	SleepCipher        string                 `yaotl:"SleepCipher,optional"` /* "RC4" (default) or "ChaCha20" */
 	Verbose            bool                   `yaotl:"Verbose,optional"`
 	CoffeeVeh          bool                   `yaotl:"CoffeeVeh,optional"`
 	CoffeeThreaded     bool                   `yaotl:"CoffeeThreaded,optional"`
+	ExecDelay          int                    `yaotl:"ExecDelay,optional"`    /* HVC-046: base delay seconds between injection stages; 0 = disabled */
+	ExecDelayJitter    int                    `yaotl:"ExecDelayJitter,optional"` /* HVC-046: jitter % applied to ExecDelay; 0 = no jitter */
 	SleepObfStartAddr  *AddrResolveBlock      `yaotl:"SleepObfStartAddr,block"`
 	InjectSpoofAddr    *AddrResolveBlock      `yaotl:"InjectSpoofAddr,block"`
 	ProxyLoading       string                 `yaotl:"ProxyLoading,optional"`

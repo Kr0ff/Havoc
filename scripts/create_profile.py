@@ -46,7 +46,7 @@ Field reference (from teamserver/pkg/profile/config.go):
   Listeners.Dns:   Name, Hosts, HostBind, Port, ZoneDomain, QueryTimeout, ChunkDelayMs
   Demon:           Sleep, Jitter, IndirectSyscall, StackDuplication,
                    SleepTechnique, ProxyLoading, AmsiEtwPatching,
-                   TrustXForwardedFor, DotNetNamePipe, RandGadget, UnhookNtdll, HideModules, PeStomp,
+                   TrustXForwardedFor, DotNetNamePipe, RandGadget, UnhookNtdll, HideModules, PeStomp, SleepCipher,
                    Verbose, CoffeeVeh, CoffeeThreaded,
                    SleepObfStartAddr.{Library,Function,Offset},
                    InjectSpoofAddr.{Library,Function,Offset},
@@ -354,6 +354,8 @@ def build_profile(args: argparse.Namespace) -> str:
         e.attr("HideModules", True)
     if args.demon_pe_stomp:
         e.attr("PeStomp", True)
+    if args.demon_sleep_cipher:
+        e.attr("SleepCipher", args.demon_sleep_cipher)
     if args.demon_verbose:
         e.attr("Verbose", True)
     if args.demon_coffee_veh:
@@ -621,6 +623,12 @@ def make_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Stomp PE header region during default sleep (PeStomp = true; leave off for injected payloads)",
+    )
+    g.add_argument(
+        "--demon-sleep-cipher",
+        choices=["RC4", "ChaCha20"],
+        default=None,
+        help="Sleep obfuscation cipher: RC4 (default) or ChaCha20 (HVC-045)",
     )
     g.add_argument(
         "--demon-verbose",

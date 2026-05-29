@@ -26,7 +26,9 @@
 #include <QLineEdit>
 #include <QTextEdit>
 #include <QTableWidget>
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QTextCodec>
+#endif
 #include <QTimer>
 
 #include <string>

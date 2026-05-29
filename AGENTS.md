@@ -473,6 +473,16 @@ Work through every applicable item. Mark each `PASS / FAIL / WARN / N/A`.
 - [ ] APC ROP sleeping thread has 4-frame callstack:
   `[RSP+0]=NtTestAlert`, `[RSP+8]=BaseThreadInitThunk`, `[RSP+16]=RtlUserThreadStart`, `[RSP+24]=NULL`
 - [ ] Foliage: `PAGE_NOACCESS` ROP step after encryption, `PAGE_READWRITE` step after wake
+- [ ] `CfgAddressAdd(NULL, ...)` is NOT called for heap-allocated trampolines or any non-PE-backed memory.
+  `CfgAddressAdd` dereferences `ImageBase` as `PIMAGE_DOS_HEADER` — `NULL->e_lfanew` crashes any
+  CFG-enforced process during `DemonInit`. Cipher trampolines are called via `NtContinue`/jmp-gadget
+  paths that do not go through CFG bitmap checks; no registration is needed (ISS-008).
+- [ ] **ExecDelaySleep() wiring (HVC-046):** Any new injection function that calls `MmVirtualAlloc` or
+  `MmVirtualProtect` followed by thread creation must also call `ExecDelaySleep()` in the same two-point
+  pattern: once after allocation and once after protect-change/before execute. Verify that
+  `ExecDelay == 0` (default) produces a pure no-op — no observable delay in injection timing.
+  Config blob fields 25 (`ExecDelay`) and 26 (`ExecDelayJitter`) must appear AFTER `InjectSpoofOffset`
+  in both `builder.go AddInt` sequence and `Demon.c ParserGetInt32` sequence.
 
 **Module Hiding and PEB LDR Walk Safety**
 - [ ] `HideModule()` advances PEB walk cursor (`Entry = Entry->Flink`) BEFORE the unlink

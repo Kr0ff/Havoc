@@ -58,6 +58,10 @@ Demon {
     # Stomp PE header region during default sleep -- opt-in; leave false for injected payloads (ISS-037)
     PeStomp = false
 
+    # Sleep obfuscation cipher: "RC4" (default, 16-byte key) or "ChaCha20" (32-byte key + 12-byte nonce)
+    # This setting is authoritative -- the operator UI allows override per payload build.
+    SleepCipher = "RC4"
+
     # Enable verbose debug logging in the Demon agent at startup
     Verbose = false
 
@@ -66,6 +70,12 @@ Demon {
 
     # Enable threaded execution for BOF/object files (CoffeeLoader)
     CoffeeThreaded = false
+
+    # HVC-046: Base delay (seconds) between injection stages (alloc -> protect -> execute); 0 = disabled
+    ExecDelay = 0
+
+    # HVC-046: Jitter percentage applied to ExecDelay (0-100); 0 = no jitter
+    ExecDelayJitter = 0
 
     # Optional: custom thread start address for sleep obfuscation
     # When omitted the agent uses RtlUserThreadStart (the safe default)

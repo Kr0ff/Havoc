@@ -17,6 +17,67 @@ Description and rationale.
 
 ---
 
+## Version 0.9.6 / 1.9.2 — 2026-05-28 — Eclipse Anchor
+Teamserver: 0.9.5 -> 0.9.6 | Client: 1.9.1 -> 1.9.2
+
+### HVC-046 — Injection Execution Delay
+
+- Added configurable jittered delay between injection stages (alloc -> protect -> execute)
+- `ExecDelaySleep()` helper in `Win32.c` uses `NtDelayExecution` (no EDR hooks) with jitter math identical to `SharedSleep()`
+- Wired into `Inject()`, `DllInjectReflective()` (`Inject.c`), `BeaconInjectProcess()`, `BeaconInjectTemporaryProcess()` (`ObjectApi.c`), and `ThreadCreateWoW64()` (`Thread.c`)
+- `NtDelayExecution` added to Win32 table: `H_FUNC_NTDELAYEXECUTION = 0xf5a936aa` (DJB2, verified); resolved from ntdll in `DemonInit()`
+- Two new config blob fields: `ExecDelay` (DWORD ms, default 0) and `ExecDelayJitter` (DWORD %, default 0) appended as fields 25-26
+- Config pipeline: YAOTL -> `config.go` -> `builder.go` -> blob -> `Demon.c` `ParserGetInt32` sequence
+- Operator controls via YAOTL profile (`ExecDelay`, `ExecDelayJitter`) and payload builder UI ("Exec Delay" ms, "Exec Delay Jitter" %)
+- Default 0 = completely disabled (single `if (!Base) return;` — zero overhead)
+- Architecture doc: `improvement-docs/HVC-046-exec-delay.md`
+- QA fix: `ExecDelaySleep()` now clamps `Ji` to 100 before Range computation to prevent ULONG underflow when `Ji > 201` (QA Agent 1)
+- QA fix: Added missing `ExecDelaySleep()` call after `MmVirtualAlloc` in `DllInjectReflective()` — the post-alloc dissociation point was absent (QA Agent 1)
+- Unit change: `ExecDelay` is now in **seconds** (was milliseconds). `LARGE_INTEGER` conversion updated to `Sec * 10,000,000` (100-ns units). All comments, profile, and builder log message updated to reflect "s" not "ms".
+- Debug output: `PRINTF("ExecDelaySleep: sleeping %lu second(s)...")` fires in `--debug-dev` and `--debug-strings-only` builds so operators can observe the computed delay during testing; no-op in production builds.
+
+Files: `payloads/Demon/include/common/Defines.h`, `payloads/Demon/include/Demon.h`,
+       `payloads/Demon/src/Demon.c`, `payloads/Demon/include/core/Win32.h`,
+       `payloads/Demon/src/core/Win32.c`, `payloads/Demon/src/inject/Inject.c`,
+       `payloads/Demon/src/core/ObjectApi.c`, `payloads/Demon/src/core/Thread.c`,
+       `teamserver/pkg/profile/config.go`, `teamserver/pkg/common/builder/builder.go`,
+       `profiles/havoc.yaotl`, `scripts/check_profile.py`,
+       `client/src/UserInterface/Dialogs/Payload.cc`,
+       `teamserver/cmd/cmd.go`, `client/src/global.cc`
+
+---
+
+## Version 0.9.5 / 1.9.1 — 2026-05-28 — Eclipse Anchor
+Teamserver: 0.9.4 -> 0.9.5 | Client: 1.9 -> 1.9.1
+
+### HVC-045 — Manual RC4 + ChaCha20 Sleep Cipher
+
+- Removed `advapi32!SystemFunction032` dependency from sleep obfuscation (Ekko, Zilean, Foliage)
+- Implemented pure-C RC4 (`src/crypt/Rc4Crypt.c`) — 256-byte S-box on stack, no CRT, shellcode-safe
+- Implemented pure-C ChaCha20 RFC 8439 (`src/crypt/ChaCha20Crypt.c`) — 20 rounds, no SIMD, no lookup tables
+- Both ciphers work in EXE, DLL, shellcode, and KaynLoader build modes
+- Operator selects cipher via YAOTL `SleepCipher = "RC4" | "ChaCha20"` and payload builder UI; profile setting is the default, UI allows per-build override
+- Key material: RC4 uses 16-byte random key per sleep cycle; ChaCha20 uses 32-byte key + 12-byte nonce (44 bytes total)
+- `SleepCipherFunc` (PVOID) added to `WIN32_FUNC_LIST`; selected once in `DemonInit()` and reused by all ROP chains
+- SLEEP_CIPHER_RC4=0 and SLEEP_CIPHER_CHACHA20=1 constants added to `Defines.h`
+- `SleepCipher` (DWORD) added to `Config.Implant`; parsed from config blob after `PeStomp` (new field 16, zero-indexed)
+- ObfTimer.c and ObfFoliage.c key buffers expanded from 16 to 44 bytes; KeyLen is dynamic per cipher
+- Validator added to `scripts/check_profile.py`; `scripts/create_profile.py` gains `--demon-sleep-cipher` flag
+- Client UI: "Sleep Cipher" QComboBox added to payload tree with "RC4" and "ChaCha20" options
+- QA Agent 1 (quality) + QA Agent 2 (test vectors) both approved; fixes applied: NULL guard on ChaCha20Crypt(), byte-by-byte LE deserialization (aliasing UB fix), counter-wrap comment
+
+Files: `payloads/Demon/src/crypt/Rc4Crypt.c` (new), `payloads/Demon/include/crypt/Rc4Crypt.h` (new),
+       `payloads/Demon/src/crypt/ChaCha20Crypt.c` (new), `payloads/Demon/include/crypt/ChaCha20Crypt.h` (new),
+       `payloads/Demon/CMakeLists.txt`, `payloads/Demon/include/common/Defines.h`,
+       `payloads/Demon/include/Demon.h`, `payloads/Demon/src/core/Runtime.c`,
+       `payloads/Demon/src/Demon.c`, `payloads/Demon/src/core/ObfTimer.c`,
+       `payloads/Demon/src/core/ObfFoliage.c`, `teamserver/pkg/profile/config.go`,
+       `teamserver/pkg/common/builder/builder.go`, `client/src/UserInterface/Dialogs/Payload.cc`,
+       `profiles/havoc.yaotl`, `scripts/check_profile.py`, `scripts/create_profile.py`,
+       `teamserver/cmd/cmd.go`, `client/src/global.cc`
+
+---
+
 ## Version 0.9.4 — 2026-05-26 — Eclipse Anchor
 
 ```
