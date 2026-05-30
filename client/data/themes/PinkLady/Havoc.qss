@@ -1,17 +1,3 @@
-/*
- * Havoc Client Theme -- Pink Lady
- * ---------------------------------
- * Palette (from pinklady.Xresource.txt):
- *   Background (main):     #190d16
- *   Panel:                 #261623
- *   Selection:             #472d42
- *   Accent:                #d479c3
- *   Text:                  #dabed4
- *   Tab highlight:         #6687e6
- *   OK accent:             #53a36d
- *   Muted:                 #885b7f
- *   Disabled bg:           #311e2d
- */
 
 QMainWindow {
     background: #190d16;

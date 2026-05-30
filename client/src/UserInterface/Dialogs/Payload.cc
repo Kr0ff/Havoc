@@ -11,6 +11,8 @@
 #include <QFileDialog>
 #include <QJsonArray>
 #include <QHeaderView>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <vector>
 
 using namespace std;
@@ -22,80 +24,51 @@ void Payload::setupUi( QDialog* Dialog )
     if ( PayloadDialog->objectName().isEmpty() )
         PayloadDialog->setObjectName( QString::fromUtf8( "PayloadDialog" ) );
 
-    PayloadDialog->resize( 550, 660 );
+    PayloadDialog->resize( 950, 660 );
 
-    gridLayout_3  = new QGridLayout( PayloadDialog );
-    OptionsBox    = new QGroupBox( PayloadDialog );
-    gridLayout_2  = new QGridLayout( OptionsBox );
-    ComboListener = new QComboBox( OptionsBox );
+    /* Spacer members kept for ABI compat but not added to any layout */
+    horizontalSpacer   = nullptr;
+    horizontalSpacer_2 = nullptr;
+    horizontalSpacer_3 = nullptr;
+    horizontalSpacer_4 = nullptr;
+    horizontalSpacer_5 = nullptr;
+    horizontalSpacer_6 = nullptr;
+    horizontalSpacer_7 = nullptr;
 
-    horizontalSpacer   = new QSpacerItem( 40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum );
-    horizontalSpacer_2 = new QSpacerItem( 40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum );
-    horizontalSpacer_3 = new QSpacerItem( 40, 5,  QSizePolicy::Expanding, QSizePolicy::Minimum );
-    horizontalSpacer_4 = new QSpacerItem( 40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum );
-    horizontalSpacer_5 = new QSpacerItem( 40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum );
-    horizontalSpacer_6 = new QSpacerItem( 40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum );
-    horizontalSpacer_7 = new QSpacerItem( 40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum );
-
+    /* Outer layout: 2 equal columns — left panel | Config & Value panel */
+    gridLayout_3 = new QGridLayout( PayloadDialog );
     gridLayout_3->setObjectName( QString::fromUtf8( "gridLayout_3" ) );
+    gridLayout_3->setColumnStretch( 0, 1 );
+    gridLayout_3->setColumnStretch( 1, 1 );
+
+    /* ---- Options box (Listener / Arch / Format) ---- */
+    OptionsBox    = new QGroupBox( PayloadDialog );
     OptionsBox->setObjectName( QString::fromUtf8( "OptionsBox" ) );
+    gridLayout_2  = new QGridLayout( OptionsBox );
     gridLayout_2->setObjectName( QString::fromUtf8( "gridLayout_2" ) );
+
+    ComboListener = new QComboBox( OptionsBox );
     ComboListener->setObjectName( QString::fromUtf8( "ComboListener" ) );
-
-    gridLayout_2->addWidget( ComboListener, 0, 1, 1, 1 );
-
     LabelListener = new QLabel( OptionsBox );
     LabelListener->setObjectName( QString::fromUtf8( "LabelListener" ) );
-
-    gridLayout_2->addWidget( LabelListener, 0, 0, 1, 1 );
-
-    ComboFormat = new QComboBox( OptionsBox );
-    ComboFormat->setObjectName( QString::fromUtf8( "ComboFormat" ) );
-
-    gridLayout_2->addWidget( ComboFormat, 2, 1, 1, 1 );
+    gridLayout_2->addWidget( LabelListener,  0, 0, 1, 1 );
+    gridLayout_2->addWidget( ComboListener,  0, 1, 1, 1 );
 
     ComboArch = new QComboBox( OptionsBox );
     ComboArch->setObjectName( QString::fromUtf8( "ComboArch" ) );
-
-    gridLayout_2->addWidget( ComboArch, 1, 1, 1, 1 );
-
     LabelArch = new QLabel( OptionsBox );
     LabelArch->setObjectName( QString::fromUtf8( "LabelArch" ) );
+    gridLayout_2->addWidget( LabelArch,  1, 0, 1, 1 );
+    gridLayout_2->addWidget( ComboArch,  1, 1, 1, 1 );
 
-    gridLayout_2->addWidget( LabelArch, 1, 0, 1, 1 );
-
+    ComboFormat = new QComboBox( OptionsBox );
+    ComboFormat->setObjectName( QString::fromUtf8( "ComboFormat" ) );
     LabelFormat = new QLabel( OptionsBox );
     LabelFormat->setObjectName( QString::fromUtf8( "LabelFormat" ) );
-
     gridLayout_2->addWidget( LabelFormat, 2, 0, 1, 1 );
+    gridLayout_2->addWidget( ComboFormat, 2, 1, 1, 1 );
 
-    gridLayout_2->addItem( horizontalSpacer_3, 3, 1, 1, 1 );
-
-    TreeConfig = new QTreeWidget( OptionsBox );
-    TreeConfig->headerItem()->setText( 0, "Config" );
-    TreeConfig->headerItem()->setText( 1, "Value" );
-    TreeConfig->header()->resizeSection( 0, 155 );
-
-    gridLayout_2->addWidget( TreeConfig, 4, 0, 1, 2 );
-    gridLayout_3->addWidget( OptionsBox, 1, 0, 1, 8 );
-
-    gridLayout_3->addItem( horizontalSpacer_5, 4, 4, 1, 1 );
-    gridLayout_3->addItem( horizontalSpacer_2, 4, 6, 1, 1 );
-
-    ButtonGenerate = new QPushButton( PayloadDialog );
-    ButtonGenerate->setObjectName( QString::fromUtf8( "ButtonGenerate" ) );
-
-    gridLayout_3->addWidget( ButtonGenerate, 4, 3, 1, 1 );
-
-    gridLayout_3->addItem( horizontalSpacer_6, 4, 1, 1, 1 );
-    gridLayout_3->addItem( horizontalSpacer,   4, 0, 1, 1 );
-    gridLayout_3->addItem( horizontalSpacer_4, 4, 2, 1, 1 );
-
-    LabelAgentType = new QLabel( PayloadDialog );
-    LabelAgentType->setObjectName( QString::fromUtf8( "LabelAgentType" ) );
-
-    gridLayout_3->addWidget( LabelAgentType, 0, 0, 1, 1 );
-
+    /* ---- Building Console ---- */
     BuildConsoleBox = new QGroupBox( PayloadDialog );
     BuildConsoleBox->setObjectName( QString::fromUtf8( "BuildConsoleBox" ) );
     gridLayout = new QGridLayout( BuildConsoleBox );
@@ -106,19 +79,58 @@ void Payload::setupUi( QDialog* Dialog )
     ConsoleText = new QTextEdit( BuildConsoleBox );
     ConsoleText->setObjectName( QString::fromUtf8( "ConsoleText" ) );
     ConsoleText->setReadOnly( true );
-
     gridLayout->addWidget( ConsoleText, 0, 0, 1, 1 );
 
-    gridLayout_3->addWidget( BuildConsoleBox, 3, 0, 1, 8 );
-
-    gridLayout_3->addItem( horizontalSpacer_7, 4, 5, 1, 1 );
-
+    /* ---- Agent type row ---- */
+    LabelAgentType = new QLabel( PayloadDialog );
+    LabelAgentType->setObjectName( QString::fromUtf8( "LabelAgentType" ) );
     ComboAgentType = new QComboBox( PayloadDialog );
     ComboAgentType->setObjectName( QString::fromUtf8( "ComboAgentType" ) );
 
-    gridLayout_3->addWidget( ComboAgentType, 0, 1, 1, 7 );
+    auto AgentRow       = new QWidget( PayloadDialog );
+    auto AgentRowLayout = new QHBoxLayout( AgentRow );
+    AgentRowLayout->setContentsMargins( 0, 0, 0, 0 );
+    AgentRowLayout->addWidget( LabelAgentType );
+    AgentRowLayout->addWidget( ComboAgentType );
 
-    retranslateUi(  );
+    /* ---- Generate button (centred) ---- */
+    ButtonGenerate = new QPushButton( PayloadDialog );
+    ButtonGenerate->setObjectName( QString::fromUtf8( "ButtonGenerate" ) );
+
+    auto ButtonRow       = new QWidget( PayloadDialog );
+    auto ButtonRowLayout = new QHBoxLayout( ButtonRow );
+    ButtonRowLayout->setContentsMargins( 0, 0, 0, 0 );
+    ButtonRowLayout->addStretch();
+    ButtonRowLayout->addWidget( ButtonGenerate );
+    ButtonRowLayout->addStretch();
+
+    /* ---- Left panel: stack all left-side widgets vertically ---- */
+    auto LeftWidget  = new QWidget( PayloadDialog );
+    LeftWidget->setObjectName( QString::fromUtf8( "LeftWidget" ) );
+    auto LeftLayout  = new QVBoxLayout( LeftWidget );
+    LeftLayout->setContentsMargins( 0, 0, 0, 0 );
+    LeftLayout->addWidget( AgentRow );
+    LeftLayout->addWidget( OptionsBox );
+    LeftLayout->addWidget( BuildConsoleBox, 1 ); /* stretch to fill remaining height */
+    LeftLayout->addWidget( ButtonRow );
+
+    /* ---- Right panel: Config & Value tree ---- */
+    TreeConfig = new QTreeWidget( PayloadDialog );
+    TreeConfig->headerItem()->setText( 0, "Config" );
+    TreeConfig->headerItem()->setText( 1, "Value" );
+    TreeConfig->header()->setSectionResizeMode( QHeaderView::Stretch );
+
+    ConfigGroupBox = new QGroupBox( PayloadDialog );
+    ConfigGroupBox->setObjectName( QString::fromUtf8( "ConfigGroupBox" ) );
+    auto gridLayout_4 = new QGridLayout( ConfigGroupBox );
+    gridLayout_4->setObjectName( QString::fromUtf8( "gridLayout_4" ) );
+    gridLayout_4->addWidget( TreeConfig, 0, 0, 1, 1 );
+
+    /* Place both panels into the outer 2-column equal-stretch grid */
+    gridLayout_3->addWidget( LeftWidget,     0, 0, 1, 1 );
+    gridLayout_3->addWidget( ConfigGroupBox, 0, 1, 1, 1 );
+
+    retranslateUi();
 
     connect( ButtonGenerate, &QPushButton::clicked, this, &Payload::buttonGenerate );
     connect( ComboAgentType, &QComboBox::currentTextChanged, this, &Payload::CtxAgentPayloadChange );
@@ -131,12 +143,16 @@ void Payload::setupUi( QDialog* Dialog )
     } );
 
     QMetaObject::connectSlotsByName( PayloadDialog );
+
+    /* Apply per-theme stylesheet so all child widgets receive correct colors.
+     * Must be called AFTER all child widgets are constructed and AFTER
+     * retranslateUi() removes any widget-level inline stylesheets that would
+     * override the dialog stylesheet for specific widgets. */
+    PayloadDialog->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/BasicDialog" ) );
 }
 
 auto Payload::retranslateUi() -> void
 {
-    PayloadDialog->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/BasicDialog" ) );
-
     PayloadDialog->setWindowTitle( QCoreApplication::translate( "PayloadDialog", "Payload", nullptr ) );
     OptionsBox->setTitle( QCoreApplication::translate( "PayloadDialog", "Options", nullptr ) );
 
@@ -175,17 +191,11 @@ auto Payload::retranslateUi() -> void
     LabelArch->setText( QCoreApplication::translate( "PayloadDialog", "Arch", nullptr ) );
     LabelFormat->setText( QCoreApplication::translate( "PayloadDialog", "Format", nullptr ) );
     ButtonGenerate->setText( QCoreApplication::translate( "PayloadDialog", "Generate", nullptr ) );
-    ButtonGenerate->setStyleSheet(
-        "padding-top: 5px;"
-        "padding-bottom: 5px;"
-        "padding-left: 10px;"
-        "padding-right: 10px;"
-    );
+    /* Padding is now specified in BasicDialog.qss QPushButton so the button
+     * gets full theme colors without a widget-level inline stylesheet override. */
     LabelAgentType->setText( QCoreApplication::translate( "PayloadDialog", "Agent:", nullptr ) );
     BuildConsoleBox->setTitle( QCoreApplication::translate( "PayloadDialog", "Building Console", nullptr ) );
-    BuildConsoleBox->setStyleSheet(
-      "border: 1px solid " + ThemeManager::Instance().ActiveColors().panel + ";"
-    );
+    ConfigGroupBox->setTitle( QCoreApplication::translate( "PayloadDialog", "Config", nullptr ) );
 }
 
 void Payload::buttonGenerate()
@@ -499,6 +509,21 @@ auto Payload::DefaultConfig() -> void
     auto ConfigCoffeeThreaded    = new QTreeWidgetItem( TreeConfig ); /* threaded BOF execution opt-in */
     auto ConfigExecDelay         = new QTreeWidgetItem( TreeConfig ); /* HVC-046: base delay seconds between injection stages */
     auto ConfigExecDelayJitter   = new QTreeWidgetItem( TreeConfig ); /* HVC-046: jitter % applied to ExecDelay */
+    auto ConfigSsStartLib        = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsStartFunc       = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsStartOffset     = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame0Lib       = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame0Func      = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame0Offset    = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame1Lib       = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame1Func      = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame1Offset    = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame2Lib       = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame2Func      = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame2Offset    = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame3Lib       = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame3Func      = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
+    auto ConfigSsFrame3Offset    = new QTreeWidgetItem( TreeConfig ); /* HVC-047 */
     auto ConfigAutoProxy         = new QTreeWidgetItem( TreeConfig ); // [HVC-026]
     auto ConfigSleepObfTechnique = new QTreeWidgetItem( TreeConfig );
     auto ConfigSleepJmpBypass    = new QTreeWidgetItem( TreeConfig );
@@ -541,8 +566,23 @@ auto Payload::DefaultConfig() -> void
     auto DefaultCoffeeVeh          = DemonConfig[ "CoffeeVeh" ].toBool();
     auto ConfigCoffeeThreadedCheck = new QCheckBox;   /* CoffeeThreaded - threaded BOF execution */
     auto DefaultCoffeeThreaded     = DemonConfig[ "CoffeeThreaded" ].toBool();
-    auto ConfigExecDelayLineEdit      = new QLineEdit( "0" );   /* HVC-046: base delay seconds between injection stages */
-    auto ConfigExecDelayJitterLineEdit = new QLineEdit( "0" ); /* HVC-046: jitter % applied to ExecDelay */
+    auto ConfigExecDelayLineEdit      = new QLineEdit( QString::number( DemonConfig[ "ExecDelay" ].toInt() ) );        /* HVC-046: pre-populate from profile */
+    auto ConfigExecDelayJitterLineEdit = new QLineEdit( QString::number( DemonConfig[ "ExecDelayJitter" ].toInt() ) ); /* HVC-046: pre-populate from profile */
+    auto ConfigSsStartLibLineEdit     = new QLineEdit( "kernel32.dll" );         /* HVC-047 */
+    auto ConfigSsStartFuncLineEdit    = new QLineEdit( "BaseThreadInitThunk" );  /* HVC-047 */
+    auto ConfigSsStartOffsetLineEdit  = new QLineEdit( "0" );                    /* HVC-047 */
+    auto ConfigSsFrame0LibLineEdit    = new QLineEdit( "kernel32.dll" );         /* HVC-047 */
+    auto ConfigSsFrame0FuncLineEdit   = new QLineEdit( "BaseThreadInitThunk" );  /* HVC-047 */
+    auto ConfigSsFrame0OffsetLineEdit = new QLineEdit( "20" );                   /* HVC-047: 0x14 */
+    auto ConfigSsFrame1LibLineEdit    = new QLineEdit( "ntdll.dll" );            /* HVC-047 */
+    auto ConfigSsFrame1FuncLineEdit   = new QLineEdit( "RtlUserThreadStart" );   /* HVC-047 */
+    auto ConfigSsFrame1OffsetLineEdit = new QLineEdit( "33" );                   /* HVC-047: 0x21 */
+    auto ConfigSsFrame2LibLineEdit    = new QLineEdit( "" );                     /* HVC-047: empty = NULL frame, walk stops here */
+    auto ConfigSsFrame2FuncLineEdit   = new QLineEdit( "" );                     /* HVC-047 */
+    auto ConfigSsFrame2OffsetLineEdit = new QLineEdit( "0" );                    /* HVC-047 */
+    auto ConfigSsFrame3LibLineEdit    = new QLineEdit( "" );                     /* HVC-047: empty = NULL frame */
+    auto ConfigSsFrame3FuncLineEdit   = new QLineEdit( "" );                     /* HVC-047 */
+    auto ConfigSsFrame3OffsetLineEdit = new QLineEdit( "0" );                             /* HVC-047 */
     auto ConfigSpawn64LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
     auto ConfigSpawn32LineEdit   = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn32" ].toString() );
     auto DefaultIndSyscallCheck  = DemonConfig[ "IndirectSyscall" ].toBool();
@@ -577,6 +617,21 @@ auto Payload::DefaultConfig() -> void
     ConfigCoffeeThreaded->setFlags( Qt::NoItemFlags );  /* CoffeeThreaded */
     ConfigExecDelay->setFlags( Qt::NoItemFlags );        /* HVC-046 */
     ConfigExecDelayJitter->setFlags( Qt::NoItemFlags );  /* HVC-046 */
+    ConfigSsStartLib->setFlags( Qt::NoItemFlags );       /* HVC-047 */
+    ConfigSsStartFunc->setFlags( Qt::NoItemFlags );      /* HVC-047 */
+    ConfigSsStartOffset->setFlags( Qt::NoItemFlags );    /* HVC-047 */
+    ConfigSsFrame0Lib->setFlags( Qt::NoItemFlags );      /* HVC-047 */
+    ConfigSsFrame0Func->setFlags( Qt::NoItemFlags );     /* HVC-047 */
+    ConfigSsFrame0Offset->setFlags( Qt::NoItemFlags );   /* HVC-047 */
+    ConfigSsFrame1Lib->setFlags( Qt::NoItemFlags );      /* HVC-047 */
+    ConfigSsFrame1Func->setFlags( Qt::NoItemFlags );     /* HVC-047 */
+    ConfigSsFrame1Offset->setFlags( Qt::NoItemFlags );   /* HVC-047 */
+    ConfigSsFrame2Lib->setFlags( Qt::NoItemFlags );      /* HVC-047 */
+    ConfigSsFrame2Func->setFlags( Qt::NoItemFlags );     /* HVC-047 */
+    ConfigSsFrame2Offset->setFlags( Qt::NoItemFlags );   /* HVC-047 */
+    ConfigSsFrame3Lib->setFlags( Qt::NoItemFlags );      /* HVC-047 */
+    ConfigSsFrame3Func->setFlags( Qt::NoItemFlags );     /* HVC-047 */
+    ConfigSsFrame3Offset->setFlags( Qt::NoItemFlags );   /* HVC-047 */
     ConfigSleepStackSpoof->setFlags( Qt::NoItemFlags );
     ConfigInjectionSpawn64->setFlags( Qt::NoItemFlags );
     ConfigInjectionSpawn32->setFlags( Qt::NoItemFlags );
@@ -604,6 +659,21 @@ auto Payload::DefaultConfig() -> void
     ConfigCoffeeThreadedCheck->setObjectName( "ConfigItem" ); /* CoffeeThreaded */
     ConfigExecDelayLineEdit->setObjectName( "ConfigItem" );       /* HVC-046 */
     ConfigExecDelayJitterLineEdit->setObjectName( "ConfigItem" ); /* HVC-046 */
+    ConfigSsStartLibLineEdit->setObjectName( "ConfigItem" );      /* HVC-047 */
+    ConfigSsStartFuncLineEdit->setObjectName( "ConfigItem" );     /* HVC-047 */
+    ConfigSsStartOffsetLineEdit->setObjectName( "ConfigItem" );   /* HVC-047 */
+    ConfigSsFrame0LibLineEdit->setObjectName( "ConfigItem" );     /* HVC-047 */
+    ConfigSsFrame0FuncLineEdit->setObjectName( "ConfigItem" );    /* HVC-047 */
+    ConfigSsFrame0OffsetLineEdit->setObjectName( "ConfigItem" );  /* HVC-047 */
+    ConfigSsFrame1LibLineEdit->setObjectName( "ConfigItem" );     /* HVC-047 */
+    ConfigSsFrame1FuncLineEdit->setObjectName( "ConfigItem" );    /* HVC-047 */
+    ConfigSsFrame1OffsetLineEdit->setObjectName( "ConfigItem" );  /* HVC-047 */
+    ConfigSsFrame2LibLineEdit->setObjectName( "ConfigItem" );     /* HVC-047 */
+    ConfigSsFrame2FuncLineEdit->setObjectName( "ConfigItem" );    /* HVC-047 */
+    ConfigSsFrame2OffsetLineEdit->setObjectName( "ConfigItem" );  /* HVC-047 */
+    ConfigSsFrame3LibLineEdit->setObjectName( "ConfigItem" );     /* HVC-047 */
+    ConfigSsFrame3FuncLineEdit->setObjectName( "ConfigItem" );    /* HVC-047 */
+    ConfigSsFrame3OffsetLineEdit->setObjectName( "ConfigItem" );  /* HVC-047 */
 
     ConfigIndSyscallCheck->setChecked( DefaultIndSyscallCheck );
     ConfigStackSpoof->setChecked( DefaultStackDuplication );
@@ -683,6 +753,21 @@ auto Payload::DefaultConfig() -> void
     TreeConfig->setItemWidget( ConfigCoffeeThreaded, 1, ConfigCoffeeThreadedCheck ); /* CoffeeThreaded */
     TreeConfig->setItemWidget( ConfigExecDelay,      1, ConfigExecDelayLineEdit );       /* HVC-046 */
     TreeConfig->setItemWidget( ConfigExecDelayJitter, 1, ConfigExecDelayJitterLineEdit ); /* HVC-046 */
+    TreeConfig->setItemWidget( ConfigSsStartLib,      1, ConfigSsStartLibLineEdit );      /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsStartFunc,     1, ConfigSsStartFuncLineEdit );     /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsStartOffset,   1, ConfigSsStartOffsetLineEdit );   /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame0Lib,     1, ConfigSsFrame0LibLineEdit );     /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame0Func,    1, ConfigSsFrame0FuncLineEdit );    /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame0Offset,  1, ConfigSsFrame0OffsetLineEdit );  /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame1Lib,     1, ConfigSsFrame1LibLineEdit );     /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame1Func,    1, ConfigSsFrame1FuncLineEdit );    /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame1Offset,  1, ConfigSsFrame1OffsetLineEdit );  /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame2Lib,     1, ConfigSsFrame2LibLineEdit );     /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame2Func,    1, ConfigSsFrame2FuncLineEdit );    /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame2Offset,  1, ConfigSsFrame2OffsetLineEdit );  /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame3Lib,     1, ConfigSsFrame3LibLineEdit );     /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame3Func,    1, ConfigSsFrame3FuncLineEdit );    /* HVC-047 */
+    TreeConfig->setItemWidget( ConfigSsFrame3Offset,  1, ConfigSsFrame3OffsetLineEdit );  /* HVC-047 */
     TreeConfig->setItemWidget( ConfigAutoProxy,        1, ConfigAutoProxyCheck ); // [HVC-026]
     TreeConfig->setItemWidget( ConfigSleepStackSpoof,  1, ConfigStackSpoof );
     TreeConfig->setItemWidget( ConfigProxyLoading,     1, ProxyLoading );
@@ -741,6 +826,21 @@ auto Payload::DefaultConfig() -> void
     ConfigCoffeeThreaded->setText( 0, "Coffee Threaded" ); /* key read by builder.go as "Coffee Threaded" */
     ConfigExecDelay->setText( 0, "Exec Delay" );           /* HVC-046: key read by builder.go as "Exec Delay" (seconds) */
     ConfigExecDelayJitter->setText( 0, "Exec Delay Jitter" ); /* HVC-046: key read by builder.go as "Exec Delay Jitter" (%) */
+    ConfigSsStartLib->setText( 0, "Stack Spoof Start Library" );   /* HVC-047: key read by builder.go */
+    ConfigSsStartFunc->setText( 0, "Stack Spoof Start Function" ); /* HVC-047: key read by builder.go */
+    ConfigSsStartOffset->setText( 0, "Stack Spoof Start Offset" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame0Lib->setText( 0, "Stack Spoof Frame 0 Library" );   /* HVC-047: key read by builder.go */
+    ConfigSsFrame0Func->setText( 0, "Stack Spoof Frame 0 Function" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame0Offset->setText( 0, "Stack Spoof Frame 0 Offset" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame1Lib->setText( 0, "Stack Spoof Frame 1 Library" );   /* HVC-047: key read by builder.go */
+    ConfigSsFrame1Func->setText( 0, "Stack Spoof Frame 1 Function" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame1Offset->setText( 0, "Stack Spoof Frame 1 Offset" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame2Lib->setText( 0, "Stack Spoof Frame 2 Library" );   /* HVC-047: key read by builder.go */
+    ConfigSsFrame2Func->setText( 0, "Stack Spoof Frame 2 Function" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame2Offset->setText( 0, "Stack Spoof Frame 2 Offset" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame3Lib->setText( 0, "Stack Spoof Frame 3 Library" );   /* HVC-047: key read by builder.go */
+    ConfigSsFrame3Func->setText( 0, "Stack Spoof Frame 3 Function" ); /* HVC-047: key read by builder.go */
+    ConfigSsFrame3Offset->setText( 0, "Stack Spoof Frame 3 Offset" ); /* HVC-047: key read by builder.go */
     ConfigAutoProxy->setText( 0, "Auto Proxy Detection" ); // [HVC-026]
     ConfigSleepStackSpoof->setText( 0, "Stack Duplication" );
     ConfigProxyLoading->setText( 0, "Proxy Loading" );

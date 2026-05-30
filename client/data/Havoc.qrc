@@ -12,6 +12,8 @@
         <file alias="FileBrowserHardDisk">../data/img/FileBrowser/HardDisk.png</file>
 
         <file alias="DeadWhite">../data/img/DeadWhite.png</file>
+        <file alias="check-white">../data/img/check-white.png</file>
+        <file alias="check-dark">../data/img/check-dark.png</file>
     </qresource>
 
     <qresource prefix="/images">

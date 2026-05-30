@@ -10,7 +10,6 @@ QMenuBar::item {
 
 QMenuBar::item:selected { /* when selected using mouse or keyboard */
       background: #4a4e6a;
-      color: #ffffff;
 }
 
 QMenuBar::item:pressed {

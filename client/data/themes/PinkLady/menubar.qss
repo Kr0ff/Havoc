@@ -8,9 +8,8 @@ QMenuBar::item {
       background: transparent;
 }
 
-QMenuBar::item:selected {
+QMenuBar::item:selected { /* when selected using mouse or keyboard */
       background: #885b7f;
-      color: #dabed4;
 }
 
 QMenuBar::item:pressed {

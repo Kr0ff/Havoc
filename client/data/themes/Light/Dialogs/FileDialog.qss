@@ -39,7 +39,7 @@ QComboBox::item {
 
 QComboBox::item:selected {
     background: #4a4e6a;
-    color: #ffffff;
+    color: #1e1e2e;
 }
 
 QGroupBox::title {

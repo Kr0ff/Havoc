@@ -56,8 +56,8 @@ QLineEdit:read-only {
 }
 
 QGroupBox:!enabled {
-    background: #1c221d;
-    border: 1px solid #1c221d;
+    background: #141915;
+    border: 1px solid #141915;
     border-radius: 3px;
 }
 
@@ -117,3 +117,4 @@ QScrollBar::add-page:horizontal,
 QScrollBar::sub-page:horizontal {
     background: none;
 }
+

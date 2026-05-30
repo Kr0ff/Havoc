@@ -106,9 +106,9 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
 
     TeamserverTabWidget = new QTabWidget( centralwidget );
     TeamserverTabWidget->setObjectName( QString::fromUtf8( "TeamserverTabWidget" ) );
-    TeamserverTabWidget->setStyleSheet( ThemeManager::Instance().Stylesheet( "teamserverTab" ) );
     TeamserverTabWidget->setTabBarAutoHide( true );
     TeamserverTabWidget->setTabsClosable( true );
+    TeamserverTabWidget->setStyleSheet( ThemeManager::Instance().Stylesheet( "teamserverTab" ) );
 
     /* TODO: refactor this. */
     HavocX::Teamserver.TabSession = new UserInterface::Widgets::TeamserverTabSession;
@@ -125,7 +125,6 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
     menubar = new QMenuBar( this->HavocWindow );
     menubar->setObjectName( QString::fromUtf8( "menubar" ) );
     menubar->setGeometry( QRect( 0, 0, 1143, 20 ) );
-
     menubar->setStyleSheet( ThemeManager::Instance().Stylesheet( "menubar" ) );
 
     menuHavoc   = new QMenu( menubar );
@@ -181,9 +180,12 @@ void HavocNamespace::UserInterface::HavocUi::setupUi(QMainWindow *Havoc)
         }
 
         QObject::connect( themeGroup, &QActionGroup::triggered, this,
-            []( QAction* action ) {
+            [this]( QAction* action ) {
                 const QString name = action->data().toString();
                 if ( ThemeManager::Instance().SetActive( name ) ) {
+                    HavocWindow->setStyleSheet( ThemeManager::Instance().Stylesheet( "Havoc" ) );
+                    TeamserverTabWidget->setStyleSheet( ThemeManager::Instance().Stylesheet( "teamserverTab" ) );
+                    menubar->setStyleSheet( ThemeManager::Instance().Stylesheet( "menubar" ) );
                     MessageBox(
                         "Theme changed",
                         "The selected theme will be applied the next time you start Havoc.",

@@ -30,6 +30,7 @@ public:
 
     QGroupBox*      OptionsBox;
     QGroupBox*      BuildConsoleBox;
+    QGroupBox*      ConfigGroupBox;
 
     QTextEdit*      ConsoleText;
 

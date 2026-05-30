@@ -13,8 +13,10 @@ QPushButton {
     border-radius: 2px;
     background-color: #bd93f9;
     color: #282a36;
-    padding-top: 3px;
-    padding-bottom: 3px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    padding-left: 10px;
+    padding-right: 10px;
 }
 
 QProgressBar {
@@ -60,6 +62,47 @@ QPushButton:pressed {
     border-radius: 2px;
     background-color: #282a36;
     color: #f8f8f2;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+
+QGroupBox {
+    background-color: #282a36;
+    border: 1px solid #44475a;
+    border-radius: 3px;
+    margin-top: 6px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 8px;
+    color: #f8f8f2;
+}
+
+QTreeWidget {
+    background-color: #44475a;
+    color: #f8f8f2;
+    border: 1px solid #44475a;
+    outline: none;
+}
+
+QTreeWidget::item {
+    padding: 2px;
+}
+
+QTreeWidget::item:selected {
+    background-color: #6272a4;
+    color: #f8f8f2;
+}
+
+QHeaderView::section {
+    background-color: #282a36;
+    color: #f8f8f2;
+    border: none;
+    border-bottom: 1px solid #44475a;
+    padding: 4px;
 }
 
 QListWidget {
@@ -88,6 +131,27 @@ QLineEdit:read-only {
 #ConfigItem, #list, #text, #bool {
     background-color: #282a36;
     color: #50fa7b;
+}
+
+/* Checkboxes: transparent widget background (no full-width bar), visible indicator square. */
+QCheckBox#ConfigItem,
+QCheckBox#bool {
+    background-color: transparent;
+}
+
+QCheckBox#ConfigItem::indicator,
+QCheckBox#bool::indicator {
+    width: 13px;
+    height: 13px;
+    border: 1px solid #44475a;
+    border-radius: 2px;
+    background-color: #282a36;
+}
+
+QCheckBox#ConfigItem::indicator:checked,
+QCheckBox#bool::indicator:checked {
+    border: 1px solid #bd93f9;
+    image: url(:/icons/check-white);
 }
 
 QPlainTextEdit {

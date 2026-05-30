@@ -154,7 +154,7 @@ When working on sleep obfuscation (`ObfFoliage.c`, `ObfTimer.c`, `Obf.c`) or any
 
 **Thread start address:** Never use a syscall stub (e.g., `NtTestAlert`) as the `NtCreateThreadEx` start address for a long-lived worker thread. Use `Instance->Win32.RtlUserThreadStart` (ntdll). `NtTestAlert` is a well-known red-team indicator flagged by pe-sieve (`SUS_START`) and EDR products. `RtlUserThreadStart` is the standard Windows thread entry point.
 
-**Fake callstack for sleeping threads:** Any APC ROP chain that places a thread in `WaitForSingleObjectEx` must build a plausible fake callstack at the sleeping ROP step. `[RSP+0]` **must remain `NtTestAlert`** — this is the required return address that triggers APC delivery when `WaitForSingleObjectEx` returns; replacing it breaks the APC chain and deadlocks the agent. Write pe-sieve evasion frames above it: `[RSP+8]` = `BaseThreadInitThunk`, `[RSP+16]` = `RtlUserThreadStart`, `[RSP+24]` = `NULL`. This produces a 4-frame callstack that pe-sieve accepts as legitimate. A 1-frame callstack (one visible frame = `WaitForSingleObjectEx`) is detected as `SUS_CALLSTACK_CORRUPT` by pe-sieve and equivalent EDR callstack scanners.
+**Fake callstack for sleeping threads (HVC-048).** The Foliage RopWaitObj context MUST use `NtWaitForSingleObject` (ntdll, `Instance->Win32.NtWaitForSingleObject`) as its `Rip`, NOT `WaitForSingleObjectEx` (kernel32). `WaitForSingleObjectEx` is a multi-layer wrapper that pushes ~0x100-0x200 bytes of internal call frames before reaching the kernel syscall. By the time the thread blocks, the actual RSP is far below where the fake frames were written — the internal frames (e.g. `InitiliazeRegTermsvrFpns`, `RtlpHpEnvFlsCleanup`) appear first in any callstack walk, and the walk typically breaks before reaching the fake frames. `NtWaitForSingleObject`'s stub is `mov r10,rcx / mov eax,SSN / syscall / ret` — zero internal `CALL`s, RSP unchanged when blocked. The fake frames at `[RSP+0/8/16/24]` are the first frames the callstack walker sees. `RopSpoof->Rip` (the main fiber's apparent state) must also be `NtWaitForSingleObject` for consistency. Timeout conversion: `NtWaitForSingleObject` takes `PLARGE_INTEGER` (100-ns units, negative = relative); store at `Rsp+0x28` as `-(LONGLONG)Param->TimeOut * 10000LL` and pass `R8 = Rsp + 0x28`. `Param->TimeOut` is `UINT32` ms and is never `INFINITE`. `[RSP+0]` **must remain `NtTestAlert`** — required return address that triggers APC delivery when the NT wait's `ret` executes. Frames: `[RSP+8]` = `BaseThreadInitThunk`, `[RSP+16]` = `RtlUserThreadStart`, `[RSP+24]` = `NULL`. Resulting visible stack: `NtWaitForSingleObject / NtTestAlert / BaseThreadInitThunk / RtlUserThreadStart`. Architecture doc: `improvement-docs/HVC-048-foliage-callstack-fix.md`.
 
 **Main fiber callstack spoof:** When spoofing the main fiber's context (`NtSetContextThread(hDupObj, RopSpoof)`), set `RopSpoof->Rsp` to a location near `StackBase` that has the same `BaseThreadInitThunk → RtlUserThreadStart → NULL` fake frames written into it. Setting `Rsp = StackBase` with no frames is flagged as a corrupted callstack.
 
@@ -442,6 +442,8 @@ argument via RCX, the operator MUST disable StackSpoof in the profile.
 (not only Ekko/Zilean). For Ekko/Zilean it also enables sleep TIB-swap; for all techniques it
 enables Tier 1 injection thread spoofing.
 
+**Injection Thread Callstack Spoofing (HVC-047 Sub-2 Tier 2).** When `InjSpoofStartAddr` resolves successfully, the injection thread is created SUSPENDED and the following SMR sequence runs: (1) `NtGetContextThread` reads initial RSP; (2) `SysNtWriteVirtualMemory(Process, RSP, Frames[5], 40)` writes four `InjSpoofFrame[0..3]` return addresses + NULL at RSP; (3) `NtSetInformationThread(Thread, 9 /*ThreadQuerySetWin32StartAddress*/, &InjSpoofStartAddr, sizeof(PVOID))` patches `TEB.Win32StartAddress`; (4) `SysNtResumeThread` resumes. Arguments (Entry) are in RCX -- overwriting RSP+0..+32 does not corrupt execution. Default start address: `ntdll!TppWorkerThread`. Default frames: `NtWaitForWorkViaWorkerFactory+0x14`, `TppWorkerThread+0x37e`, `BaseThreadInitThunk+0x17`, `RtlUserThreadStart+0x2c`. All five addresses configurable via YAOTL blocks `StackSpoofStartAddr` / `StackSpoofFrame0-3` and 15 Payload.cc UI fields. Config blob fields 28-42. `NtGetContextThread` result MUST be checked with `NT_SUCCESS` and `Ctx.Rsp != 0` before writing -- NULL RSP on NtGetContextThread failure causes a write to address 0 which crashes the agent on self-injection. `SysNtGetContextThread` (indirect syscall) is used, not `Instance->Win32.NtGetContextThread` -- consistent with ThreadQueryTib in Thread.c. Architecture doc: `improvement-docs/HVC-047-stack-spoof-tier2.md`.
+
 ### Command Split Pattern (HVC-032)
 
 **All command handler code lives in `src/commands/Command_<Group>.c`, not in `Command.c`.**
@@ -532,6 +534,27 @@ garbage characters or is silently dropped. This applies to all `PRINTF`/`PUTS` f
 log prefixes, and any other string that appears in terminal output, across all components
 (Demon C, teamserver Go, client C++).
 
+### Payload.cc Profile-to-UI Pipeline
+
+When a client connects, the teamserver calls `events.SendProfile()` which runs `json.Marshal(*profile.Config.Demon)` and sends the result as the `"Demon"` field in the `InitConnection.Profile` event. The client stores this as `HavocX::Teamserver.DemonConfig` (a `QJsonDocument`). `Payload.cc` reads from it at dialog construction time via `DemonConfig["FieldName"].toXxx()`.
+
+**JSON key names are Go struct field names** (Pascal case) — the `Demon` struct in `teamserver/pkg/profile/config.go` has no `json:` tags, so `json.Marshal` uses the exact field names: `ExecDelay`, `ExecDelayJitter`, `RandGadget`, `SleepTechnique`, etc.
+
+**Every new numeric or string field in `Payload.cc` that corresponds to a profile value must be initialized from `DemonConfig`, not a hardcoded literal.** Pattern:
+
+```cpp
+/* int field */
+auto ConfigExecDelayLineEdit = new QLineEdit( QString::number( DemonConfig[ "ExecDelay" ].toInt() ) );
+/* bool field */
+auto DefaultRandGadget = DemonConfig[ "RandGadget" ].toBool();
+/* string field */
+auto DefaultSleepCipher = DemonConfig[ "SleepCipher" ].toString();
+/* nested block */
+auto ConfigSpawn64 = new QLineEdit( DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString() );
+```
+
+Hardcoding `"0"` or `""` silently ignores the operator's profile configuration. The key must exactly match the Go struct field name.
+
 ### Code Style and Review
 
 **Always add comments to code.** Every new function must have a brief comment explaining its purpose and parameters. Non-obvious inline logic must have a one-line comment explaining the why. No multi-paragraph docstrings or comment blocks — one concise line per item. Exception: trivial getters or one-liners whose name already describes the operation fully.
@@ -548,6 +571,14 @@ log prefixes, and any other string that appears in terminal output, across all c
 - Any file added or modified in the current session
 
 If a file needs to be replaced or superseded, create the new version alongside the old one and note it in the PR description. Always ask the user before deleting anything.
+
+### Revert and Change Discipline
+
+**Surgical changes only on reverts.** When reverting any change, make ONLY the minimum targeted edit required to undo that specific change. Use the `Edit` tool to replace the exact lines that need to change — never use `git checkout <commit> -- <file>` or any form of resetting a file to an old commit state. Old commits do not reflect working-tree improvements made during the session and will silently discard them.
+
+**Save a local backup before any revert.** Before touching any file for a revert, write a snapshot of its current content to `/tmp/<filename>-backup` or save the key sections to a memory file. Only proceed with the revert after the backup exists. This ensures recovery is always possible.
+
+**Never use git commits as source of truth for file state.** Git commits in this repository are infrequent and pre-date working-tree improvements made during a session. Never checkout, reset, or diff against a commit to understand what a file "should" look like. Use `Read` on the current working-tree file to understand current state. Git history is for audit only — not for restoration.
 
 ## Versioning Rule (HVC-045)
 

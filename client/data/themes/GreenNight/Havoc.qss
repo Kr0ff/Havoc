@@ -1,17 +1,3 @@
-/*
- * Havoc Client Theme -- Green Night
- * -----------------------------------
- * Palette (from greennight.Xresource.txt):
- *   Background (main):     #0b0f0c
- *   Panel:                 #141915
- *   Selection:             #2b342d
- *   Accent:                #6ab67c
- *   Text:                  #b7d3bd
- *   Tab highlight:         #d191c7
- *   OK accent:             #6ab67c
- *   Muted:                 #5c6a5e
- *   Disabled bg:           #1c221d
- */
 
 QMainWindow {
     background: #0b0f0c;

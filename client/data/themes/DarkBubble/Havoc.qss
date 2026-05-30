@@ -1,17 +1,3 @@
-/*
- * Havoc Client Theme -- Dark Bubble
- * ------------------------------------
- * Palette (from darkbubble.Xresource.txt):
- *   Background (main):     #050606
- *   Panel:                 #090b0b
- *   Selection:             #252929
- *   Accent:                #ee5285
- *   Text:                  #cddeda
- *   Tab highlight:         #cd9f45
- *   OK accent:             #518880
- *   Muted:                 #5a6160
- *   Disabled bg:           #151717
- */
 
 QMainWindow {
     background: #050606;

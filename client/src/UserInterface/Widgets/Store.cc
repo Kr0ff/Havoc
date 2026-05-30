@@ -3,6 +3,7 @@
 #include <Havoc/DBManager/DBManager.hpp>
 
 #include <UserInterface/Widgets/Store.hpp>
+#include <Util/ThemeManager.hpp>
 #include <global.hpp>
 
 #include <QScrollBar>
@@ -41,7 +42,10 @@ void Store::setupUi( QWidget* Store)
     headerLabelTitle = new QLabel( "<h1>Havoc Extentions!</h1>", panelStore );
     headerLabelTitle->setWordWrap(true);
     panelLayout->addWidget(headerLabelTitle);
-    panelLabelAuthor = new QLabel( "<span style='color:#71e0cb'>The author</span>", panelStore );
+    panelLabelAuthor = new QLabel(
+        QString( "<span style='color:%1'>The author</span>" )
+            .arg( ThemeManager::Instance().ActiveColors().accent ),
+        panelStore );
     panelLabelAuthor->setWordWrap(true);
     panelLayout->addWidget(panelLabelAuthor);
     panelLabelDescription = new QLabel( "This tab is to install extentions inside of havoc!", panelStore );
@@ -140,7 +144,10 @@ void Store::displayData(int position)
 
     headerLabelTitle->setText(QString("<h1>%1</h1>").arg(title));
     panelLabelDescription->setText(description);
-    panelLabelAuthor->setText(QString("<span style='color:#71e0cb'>%1</span>").arg(author));
+    panelLabelAuthor->setText(
+        QString( "<span style='color:%1'>%2</span>" )
+            .arg( ThemeManager::Instance().ActiveColors().accent )
+            .arg( author ) );
     installButton->setEnabled(true);
 }
 

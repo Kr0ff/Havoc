@@ -514,6 +514,31 @@ SCHEMA = {
         FieldSpec("Function", "string", required=True),
         FieldSpec("Offset", "int", required=False),
     ],
+    "Demon.StackSpoofStartAddr": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
+    ],
+    "Demon.StackSpoofFrame0": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
+    ],
+    "Demon.StackSpoofFrame1": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
+    ],
+    "Demon.StackSpoofFrame2": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
+    ],
+    "Demon.StackSpoofFrame3": [
+        FieldSpec("Library", "string", required=True),
+        FieldSpec("Function", "string", required=True),
+        FieldSpec("Offset", "int", required=False),
+    ],
     "Demon.Binary": [],
     "Demon.Binary.Header": [
         FieldSpec("MagicMz-x64", "string", required=False),
@@ -600,7 +625,7 @@ class Validator:
                         self._err(f"{path_prefix}.{spec.name}", msg)
 
         # Warn about unrecognised fields
-        skip_keys = {"__label__", "Build", "Response", "Cert", "Proxy", "Injection", "Binary", "Header", "Discord", "SleepObfStartAddr", "InjectSpoofAddr"}
+        skip_keys = {"__label__", "Build", "Response", "Cert", "Proxy", "Injection", "Binary", "Header", "Discord", "SleepObfStartAddr", "InjectSpoofAddr", "StackSpoofStartAddr", "StackSpoofFrame0", "StackSpoofFrame1", "StackSpoofFrame2", "StackSpoofFrame3"}
         for key in body:
             if key not in known_keys and key not in skip_keys:
                 self._warn(f"{path_prefix}.{key}", f"unrecognised field '{key}'")
@@ -733,6 +758,16 @@ class Validator:
 
         for addr_blk in demon.get("InjectSpoofAddr", []):
             self._validate_fields(addr_blk, "Demon.InjectSpoofAddr", "Demon.InjectSpoofAddr")
+        for addr_blk in demon.get("StackSpoofStartAddr", []):
+            self._validate_fields(addr_blk, "Demon.StackSpoofStartAddr", "Demon.StackSpoofStartAddr")
+        for addr_blk in demon.get("StackSpoofFrame0", []):
+            self._validate_fields(addr_blk, "Demon.StackSpoofFrame0", "Demon.StackSpoofFrame0")
+        for addr_blk in demon.get("StackSpoofFrame1", []):
+            self._validate_fields(addr_blk, "Demon.StackSpoofFrame1", "Demon.StackSpoofFrame1")
+        for addr_blk in demon.get("StackSpoofFrame2", []):
+            self._validate_fields(addr_blk, "Demon.StackSpoofFrame2", "Demon.StackSpoofFrame2")
+        for addr_blk in demon.get("StackSpoofFrame3", []):
+            self._validate_fields(addr_blk, "Demon.StackSpoofFrame3", "Demon.StackSpoofFrame3")
 
         for bin_blk in demon.get("Binary", []):
             for hdr in bin_blk.get("Header", []):
@@ -983,7 +1018,7 @@ class TrafficRenderer:
         lines = [
             f"┌─── External Listener: {name} ───",
             f"│  Endpoint:  {ep}",
-            f"│  (External C2 service — traffic format defined by 3rd-party agent)",
+            f"│  (External C2 service - traffic format defined by 3rd-party agent)",
             f"└───",
         ]
         return "\n".join(lines)
@@ -1071,7 +1106,7 @@ def main():
             print(line)
         print()
     else:
-        print("  ✓ Validation OK — no issues found\n")
+        print("  ✓ Validation OK - no issues found\n")
 
     # --- Summary ---
     listeners = (tree.get("Listeners") or [{}])[0]

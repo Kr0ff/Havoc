@@ -17,6 +17,148 @@ Description and rationale.
 
 ---
 
+
+## Version 0.9.7 / 1.9.4 — 2026-05-29 — Eclipse Anchor
+Teamserver: 0.9.7 (unchanged) | Client: 1.9.3 -> 1.9.4
+
+### HVC-050 — Theme Color Audit: Connect dialog, Listener.qss disabled group, hardcoded colors
+
+Root cause (4 separate issues):
+1. **Connect dialog unthemed**: `Connect::setupUi()` never called `Form->setStyleSheet()`. The dialog
+   is a top-level `QDialog` (no parent widget), so it receives no stylesheet from `HavocWindow`.
+   Per-theme `Dialogs/Connect.qss` files existed in all five themes but were never loaded.
+   Additionally, `paletteGray` used `Qt::gray` (#808080) and `paletteWhite` used `Qt::white`
+   (#ffffff) as QPalette base colors — both visually wrong on dark themes.
+2. **#1c1e25 in all non-Dracula Listener.qss**: The `QGroupBox:!enabled` rule was copied from
+   Dracula without per-theme adaptation. `#1c1e25` is a near-black Dracula-adjacent color.
+   On the Light theme this produced a black rectangle on a white background (severe contrast
+   failure). On dark themes the hue was wrong (blue-gray instead of each theme's own tint).
+3. **Store.cc #71e0cb**: Hardcoded teal author label — not theme-aware, low contrast on Light
+   theme (~2.1:1).
+4. **About.cc #e100ff**: Hardcoded magenta link color — not theme-aware.
+
+Fixes:
+1. Added `Form->setStyleSheet(ThemeManager::Instance().Stylesheet("Dialogs/Connect"))` in
+   `setupUi()` after all widgets are constructed. Replaced `Qt::gray` with
+   `ActiveColors().selection` and `Qt::white` with `ActiveColors().panel`.
+2. Replaced `#1c1e25` with each theme's own panel color:
+   Light→`#e8e8f0` (selection), GreenNight→`#141915`, PinkLady→`#261623`,
+   Emerald→`#101416`, DarkBubble→`#090b0b`.
+3. Store.cc: replaced `#71e0cb` with `ThemeManager::Instance().ActiveColors().accent`;
+   added `#include <Util/ThemeManager.hpp>`.
+4. About.cc: replaced hardcoded `#e100ff` and `QCoreApplication::translate()` with a
+   `QString::arg(linkColor)` substitution using `ActiveColors().accent`; also fixed an
+   HTML anchor scope bug where "Modifications done by @Kr0ff" was incorrectly wrapped
+   inside the `<a href>` tag pointing to 5pider's Twitter.
+
+QA: Two parallel agents reviewed. Agent 1 found the anchor scope bug (fixed). Agent 2
+confirmed all color contrast ratios pass WCAG AA (4.5:1) on all five themes.
+
+Files:
+  `client/src/UserInterface/Dialogs/Connect.cc`
+  `client/src/UserInterface/Widgets/Store.cc`
+  `client/src/UserInterface/Dialogs/About.cc`
+  `client/data/themes/Light/Dialogs/Listener.qss`
+  `client/data/themes/GreenNight/Dialogs/Listener.qss`
+  `client/data/themes/PinkLady/Dialogs/Listener.qss`
+  `client/data/themes/Emerald/Dialogs/Listener.qss`
+  `client/data/themes/DarkBubble/Dialogs/Listener.qss`
+
+### HVC-050 (cont.) — Listener Config Options bg + Payload dialog unthemed
+
+Root cause (2 additional issues discovered during implementation):
+
+5. **Listener "Config Options" background wrong**: The inline stylesheet in Listener.cc
+   covered `QDialog`, `QGroupBox`, and `QScrollArea` but NOT `QWidget`. The scroll area
+   content pages (PageHTTP, PageSMB, PageExternal, PageDNS) are plain QWidget instances
+   that do NOT match the `QDialog` selector. Qt does not propagate `QDialog { background-color }` to
+   child QWidget instances — each widget type must match its own CSS selector explicitly.
+   Result: the inner page background defaulted to the system window color.
+
+6. **Payload dialog entirely unthemed**: `Payload::setupUi()` never called
+   `PayloadDialog->setStyleSheet()`. All widgets (OptionsBox, BuildConsoleBox, ConfigGroupBox,
+   TreeConfig, all QComboBox/QLabel in the left panel) showed system-default colors.
+   Additionally, `ButtonGenerate->setStyleSheet("padding-top: 5px; ...")` (padding-only
+   inline stylesheet) overrode ALL theme colors for that button because in Qt a widget-level
+   stylesheet replaces all inherited styles, not just the properties specified. Both
+   `BuildConsoleBox->setStyleSheet("border: 1px solid " + tc.panel + ";")` was removed too
+   (invisible border since it used the same color as the background).
+
+Fixes:
+5. Added `"QWidget { background-color: %1; color: %2; }"` to the Listener inline stylesheet
+   immediately after the `QDialog` rule. This covers all QWidget instances including page
+   content widgets inside the scroll area.
+6. Removed `ButtonGenerate->setStyleSheet()` (padding now in BasicDialog.qss QPushButton rule).
+   Removed `BuildConsoleBox->setStyleSheet()` (let BasicDialog.qss handle theming).
+   Added `PayloadDialog->setStyleSheet(ThemeManager::Instance().Stylesheet("Dialogs/BasicDialog"))`
+   at the end of `setupUi()` after `QMetaObject::connectSlotsByName()`.
+   Updated all 6 BasicDialog.qss files (Dracula + 5 themes) to add: QPushButton padding
+   (5px top/bottom, 10px left/right), `QGroupBox { background; border; border-radius; margin-top }`,
+   `QGroupBox::title { subcontrol-origin; left; color }`, QTreeWidget rules,
+   and QHeaderView::section rules — all using per-theme colors.
+
+Files (additional):
+  `client/src/UserInterface/Dialogs/Listener.cc`
+  `client/src/UserInterface/Dialogs/Payload.cc`
+  `client/data/stylesheets/Dialogs/BasicDialog.qss`
+  `client/data/themes/Light/Dialogs/BasicDialog.qss`
+  `client/data/themes/GreenNight/Dialogs/BasicDialog.qss`
+  `client/data/themes/PinkLady/Dialogs/BasicDialog.qss`
+  `client/data/themes/Emerald/Dialogs/BasicDialog.qss`
+  `client/data/themes/DarkBubble/Dialogs/BasicDialog.qss`
+
+---
+
+## Version 0.9.7 / 1.9.3 — 2026-05-29 — Eclipse Anchor
+Teamserver: 0.9.6 -> 0.9.7 | Client: 1.9.2 -> 1.9.3
+
+### HVC-048 — Foliage Sleep Thread Callstack Fix
+
+- Root cause: `RopWaitObj->Rip = WaitForSingleObjectEx` (kernel32 wrapper) pushed ~0x100-0x200 bytes
+  of internal call frames before the kernel syscall. The callstack walker starting from the actual
+  blocked RSP saw `InitiliazeRegTermsvrFpns+0x1af` and `RtlpHpEnvFlsCleanup+0x87` (WFSO internal
+  frames) before terminating - the intended `NtTestAlert / BaseThreadInitThunk / RtlUserThreadStart`
+  fake frames were buried and unreachable due to a broken frame-pointer chain.
+- Fix: Changed `RopWaitObj->Rip` to `Instance->Win32.NtWaitForSingleObject` (ntdll stub:
+  `mov r10,rcx / mov eax,SSN / syscall / ret`). No internal `CALL`s - RSP is unchanged when the
+  kernel blocks the thread. The fake frames at `[RSP+0/8/16/24]` are the first return addresses
+  seen by any callstack walker.
+- Argument adjustment for NT API signature `(Handle, Alertable, PLARGE_INTEGER Timeout)`:
+  `Rdx = FALSE` (alertable, same as before), timeout stored as `LARGE_INTEGER` at `Rsp+0x28`
+  (`-(LONGLONG)Param->TimeOut * 10000LL` converts UINT32 ms to 100-ns units).
+- `RopSpoof->Rip` also changed to `NtWaitForSingleObject` for visual consistency between the
+  sleeping worker thread and the main fiber's apparent state.
+- Resulting callstack: `NtWaitForSingleObject / NtTestAlert / BaseThreadInitThunk / RtlUserThreadStart`
+- Architecture doc: `improvement-docs/HVC-048-foliage-callstack-fix.md`
+- QA confirmed: Param->TimeOut is UINT32 ms (never INFINITE), stack at Rsp+0x28 is safe (52KB
+  headroom), APC delivery via NtTestAlert unchanged, 16-byte alignment maintained (0x7000 % 16 = 0).
+
+Files: `payloads/Demon/src/core/ObfFoliage.c`
+
+---
+
+### HVC-047 — Configurable Injection Thread Callstack Spoofing (Tier 2 SMR)
+
+- Upgraded injection thread stack spoofing from Tier 1 (start-address swap only) to Tier 2 (full Suspend-Modify-Resume with configurable fake callstack)
+- While the injection thread is suspended: `NtGetContextThread` reads initial RSP; `SysNtWriteVirtualMemory` writes 4 fake return-address frames + NULL to the thread's initial stack; `NtSetInformationThread(Thread, 9)` patches `TEB.Win32StartAddress` to the configured spoof target; `SysNtResumeThread` resumes
+- Arguments (Entry) are in RCX register -- not on the stack -- so overwriting RSP+0..+32 does not corrupt execution
+- Default callstack mimics a Windows thread-pool worker thread: `ntdll!TppWorkerThread` start address, frames: `NtWaitForWorkViaWorkerFactory+0x14 / TppWorkerThread+0x37e / BaseThreadInitThunk+0x17 / RtlUserThreadStart+0x2c`
+- Both the start address and all four frame addresses are fully configurable via YAOTL profile (`StackSpoofStartAddr`, `StackSpoofFrame0`-`StackSpoofFrame3` blocks) and Payload builder UI (15 new fields pre-filled with defaults)
+- All three required Win32 functions (`NtGetContextThread`, `NtSetInformationThread`, `NtResumeThread`) were already in the Win32 table -- no new table entries added
+- Address resolution uses runtime `HashStringA()` + `LdrModuleLoad` -- no pre-computed H_FUNC constants needed for TppWorkerThread or NtWaitForWorkViaWorkerFactory
+- Graceful degradation: if `InjSpoofStartAddr` resolves to NULL, frames are not written but thread is still resumed; Tier 1 start-address swap continues operating
+- 15 new config blob fields (28-42) appended after ExecDelayJitter; backward-compatible (older Demon stops parsing at field 27)
+- Architecture doc: `improvement-docs/HVC-047-stack-spoof-tier2.md`
+
+Files: `payloads/Demon/include/Demon.h`, `payloads/Demon/src/Demon.c`,
+       `payloads/Demon/src/core/Thread.c`,
+       `teamserver/pkg/profile/config.go`, `teamserver/pkg/common/builder/builder.go`,
+       `client/src/UserInterface/Dialogs/Payload.cc`,
+       `profiles/havoc.yaotl`, `scripts/check_profile.py`,
+       `teamserver/cmd/cmd.go`, `client/src/global.cc`
+
+---
+
 ## Version 0.9.6 / 1.9.2 — 2026-05-28 — Eclipse Anchor
 Teamserver: 0.9.5 -> 0.9.6 | Client: 1.9.1 -> 1.9.2
 

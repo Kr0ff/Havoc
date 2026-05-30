@@ -34,6 +34,10 @@ NewListener::NewListener( QDialog* Dialog )
         const auto& tc = ThemeManager::Instance().ActiveColors();
         Dialog->setStyleSheet( QString(
             "QDialog { background-color: %1; color: %2; }"
+            /* QWidget covers scroll-area content pages (PageHTTP etc.) which are plain
+             * QWidget instances and do not match the QDialog selector alone. Without this
+             * rule those pages show the system-default window color. */
+            "QWidget { background-color: %1; color: %2; }"
             "QPushButton { background-color: %3; color: %1; }"
             "QLineEdit { background-color: %4; color: %2; border-radius: 2px; padding: 3px; padding-left: 5px; }"
             "QLineEdit:read-only { background-color: %5; color: %2; }"

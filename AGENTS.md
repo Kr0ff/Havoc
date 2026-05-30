@@ -483,6 +483,16 @@ Work through every applicable item. Mark each `PASS / FAIL / WARN / N/A`.
   `ExecDelay == 0` (default) produces a pure no-op — no observable delay in injection timing.
   Config blob fields 25 (`ExecDelay`) and 26 (`ExecDelayJitter`) must appear AFTER `InjectSpoofOffset`
   in both `builder.go AddInt` sequence and `Demon.c ParserGetInt32` sequence.
+- [ ] **Foliage/Timer ROP sleep function selection (HVC-048):** Any ROP step that performs the actual
+  sleep (`RopWaitObj` or equivalent) MUST use `NtWaitForSingleObject` (ntdll stub) as the Rip, NOT
+  `WaitForSingleObjectEx` (kernel32 wrapper). The Win32 wrapper pushes ~0x100-0x200 bytes of internal
+  call frames before the syscall, burying the fake frames `[NtTestAlert / BaseThreadInitThunk /
+  RtlUserThreadStart]` under those intermediate frames so callstack walkers never reach them.
+  `NtWaitForSingleObject` is a minimal stub (mov+mov+syscall+ret) with no internal CALLs; RSP is
+  unchanged at block time so the fake frames are directly visible. Argument mapping:
+  `Rcx=handle, Rdx=Alertable(FALSE), R8=PLARGE_INTEGER` (convert ms to 100-ns: `-(LONGLONG)ms * 10000LL`).
+  `RopSpoof->Rip` must also be `NtWaitForSingleObject` for visual consistency (HVC-048, architecture doc:
+  `improvement-docs/HVC-048-foliage-callstack-fix.md`).
 
 **Module Hiding and PEB LDR Walk Safety**
 - [ ] `HideModule()` advances PEB walk cursor (`Entry = Entry->Flink`) BEFORE the unlink
@@ -816,6 +826,40 @@ Phase 5:            Main agent reviews the complete, tested implementation.
 **Cross-verification pairing:**
 - `qa-A` reviews `red-team-developer-B` output
 - `qa-B` reviews `red-team-developer-A` output
+
+---
+
+## Payload.cc Profile-to-UI Pipeline
+
+When adding any new field to the `Demon` YAOTL profile that should appear pre-populated in
+the Payload dialog, agents must follow this pipeline end-to-end:
+
+1. **Go struct field** in `teamserver/pkg/profile/config.go` `Demon` struct — no `json:` tag needed; `json.Marshal` uses the Pascal-case field name as the JSON key.
+2. **`events.SendProfile()`** in `teamserver/pkg/events/events.go` — already marshals the full `Demon` struct; nothing to change here.
+3. **Client storage** in `Packager.cc` — already stores to `HavocX::Teamserver.DemonConfig`; nothing to change here.
+4. **`Payload.cc` construction** — read the value with `DemonConfig["FieldName"].toXxx()`. **Never hardcode `"0"` or `""` for a field backed by the profile.**
+
+Patterns by type:
+```cpp
+new QLineEdit( QString::number( DemonConfig[ "ExecDelay" ].toInt() ) )  // int
+DemonConfig[ "RandGadget" ].toBool()                                     // bool
+DemonConfig[ "SleepCipher" ].toString()                                  // string
+DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString()     // nested block
+```
+
+The JSON key must exactly match the Go struct field name (case-sensitive).
+
+---
+
+## Revert and Change Discipline
+
+These rules apply to every agent working on this codebase:
+
+1. **Surgical changes only on reverts.** When reverting any change, use the `Edit` tool to replace only the exact lines that need to change. Never use `git checkout <commit> -- <file>` or any reset that replaces a whole file from a commit. Old commits predate working-tree improvements and will silently discard them.
+
+2. **Save a local backup before any revert.** Before touching any file for a revert, write a snapshot of its current content to `/tmp/<filename>-backup`. Only proceed after the backup exists.
+
+3. **Never use git commits as source of truth for file state.** Commits are infrequent and do not reflect all in-session changes. Use `Read` on the current working-tree file to understand current state. Git history is for audit only — not for restoration.
 
 ---
 

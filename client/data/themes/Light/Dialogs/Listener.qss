@@ -47,7 +47,7 @@ QComboBox::item {
 
 QComboBox::item:selected {
     background: #4a4e6a;
-    color: #ffffff;
+    color: #1e1e2e;
 }
 
 QLineEdit:read-only {
@@ -56,8 +56,8 @@ QLineEdit:read-only {
 }
 
 QGroupBox:!enabled {
-    background: #dcdce6;
-    border: 1px solid #dcdce6;
+    background: #e8e8f0;
+    border: 1px solid #e8e8f0;
     border-radius: 3px;
 }
 
@@ -117,3 +117,4 @@ QScrollBar::add-page:horizontal,
 QScrollBar::sub-page:horizontal {
     background: none;
 }
+

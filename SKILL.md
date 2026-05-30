@@ -91,6 +91,16 @@ VOID MyFeature_Do( VOID ) {
 Never put the gate in `Obf.c`, `Demon.c`, or any other caller. The core agent code path
 must remain unchanged when the feature flag is false.
 
+**Step 5b — Choose NT stubs not Win32 wrappers for ROP sleep gadgets (HVC-048)**
+When setting a thread's RIP to a sleep function in a Foliage/Timer ROP context, always use
+the `NtWaitForSingleObject` (ntdll) stub directly — never `WaitForSingleObjectEx` (kernel32).
+The Win32 wrapper has a ~0x100-0x200 byte internal call chain. Its intermediate return
+addresses fill the stack ABOVE the fake frames, making those frames invisible to callstack
+walkers. The NT stub is `mov r10,rcx / mov eax,SSN / syscall / ret` — no internal `CALL`s,
+so the fake frames at `[RSP+0/8/16]` are directly visible when the thread blocks.
+Remember: `NtWaitForSingleObject` takes `(Handle, Alertable, PLARGE_INTEGER Timeout)` —
+convert milliseconds to 100-ns units (`-(LONGLONG)ms * 10000LL`).
+
 **Step 5a — Wire ExecDelaySleep() at injection points (HVC-046)**
 Any new injection function (`MmVirtualAlloc` -> write -> `MmVirtualProtect` -> thread create)
 must call `ExecDelaySleep()` at two points: once after the alloc succeeds and once after the
@@ -1171,3 +1181,52 @@ by `Instance->Config.Implant.ExecDelay == 0` as a pure no-op when disabled (defa
 **Config blob positions:** `ExecDelay` = field 25, `ExecDelayJitter` = field 26 — both after
 `InjectSpoofOffset` in both `builder.go AddInt` sequence and `Demon.c ParserGetInt32` sequence.
 `H_FUNC_NTDELAYEXECUTION = 0xf5a936aa` (DJB2 verified 2026-05-28).
+
+---
+
+### Lesson 24: Profile-to-UI Pipeline (Payload.cc)
+
+**Problem:** A new profile field (e.g., `ExecDelay`) was wired through the full teamserver
+pipeline and stored in `HavocX::Teamserver.DemonConfig`, but the `Payload.cc` dialog
+initialized the corresponding `QLineEdit` with a hardcoded `"0"` instead of reading from
+the profile JSON. The operator's profile setting was silently ignored.
+
+**Pipeline:**
+```
+havoc.yaotl  →  profile.Config.Demon  →  json.Marshal  →  events.SendProfile
+  →  "Demon" field in InitConnection.Profile packet
+  →  HavocX::Teamserver.DemonConfig (QJsonDocument, stored in Packager.cc)
+  →  Payload.cc DemonConfig["FieldName"].toXxx() at dialog construction
+```
+
+**JSON key = Go struct field name.** The `Demon` struct in `config.go` has no `json:` tags,
+so `json.Marshal` uses Pascal-case field names: `ExecDelay`, `ExecDelayJitter`, `RandGadget`, etc.
+
+**Rule:** Every new field in `Payload.cc` backed by a profile value must read from `DemonConfig`
+at construction — never use a hardcoded literal. Patterns:
+- `new QLineEdit( QString::number( DemonConfig[ "ExecDelay" ].toInt() ) )`
+- `DemonConfig[ "RandGadget" ].toBool()`
+- `DemonConfig[ "SleepCipher" ].toString()`
+- `DemonConfig[ "ProcessInjection" ].toObject()[ "Spawn64" ].toString()`
+
+When `toInt()` is called on an absent JSON key, Qt returns `0` — identical to the old
+hardcoded default — so there is no regression when the profile field is unset.
+
+---
+
+### Lesson 26: Revert and Change Discipline
+
+**Problem:** Using `git checkout <commit> -- <file>` to revert a change replaces the entire
+file with the committed version, silently discarding all working-tree improvements that were
+never committed — including multi-hour UI changes, new config fields, and refactors.
+
+**Rule 1 - Surgical changes only:** When reverting, use the `Edit` tool to replace only the
+exact lines that need to change. The rest of the file is untouched.
+
+**Rule 2 - Backup before revert:** Before touching any file for a revert, write its current
+content to `/tmp/<filename>-backup`. Proceed only after the backup exists.
+
+**Rule 3 - Never use commits as source of truth:** Commits are infrequent and predate
+in-session changes. Use `Read` on the current working-tree file to understand current state.
+Git history is for audit only — not for restoration.
+

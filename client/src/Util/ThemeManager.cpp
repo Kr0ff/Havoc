@@ -488,7 +488,6 @@ QString ThemeManager::MenuStyleSheet()
         "}"
     ).arg( c.panel, c.text, c.selection );
 }
-
 void ThemeManager::InitPalette()
 {
     if ( activeName_ == QStringLiteral( "Dracula" ) ) {

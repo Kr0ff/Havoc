@@ -21,6 +21,11 @@ This directory contains all improvement proposals, feature specifications, and e
 | HVC-038 | Profile-Exposed Config Command Options | Commands | High | Applied | N/A |
 | HVC-044 | Stack Spoofing (KaynLoader + Injection Threads) | Evasion | High | Applied | [HVC-044-stack-spoofing.md](HVC-044-stack-spoofing.md) |
 | HVC-045 | Manual RC4 + ChaCha20 Sleep Cipher (replaces SystemFunction032) | Evasion/Crypto | High | Applied | CHANGES.md |
+| HVC-046 | Injection Dissociation via ExecDelaySleep | Evasion | High | Applied | CHANGES.md |
+| HVC-047 | Injection Thread Callstack Spoofing Tier 2 (SMR) | Evasion | High | Applied | [HVC-047-stack-spoof-tier2.md](HVC-047-stack-spoof-tier2.md) |
+| HVC-048 | Foliage Callstack Fix (NtWaitForSingleObject) | Evasion | High | Applied | [HVC-048-foliage-callstack-fix.md](HVC-048-foliage-callstack-fix.md) |
+| HVC-049 | Dynamic Theme Stylesheet (HVC-049 v1 reverted; v2 per-theme QSS applied) | Client UI | Medium | Applied | [HVC-049-dynamic-theme-stylesheet.md](HVC-049-dynamic-theme-stylesheet.md) |
+| HVC-050 | Theme Color Audit — Connect dialog unthemed, #1c1e25 leak, hardcoded colors | Client UI | High | Applied | [HVC-050-theme-color-audit.md](HVC-050-theme-color-audit.md) |
 
 ## Template
 

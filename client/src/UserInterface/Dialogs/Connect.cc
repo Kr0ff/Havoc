@@ -18,8 +18,6 @@ void HavocNamespace::UserInterface::Dialogs::Connect::setupUi( QDialog* Form )
     Form->setMinimumSize( QSize( 500, 260 ) );
     Form->setMaximumSize( QSize( 500, 260 ) );
 
-    Form->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/Connect" ) );
-
     gridLayout = new QGridLayout( Form );
     gridLayout->setObjectName( QString::fromUtf8( "gridLayout" ) );
 
@@ -104,13 +102,17 @@ void HavocNamespace::UserInterface::Dialogs::Connect::setupUi( QDialog* Form )
 
     gridLayout->addWidget( ButtonConnect,    8, 2, 1, 1 );
 
+    /* Read-only state indicator: use theme selection color to dim the field */
     paletteGray = new QPalette();
-    paletteGray->setColor( QPalette::Base, Qt::gray );
+    paletteGray->setColor( QPalette::Base, QColor( ThemeManager::Instance().ActiveColors().selection ) );
 
+    /* Normal state: use theme panel color (not Qt::white, which breaks dark themes) */
     paletteWhite = new QPalette();
-    paletteWhite->setColor( QPalette::Base, Qt::white );
+    paletteWhite->setColor( QPalette::Base, QColor( ThemeManager::Instance().ActiveColors().panel ) );
 
     Form->setWindowTitle( "Connect" );
+    /* Apply per-theme stylesheet so the dialog matches the active theme */
+    Form->setStyleSheet( ThemeManager::Instance().Stylesheet( "Dialogs/Connect" ) );
 
     ButtonNewProfile->setText( "New Profile" );
 

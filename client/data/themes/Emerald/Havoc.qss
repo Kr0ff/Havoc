@@ -1,17 +1,3 @@
-/*
- * Havoc Client Theme -- Emerald
- * -------------------------------
- * Palette (from emerald.Xresource.txt):
- *   Background (main):     #080b0d
- *   Panel:                 #101416
- *   Selection:             #272f32
- *   Accent:                #49aac5
- *   Text:                  #c1d5de
- *   Tab highlight:         #f276b7
- *   OK accent:             #76c2a8
- *   Muted:                 #57666c
- *   Disabled bg:           #181d20
- */
 
 QMainWindow {
     background: #080b0d;
